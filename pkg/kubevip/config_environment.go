@@ -313,6 +313,22 @@ func ParseEnvironment(c *Config) error {
 		c.RoutingTableType = int(i)
 	}
 
+	// DNS mode
+	env = os.Getenv(dnsMode)
+	if env != "" {
+		c.DNSMode = env
+	}
+
+	// Disable updates for services (status.LoadBalancer.Ingress will not be updated)
+	env = os.Getenv(disableServiceUpdates)
+	if env != "" {
+		b, err := strconv.ParseBool(env)
+		if err != nil {
+			return err
+		}
+		c.DisableServiceUpdates = b
+	}
+
 	// BGP Server options
 	env = os.Getenv(bgpEnable)
 	if env != "" {
@@ -517,6 +533,15 @@ func ParseEnvironment(c *Config) error {
 			return err
 		}
 		c.EgressWithNftables = b
+	}
+
+	env = os.Getenv(enableEndpointSlices)
+	if env != "" {
+		b, err := strconv.ParseBool(env)
+		if err != nil {
+			return err
+		}
+		c.EnableEndpointSlices = b
 	}
 
 	return nil

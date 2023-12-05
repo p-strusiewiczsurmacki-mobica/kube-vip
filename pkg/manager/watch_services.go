@@ -101,9 +101,10 @@ func (sm *Manager) servicesWatcher(ctx context.Context, serviceFunc func(context
 				break
 			}
 
+			svcAddresses := fetchServiceAddresses(svc)
+
 			// We only care about LoadBalancer services that have been allocated an address
-			serviceAddresses := fetchServiceAddresses(svc)
-			if len(serviceAddresses) == 0 || serviceAddresses[0] == "" {
+			if len(svcAddresses) <= 0 {
 				break
 			}
 
@@ -128,13 +129,15 @@ func (sm *Manager) servicesWatcher(ctx context.Context, serviceFunc func(context
 
 			// The modified event should only be triggered if the service has been modified (i.e. moved somewhere else)
 			if event.Type == watch.Modified {
-				//log.Debugf("(svcs) Retreiving local addresses, to ensure that this modified address doesn't exist")
-				f, err := vip.GarbageCollect(sm.config.Interface, svc.Spec.LoadBalancerIP)
-				if err != nil {
-					log.Errorf("(svcs) cleaning existing address error: [%s]", err.Error())
-				}
-				if f {
-					log.Warnf("(svcs) already found existing address [%s] on adapter [%s]", svc.Spec.LoadBalancerIP, sm.config.Interface)
+				for _, addr := range svcAddresses {
+					//log.Debugf("(svcs) Retreiving local addresses, to ensure that this modified address doesn't exist: %s", addr)
+					f, err := vip.GarbageCollect(sm.config.Interface, addr)
+					if err != nil {
+						log.Errorf("(svcs) cleaning existing address error: [%s]", err.Error())
+					}
+					if f {
+						log.Warnf("(svcs) already found existing address [%s] on adapter [%s]", addr, sm.config.Interface)
+					}
 				}
 			}
 			// Scenarios:
@@ -152,11 +155,18 @@ func (sm *Manager) servicesWatcher(ctx context.Context, serviceFunc func(context
 							// background the endpoint watcher
 							go func() {
 								if svc.Spec.ExternalTrafficPolicy == v1.ServiceExternalTrafficPolicyTypeLocal {
-									// Add Endpoint watcher
+									// Add Endpoint or EndpointSlices watcher
 									wg.Add(1)
-									err = sm.watchEndpoint(activeServiceLoadBalancer[string(svc.UID)], id, svc, &wg)
-									if err != nil {
-										log.Error(err)
+									if !sm.config.EnableEndpointSlices {
+										err = sm.watchEndpoint(activeServiceLoadBalancer[string(svc.UID)], id, svc, &wg)
+										if err != nil {
+											log.Error(err)
+										}
+									} else {
+										err = sm.watchEndpointSlices(activeServiceLoadBalancer[string(svc.UID)], id, svc, &wg)
+										if err != nil {
+											log.Error(err)
+										}
 									}
 									wg.Done()
 								}

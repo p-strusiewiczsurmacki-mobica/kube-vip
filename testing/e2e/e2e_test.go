@@ -27,6 +27,7 @@ import (
 	"github.com/onsi/gomega/format"
 	"github.com/onsi/gomega/gexec"
 
+	"github.com/kube-vip/kube-vip/pkg/vip"
 	"github.com/kube-vip/kube-vip/testing/e2e"
 )
 
@@ -216,6 +217,80 @@ var _ = Describe("kube-vip broadcast neighbor", func() {
 			assertControlPlaneIsRoutable(ipv6VIP, 1*time.Second, 20*time.Second)
 		})
 	})
+
+	Describe("kube-vip DualStack functionality", func() {
+		var (
+			clusterConfig kindconfigv1alpha4.Cluster
+			vips          []string
+		)
+
+		BeforeEach(func() {
+			clusterName = fmt.Sprintf("%s-dualstack", filepath.Base(tempDirPath))
+
+			clusterConfig = kindconfigv1alpha4.Cluster{
+				Networking: kindconfigv1alpha4.Networking{
+					IPFamily: kindconfigv1alpha4.DualStackFamily,
+				},
+				Nodes: []kindconfigv1alpha4.Node{},
+			}
+
+			manifestPath := filepath.Join(tempDirPath, "kube-vip-dualstack.yaml")
+
+			for i := 0; i < 3; i++ {
+				clusterConfig.Nodes = append(clusterConfig.Nodes, kindconfigv1alpha4.Node{
+					ExtraMounts: []kindconfigv1alpha4.Mount{
+						{
+							HostPath:      manifestPath,
+							ContainerPath: "/etc/kubernetes/manifests/kube-vip.yaml",
+						},
+					},
+				})
+			}
+
+			ipDualStackVIP := e2e.GenerateDualStackVIP()
+			vips = vip.GetIPs(ipDualStackVIP)
+
+			manifestFile, err := os.Create(manifestPath)
+			Expect(err).NotTo(HaveOccurred())
+
+			defer manifestFile.Close()
+
+			Expect(kubeVIPManifestTemplate.Execute(manifestFile, e2e.KubevipManifestValues{
+				ControlPlaneVIP: ipDualStackVIP,
+				ImagePath:       imagePath,
+			})).To(Succeed())
+		})
+
+		It("provides an DualStack VIP address for the Kubernetes control plane nodes", func() {
+
+			By(withTimestamp("creating a kind cluster with multiple control plane nodes"))
+			createKindCluster(logger, &clusterConfig, clusterName)
+
+			By(withTimestamp("loading local docker image to kind cluster"))
+			e2e.LoadDockerImageToKind(logger, imagePath, clusterName)
+
+			By(withTimestamp("checking that the Kubernetes control plane nodes are accessible via the assigned IPv4 VIP"))
+			// Allow enough time for control plane nodes to load the docker image and
+			// use the default timeout for establishing a connection to the VIP
+			assertControlPlaneIsRoutable(vips[0], time.Duration(0), 20*time.Second)
+
+			By(withTimestamp("checking that the Kubernetes control plane nodes are accessible via the assigned IPv6 VIP"))
+			// Allow enough time for control plane nodes to load the docker image and
+			// use the default timeout for establishing a connection to the VIP
+			assertControlPlaneIsRoutable(vips[1], time.Duration(0), 20*time.Second)
+
+			By(withTimestamp("killing the leader Kubernetes control plane node to trigger a fail-over scenario"))
+			killLeader(vips[0], clusterName)
+
+			By(withTimestamp("checking that the Kubernetes control plane nodes are still accessible via the assigned IPv4 VIP with little downtime"))
+			// Allow at most 20 seconds of downtime when polling the control plane nodes
+			assertControlPlaneIsRoutable(vips[0], 1*time.Second, 20*time.Second)
+
+			By(withTimestamp("checking that the Kubernetes control plane nodes are still accessible via the assigned IPv6 VIP with little downtime"))
+			// Allow at most 120 seconds of downtime when polling the control plane nodes
+			assertControlPlaneIsRoutable(vips[1], 1*time.Second, 20*time.Second)
+		})
+	})
 })
 
 func createKindCluster(logger log.Logger, config *v1alpha4.Cluster, clusterName string) {
@@ -263,8 +338,7 @@ func killLeader(leaderIPAddr string, clusterName string) {
 			"docker", "exec", name, "ip", "addr",
 		)
 		cmd.Stdout = cmdOut
-
-		Eventually(cmd.Run).Should(Succeed())
+		Eventually(cmd.Run(), "20s").Should(Succeed())
 
 		if strings.Contains(cmdOut.String(), leaderIPAddr) {
 			leaderName = name
