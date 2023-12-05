@@ -138,7 +138,6 @@ func (sm *Manager) watchEndpoint(ctx context.Context, id string, service *v1.Ser
 							} else {
 								leaderElectionActive = false
 								break
-
 							}
 						}
 					}()

@@ -14,6 +14,7 @@ import (
 	"k8s.io/apimachinery/pkg/watch"
 	"k8s.io/client-go/tools/cache"
 	watchtools "k8s.io/client-go/tools/watch"
+	"k8s.io/client-go/util/retry"
 )
 
 func (sm *Manager) watchEndpointSlices(ctx context.Context, id string, service *v1.Service, wg *sync.WaitGroup) error {
@@ -70,6 +71,7 @@ func (sm *Manager) watchEndpointSlices(ctx context.Context, id string, service *
 
 	for event := range ch {
 		lastKnownGoodEndpoint := ""
+		activeEndpointAnnotation := activeEndpoint
 		// We need to inspect the event and get ResourceVersion out of it
 		switch event.Type {
 		case watch.Added, watch.Modified:
@@ -78,6 +80,10 @@ func (sm *Manager) watchEndpointSlices(ctx context.Context, id string, service *
 			if !ok {
 				cancel()
 				return fmt.Errorf("[endpointslices] unable to parse Kubernetes services from API watcher")
+			}
+
+			if eps.AddressType == discoveryv1.AddressTypeIPv6 {
+				activeEndpointAnnotation = activeEndpointIPv6
 			}
 
 			// Build endpoints
@@ -119,7 +125,7 @@ func (sm *Manager) watchEndpointSlices(ctx context.Context, id string, service *
 
 				// Set the service accordingly
 				if service.Annotations[egress] == "true" {
-					service.Annotations[activeEndpoint] = lastKnownGoodEndpoint
+					service.Annotations[activeEndpointAnnotation] = lastKnownGoodEndpoint
 				}
 
 				if !leaderElectionActive && sm.config.EnableServicesElection {
@@ -204,6 +210,38 @@ func (sm *Manager) watchEndpointSlices(ctx context.Context, id string, service *
 	close(exitFunction)
 	log.Infof("[endpointslices] stopping watching for [%s] in namespace [%s]", service.Name, service.Namespace)
 	return nil //nolint:govet
+}
+
+func (sm *Manager) updateServiceEndpointSlicesAnnotation(endpoint, endpointIPv6 string, service *v1.Service) error {
+	retryErr := retry.RetryOnConflict(retry.DefaultRetry, func() error {
+		// Retrieve the latest version of Deployment before attempting update
+		// RetryOnConflict uses exponential backoff to avoid exhausting the apiserver
+		currentService, err := sm.clientSet.CoreV1().Services(service.Namespace).Get(context.TODO(), service.Name, metav1.GetOptions{})
+		if err != nil {
+			return err
+		}
+
+		currentServiceCopy := currentService.DeepCopy()
+		if currentServiceCopy.Annotations == nil {
+			currentServiceCopy.Annotations = make(map[string]string)
+		}
+
+		currentServiceCopy.Annotations[activeEndpoint] = endpoint
+		currentServiceCopy.Annotations[activeEndpointIPv6] = endpointIPv6
+
+		_, err = sm.clientSet.CoreV1().Services(currentService.Namespace).Update(context.TODO(), currentServiceCopy, metav1.UpdateOptions{})
+		if err != nil {
+			log.Errorf("Error updating Service Spec [%s] : %v", currentServiceCopy.Name, err)
+			return err
+		}
+		return nil
+	})
+
+	if retryErr != nil {
+		log.Errorf("Failed to set Services: %v", retryErr)
+		return retryErr
+	}
+	return nil
 }
 
 func getLocalEndpointsFromEndpointslices(eps *discoveryv1.EndpointSlice, id string) []string {
