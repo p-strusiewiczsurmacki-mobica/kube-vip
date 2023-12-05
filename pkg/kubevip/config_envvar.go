@@ -183,4 +183,13 @@ const (
 
 	// vipConfigMap defines the configmap that kube-vip will watch for service definitions
 	// vipConfigMap = "vip_configmap"
+
+	// dnsMode defines mode that DNS lookup will be performed with (first, ipv4, ipv6, dual)
+	dnsMode = "dns_mode"
+
+	// disableServiceUpdates disables service updating
+	disableServiceUpdates = "disable_service_updates"
+
+	// enableEndpointSlices enables use of EndpointSLices instead of Endpoints
+	enableEndpointSlices = "enable_endpointslices"
 )
