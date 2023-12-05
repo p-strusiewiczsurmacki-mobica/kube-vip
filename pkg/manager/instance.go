@@ -3,6 +3,7 @@ package manager
 import (
 	"fmt"
 	"net"
+	"slices"
 
 	log "github.com/sirupsen/logrus"
 	"github.com/vishvananda/netlink"
@@ -42,6 +43,15 @@ func NewInstance(svc *v1.Service, config *kubevip.Config) (*Instance, error) {
 	instanceAddress := fetchServiceAddress(svc)
 	instanceUID := string(svc.UID)
 
+	instanceAddressString := ""
+
+	for i, address := range instanceAddress {
+		instanceAddressString += address
+		if i < len(instanceAddress)-1 {
+			instanceAddressString += ","
+		}
+	}
+
 	// Detect if we're using a specific interface for services
 	var serviceInterface string
 	if config.ServicesInterface != "" {
@@ -52,7 +62,7 @@ func NewInstance(svc *v1.Service, config *kubevip.Config) (*Instance, error) {
 
 	// Generate new Virtual IP configuration
 	newVip := &kubevip.Config{
-		VIP:                   instanceAddress, // TODO support more than one vip?
+		VIP:                   instanceAddressString, // TODO support more than one vip?
 		Interface:             serviceInterface,
 		SingleNode:            true,
 		EnableARP:             config.EnableARP,
@@ -64,12 +74,14 @@ func NewInstance(svc *v1.Service, config *kubevip.Config) (*Instance, error) {
 		RoutingTableType:      config.RoutingTableType,
 		ArpBroadcastRate:      config.ArpBroadcastRate,
 		EnableServiceSecurity: config.EnableServiceSecurity,
+		DNSMode:               config.DNSMode,
+		DisableServiceUpdates: config.DisableServiceUpdates,
 	}
 
 	// Create new service
 	instance := &Instance{
 		UID:             instanceUID,
-		Vip:             instanceAddress,
+		Vip:             instanceAddressString,
 		serviceSnapshot: svc,
 	}
 	if len(svc.Spec.Ports) > 0 {
@@ -97,7 +109,8 @@ func NewInstance(svc *v1.Service, config *kubevip.Config) (*Instance, error) {
 
 	// If this was purposely created with the address 0.0.0.0,
 	// we will create a macvlan on the main interface and a DHCP client
-	if instanceAddress == "0.0.0.0" {
+
+	if slices.Contains(instanceAddress, "0.0.0.0") {
 		err := instance.startDHCP()
 		if err != nil {
 			return nil, err
@@ -117,7 +130,10 @@ func NewInstance(svc *v1.Service, config *kubevip.Config) (*Instance, error) {
 		log.Errorf("Failed to add Service %s/%s", svc.Namespace, svc.Name)
 		return nil, err
 	}
-	c.Network.SetServicePorts(svc)
+
+	for i := range c.Network {
+		c.Network[i].SetServicePorts(svc)
+	}
 	instance.cluster = c
 
 	return instance, nil

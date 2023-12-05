@@ -151,6 +151,15 @@ type Config struct {
 
 	// ServicesLeaseName, this will set the lease name for services leader in arp mode
 	ServicesLeaseName string `yaml:"servicesLeaseName"`
+
+	// DNSMode, this will set the mode DSN lookup will be performed (first, ipv4, ipv6, dual)
+	DNSMode string `yaml:"dnsDualStackMode"`
+
+	// DisableServiceUpdates, if true, kube-vip will only advertise service, but it will not update service's Status.LoadBalancer.Ingress slice
+	DisableServiceUpdates bool `yaml:"disableServiceUpdates"`
+
+	// EnableEndpointSlices, if enabled, EndpointSlices will be used instead of Endpoints
+	EnableEndpointSlices bool `yaml:"enableEndpointSlices"`
 }
 
 // KubernetesLeaderElection defines all of the settings for Kubernetes KubernetesLeaderElection

@@ -102,6 +102,20 @@ func GenerateIPv4VIP() string {
 	return ""
 }
 
+func GenerateDualStackVIP() string {
+	ipv4 := GenerateIPv4VIP()
+	if ipv4 == "" {
+		return ""
+	}
+
+	ipv6 := GenerateIPv6VIP()
+	if ipv6 == "" {
+		return ""
+	}
+
+	return ipv4 + "," + ipv6
+}
+
 func getKindNetworkSubnetCIDRs() []string {
 	cmd := exec.Command(
 		"docker", "inspect", "kind",

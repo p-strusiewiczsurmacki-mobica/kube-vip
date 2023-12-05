@@ -7,6 +7,7 @@ import (
 	"os"
 	"strings"
 
+	"github.com/kube-vip/kube-vip/pkg/iptables"
 	"github.com/kube-vip/kube-vip/pkg/vip"
 	v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
@@ -43,95 +44,128 @@ func (sm *Manager) iptablesCheck() error {
 	return nil
 }
 
-func (sm *Manager) configureEgress(vipIP, podIP, destinationPorts, namespace string) error {
+func getSameFamilyCidr(source, ip string) string {
+	cidrs := strings.Split(source, ",")
+	for _, cidr := range cidrs {
+		if vip.IsIPv4(cidr) == vip.IsIPv4(ip) {
+			return cidr
+		}
+	}
+	return ""
+}
+
+func (sm *Manager) configureEgress(vipIP, podIPs, destinationPorts, namespace string) error {
 	// serviceCIDR, podCIDR, err := sm.AutoDiscoverCIDRs()
 	// if err != nil {
 	// 	serviceCIDR = "10.96.0.0/12"
 	// 	podCIDR = "10.0.0.0/16"
 	// }
 
+	addresses := vip.GetIPs(podIPs)
+
 	var podCidr, serviceCidr string
 
-	if sm.config.EgressPodCidr != "" {
-		podCidr = sm.config.EgressPodCidr
-	} else {
-		podCidr = defaultPodCIDR
-	}
+	for _, podIP := range addresses {
 
-	if sm.config.EgressServiceCidr != "" {
-		serviceCidr = sm.config.EgressServiceCidr
-	} else {
-		serviceCidr = defaultServiceCIDR
-	}
-
-	i, err := vip.CreateIptablesClient(sm.config.EgressWithNftables, namespace)
-	if err != nil {
-		return fmt.Errorf("error Creating iptables client [%s]", err)
-	}
-
-	// Check if the kube-vip mangle chain exists, if not create it
-	exists, err := i.CheckMangleChain(vip.MangleChainName)
-	if err != nil {
-		return fmt.Errorf("error checking for existence of mangle chain [%s], error [%s]", vip.MangleChainName, err)
-	}
-	if !exists {
-		err = i.CreateMangleChain(vip.MangleChainName)
-		if err != nil {
-			return fmt.Errorf("error creating mangle chain [%s], error [%s]", vip.MangleChainName, err)
-		}
-	}
-	err = i.AppendReturnRulesForDestinationSubnet(vip.MangleChainName, podCidr)
-	if err != nil {
-		return fmt.Errorf("error adding rules to mangle chain [%s], error [%s]", vip.MangleChainName, err)
-	}
-	err = i.AppendReturnRulesForDestinationSubnet(vip.MangleChainName, serviceCidr)
-	if err != nil {
-		return fmt.Errorf("error adding rules to mangle chain [%s], error [%s]", vip.MangleChainName, err)
-	}
-	err = i.AppendReturnRulesForMarking(vip.MangleChainName, podIP+"/32")
-	if err != nil {
-		return fmt.Errorf("error adding marking rules to mangle chain [%s], error [%s]", vip.MangleChainName, err)
-	}
-
-	err = i.InsertMangeTableIntoPrerouting(vip.MangleChainName)
-	if err != nil {
-		return fmt.Errorf("error adding prerouting mangle chain [%s], error [%s]", vip.MangleChainName, err)
-	}
-
-	if destinationPorts != "" {
-
-		fixedPorts := strings.Split(destinationPorts, ",")
-
-		for _, fixedPort := range fixedPorts {
-			var proto, port string
-
-			data := strings.Split(fixedPort, ":")
-			if len(data) == 0 {
+		if sm.config.EgressPodCidr != "" {
+			podCidr = getSameFamilyCidr(sm.config.EgressPodCidr, podIP)
+		} else {
+			if !vip.IsIPv4(podIP) {
 				continue
-			} else if len(data) == 1 {
-				proto = "tcp"
-				port = data[0]
-			} else {
-				proto = data[0]
-				port = data[1]
 			}
+			podCidr = defaultPodCIDR
+		}
 
-			err = i.InsertSourceNatForDestinationPort(vipIP, podIP, port, proto)
+		if sm.config.EgressServiceCidr != "" {
+			serviceCidr = getSameFamilyCidr(sm.config.EgressServiceCidr, vipIP)
+		} else {
+			if !vip.IsIPv4(vipIP) {
+				continue
+			}
+			serviceCidr = defaultServiceCIDR
+		}
+
+		protocol := iptables.ProtocolIPv4
+
+		if vip.IsIPv6(vipIP) {
+			protocol = iptables.ProtocolIPv6
+		}
+
+		i, err := vip.CreateIptablesClient(sm.config.EgressWithNftables, namespace, protocol)
+		if err != nil {
+			return fmt.Errorf("error Creating iptables client [%s]", err)
+		}
+
+		// Check if the kube-vip mangle chain exists, if not create it
+		exists, err := i.CheckMangleChain(vip.MangleChainName)
+		if err != nil {
+			return fmt.Errorf("error checking for existence of mangle chain [%s], error [%s]", vip.MangleChainName, err)
+		}
+		if !exists {
+			err = i.CreateMangleChain(vip.MangleChainName)
+			if err != nil {
+				return fmt.Errorf("error creating mangle chain [%s], error [%s]", vip.MangleChainName, err)
+			}
+		}
+		err = i.AppendReturnRulesForDestinationSubnet(vip.MangleChainName, podCidr)
+		if err != nil {
+			return fmt.Errorf("error adding rules to mangle chain [%s], error [%s]", vip.MangleChainName, err)
+		}
+		err = i.AppendReturnRulesForDestinationSubnet(vip.MangleChainName, serviceCidr)
+		if err != nil {
+			return fmt.Errorf("error adding rules to mangle chain [%s], error [%s]", vip.MangleChainName, err)
+		}
+
+		mask := "/32"
+		if !vip.IsIPv4(podIP) {
+			mask = "/128"
+		}
+
+		err = i.AppendReturnRulesForMarking(vip.MangleChainName, podIP+mask)
+		if err != nil {
+			return fmt.Errorf("error adding marking rules to mangle chain [%s], error [%s]", vip.MangleChainName, err)
+		}
+
+		err = i.InsertMangeTableIntoPrerouting(vip.MangleChainName)
+		if err != nil {
+			return fmt.Errorf("error adding prerouting mangle chain [%s], error [%s]", vip.MangleChainName, err)
+		}
+
+		if destinationPorts != "" {
+
+			fixedPorts := strings.Split(destinationPorts, ",")
+
+			for _, fixedPort := range fixedPorts {
+				var proto, port string
+
+				data := strings.Split(fixedPort, ":")
+				if len(data) == 0 {
+					continue
+				} else if len(data) == 1 {
+					proto = "tcp"
+					port = data[0]
+				} else {
+					proto = data[0]
+					port = data[1]
+				}
+
+				err = i.InsertSourceNatForDestinationPort(vipIP, podIP, port, proto)
+				if err != nil {
+					return fmt.Errorf("error adding snat rules to nat chain [%s], error [%s]", vip.MangleChainName, err)
+				}
+
+			}
+		} else {
+			err = i.InsertSourceNat(vipIP, podIP)
 			if err != nil {
 				return fmt.Errorf("error adding snat rules to nat chain [%s], error [%s]", vip.MangleChainName, err)
 			}
-
 		}
-	} else {
-		err = i.InsertSourceNat(vipIP, podIP)
+		//_ = i.DumpChain(vip.MangleChainName)
+		err = vip.DeleteExistingSessions(podIP, false)
 		if err != nil {
-			return fmt.Errorf("error adding snat rules to nat chain [%s], error [%s]", vip.MangleChainName, err)
+			return err
 		}
-	}
-	//_ = i.DumpChain(vip.MangleChainName)
-	err = vip.DeleteExistingSessions(podIP, false)
-	if err != nil {
-		return err
 	}
 
 	return nil
@@ -158,7 +192,12 @@ func (sm *Manager) AutoDiscoverCIDRs() (serviceCIDR, podCIDR string, err error) 
 }
 
 func (sm *Manager) TeardownEgress(podIP, vipIP, destinationPorts, namespace string) error {
-	i, err := vip.CreateIptablesClient(sm.config.EgressWithNftables, namespace)
+	protocol := iptables.ProtocolIPv4
+	if vip.IsIPv6(podIP) {
+		protocol = iptables.ProtocolIPv6
+	}
+
+	i, err := vip.CreateIptablesClient(sm.config.EgressWithNftables, namespace, protocol)
 	if err != nil {
 		return fmt.Errorf("error Creating iptables client [%s]", err)
 	}

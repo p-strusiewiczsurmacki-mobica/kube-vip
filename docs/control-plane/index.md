@@ -193,6 +193,15 @@ kube-system   kube-vip-controlplane03                  1/1     Running          
 
 A new flag `--address` is introduced to support using a DNS record as the control plane endpoint. `kube-vip` will do a dns lookup to retrieve the IP for the DNS record, and use that IP as the VIP. An `dnsUpdater` periodically checks and updates the system if IP changes for the DNS record.
 
+#### DualStack DNS Support
+
+A new flag `--dnsMode` is introduced to enable users to select what kind of IP address should be returned by DNS lookup. Four values are supported:
+
+- `first` - DNS lookup will return first IP address (default)
+- `ipv4` - first available IPv4 address will be returned
+- `ipv6` - first IPv6 will be returned
+- `dual` - addresses will be returned as string formatted as `IPv4,IPv6`
+
 ### Dynamic DNS Support (added in 0.2.1)
 
 `kube-vip` was also updated to support DHCP + [Dynamic DNS](https://en.wikipedia.org/wiki/Dynamic_DNS), for the use case where it's not able to reserve a static IP for the control plane endpoint.
@@ -418,4 +427,13 @@ sudo ./k3s server --tls-san $VIP \
 mkdir -p $HOME/.kube
 sudo cat /etc/rancher/k3s/k3s.yaml | sed 's/127.0.0.1/'$VIP'/g' > $HOME/.kube/config
 sudo chown $(id -u):$(id -g) $HOME/.kube/config
-```
+````
+
+## DualStack support
+
+Kubernetes DualStack deployment is currently supported in the following way:
+
+- Service should have annotation `kube-vip.io/loadbalancerIPs: IPv4_address,IPv6_address` (addresses separated using comma), or another loadbalancer should set service's `status.loadbalancer.ingress` field.
+- Flag `dnsMode` should be set to `dual`.
+- If external loadbalancer is responsible for updating `status.loadbalancer.ingress` field, service updates by kube-vip should be disabled by setting value of flag `disableServiceUpdates` to `true`.
+- Support for [EndpointSlices](https://kubernetes.io/docs/concepts/services-networking/endpoint-slices/) should be enabled by setting flag `enableEndpointSlices` to `true`. 
