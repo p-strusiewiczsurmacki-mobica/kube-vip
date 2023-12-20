@@ -299,10 +299,15 @@ func (sm *Manager) updateStatus(i *Instance) error {
 			currentServiceCopy.Annotations[requestedIP] = i.dhcpInterfaceIP
 		}
 
-		updatedService, err := sm.clientSet.CoreV1().Services(currentService.Namespace).Update(context.TODO(), currentServiceCopy, metav1.UpdateOptions{})
-		if err != nil {
-			log.Errorf("Error updating Service Spec [%s] : %v", i.serviceSnapshot.Name, err)
-			return err
+		var updatedService *v1.Service
+		if !cmp.Equal(currentService, currentServiceCopy) {
+			updatedService, err = sm.clientSet.CoreV1().Services(currentService.Namespace).Update(context.TODO(), currentServiceCopy, metav1.UpdateOptions{})
+			if err != nil {
+				log.Errorf("Error updating Service Spec [%s] : %v", i.serviceSnapshot.Name, err)
+				return err
+			}
+		} else {
+			return nil;
 		}
 
 		ports := make([]v1.PortStatus, 0, len(i.serviceSnapshot.Spec.Ports))
@@ -319,11 +324,13 @@ func (sm *Manager) updateStatus(i *Instance) error {
 				Ports: ports,
 			})
 		}
-		updatedService.Status.LoadBalancer.Ingress = ingresses
-		_, err = sm.clientSet.CoreV1().Services(updatedService.Namespace).UpdateStatus(context.TODO(), updatedService, metav1.UpdateOptions{})
-		if err != nil {
-			log.Errorf("Error updating Service %s/%s Status: %v", i.serviceSnapshot.Namespace, i.serviceSnapshot.Name, err)
-			return err
+		if !cmp.Equal(updatedService.Status.LoadBalancer.Ingress, ingresses) {
+			updatedService.Status.LoadBalancer.Ingress = lbIngress
+			_, err = sm.clientSet.CoreV1().Services(updatedService.Namespace).UpdateStatus(context.TODO(), updatedService, metav1.UpdateOptions{})
+			if err != nil {
+				log.Errorf("Error updating Service %s/%s Status: %v", i.serviceSnapshot.Namespace, i.serviceSnapshot.Name, err)
+				return err
+			}
 		}
 		return nil
 	})
