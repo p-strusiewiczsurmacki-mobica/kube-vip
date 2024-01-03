@@ -46,9 +46,15 @@ func startNetworking(c *kubevip.Config) ([]vip.Network, error) {
 		address = c.Address
 	}
 
-	networks, err := vip.NewConfig(address, c.Interface, c.VIPSubnet, c.DDNS, c.RoutingTableID, c.RoutingTableType, c.DNSMode)
-	if err != nil {
-		return nil, err
+	addresses := vip.GetIPs(address)
+
+	networks := []vip.Network{}
+	for _, addr := range addresses {
+		network, err := vip.NewConfig(addr, c.Interface, c.VIPSubnet, c.DDNS, c.RoutingTableID, c.RoutingTableType, c.DNSMode)
+		if err != nil {
+			return nil, err
+		}
+		networks = append(networks, network...)
 	}
 
 	return networks, nil

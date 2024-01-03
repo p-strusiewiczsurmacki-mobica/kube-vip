@@ -27,6 +27,7 @@ import (
 	"github.com/onsi/gomega/format"
 	"github.com/onsi/gomega/gexec"
 
+	"github.com/kube-vip/kube-vip/pkg/vip"
 	"github.com/kube-vip/kube-vip/testing/e2e"
 )
 
@@ -219,8 +220,9 @@ var _ = Describe("kube-vip broadcast neighbor", func() {
 
 	Describe("kube-vip DualStack functionality", func() {
 		var (
-			clusterConfig kindconfigv1alpha4.Cluster
-			vips          []string
+			clusterConfig  kindconfigv1alpha4.Cluster
+			vips           []string
+			ipDualStackVIP string
 		)
 
 		BeforeEach(func() {
@@ -236,18 +238,24 @@ var _ = Describe("kube-vip broadcast neighbor", func() {
 			manifestPath := filepath.Join(tempDirPath, "kube-vip-dualstack.yaml")
 
 			for i := 0; i < 3; i++ {
-				clusterConfig.Nodes = append(clusterConfig.Nodes, kindconfigv1alpha4.Node{
+				nodeConfig := kindconfigv1alpha4.Node{
+					Role: kindconfigv1alpha4.ControlPlaneRole,
 					ExtraMounts: []kindconfigv1alpha4.Mount{
 						{
 							HostPath:      manifestPath,
 							ContainerPath: "/etc/kubernetes/manifests/kube-vip.yaml",
 						},
 					},
-				})
+				}
+				// Override the kind image version
+				if k8sImagePath != "" {
+					nodeConfig.Image = k8sImagePath
+				}
+				clusterConfig.Nodes = append(clusterConfig.Nodes, nodeConfig)
 			}
 
-			ipDualStackVIP := e2e.GenerateDualStackVIP()
-			vips = e2e.GetIPs(ipDualStackVIP)
+			ipDualStackVIP = e2e.GenerateDualStackVIP()
+			vips = vip.GetIPs(ipDualStackVIP)
 
 			manifestFile, err := os.Create(manifestPath)
 			Expect(err).NotTo(HaveOccurred())

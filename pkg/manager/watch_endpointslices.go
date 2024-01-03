@@ -69,12 +69,9 @@ func (sm *Manager) watchEndpointSlices(ctx context.Context, id string, service *
 
 	ch := rw.ResultChan()
 
-	var lastKnownGoodEndpointIPv4, lastKnownGoodEndpointIPv6 string
-	activeEndpointAnnotation := activeEndpoint
-
-	lastKnownGoodEndpoint := &lastKnownGoodEndpointIPv4
-
 	for event := range ch {
+		lastKnownGoodEndpoint := ""
+		activeEndpointAnnotation := activeEndpoint
 		// We need to inspect the event and get ResourceVersion out of it
 		switch event.Type {
 		case watch.Added, watch.Modified:
@@ -86,7 +83,6 @@ func (sm *Manager) watchEndpointSlices(ctx context.Context, id string, service *
 			}
 
 			if eps.AddressType == discoveryv1.AddressTypeIPv6 {
-				lastKnownGoodEndpoint = &lastKnownGoodEndpointIPv6
 				activeEndpointAnnotation = activeEndpointIPv6
 			}
 
@@ -140,34 +136,34 @@ func (sm *Manager) watchEndpointSlices(ctx context.Context, id string, service *
 			// Check that we have local endpoints
 			if len(localendpoints) != 0 {
 				// if we haven't populated one, then do so
-				if *lastKnownGoodEndpoint != "" {
+				if lastKnownGoodEndpoint != "" {
 
 					// check out previous endpoint exists
 					stillExists := false
 
 					for x := range localendpoints {
-						if localendpoints[x] == *lastKnownGoodEndpoint {
+						if localendpoints[x] == lastKnownGoodEndpoint {
 							stillExists = true
 						}
 					}
 					// If the last endpoint no longer exists, we cancel our leader Election
 					if !stillExists && leaderElectionActive {
-						log.Warnf("[endpointslices] existing endpoint [%s] has been removed, restarting leaderElection", *lastKnownGoodEndpoint)
+						log.Warnf("[endpointslices] existing endpoint [%s] has been removed, restarting leaderElection", lastKnownGoodEndpoint)
 						// Stop the existing leaderElection
 						cancel()
 						// Set our active endpoint to an existing one
-						*lastKnownGoodEndpoint = localendpoints[0]
+						lastKnownGoodEndpoint = localendpoints[0]
 						// disable last leaderElection flag
 						leaderElectionActive = false
 					}
 
 				} else {
-					*lastKnownGoodEndpoint = localendpoints[0]
+					lastKnownGoodEndpoint = localendpoints[0]
 				}
 
 				// Set the service accordingly
 				if service.Annotations["kube-vip.io/egress"] == "true" {
-					service.Annotations[activeEndpointAnnotation] = *lastKnownGoodEndpoint
+					service.Annotations[activeEndpointAnnotation] = lastKnownGoodEndpoint
 				}
 
 				if !leaderElectionActive {
@@ -193,14 +189,14 @@ func (sm *Manager) watchEndpointSlices(ctx context.Context, id string, service *
 				}
 			} else {
 				// If there are no local endpoints, and we had one then remove it and stop the leaderElection
-				if *lastKnownGoodEndpoint != "" {
-					log.Warnf("[endpointslices] existing endpoint [%s] has been removed, no remaining endpoints for leaderElection", *lastKnownGoodEndpoint)
-					*lastKnownGoodEndpoint = "" // reset endpoint
-					cancel()                    // stop services watcher
+				if lastKnownGoodEndpoint != "" {
+					log.Warnf("[endpointslices] existing endpoint [%s] has been removed, no remaining endpoints for leaderElection", lastKnownGoodEndpoint)
+					lastKnownGoodEndpoint = "" // reset endpoint
+					cancel()                   // stop services watcher
 					leaderElectionActive = false
 				}
 			}
-			log.Debugf("[endpointslices watcher] local endpoint(s) [%d], known good [%s], active election [%t]", len(localendpoints), *lastKnownGoodEndpoint, leaderElectionActive)
+			log.Debugf("[endpointslices watcher] local endpoint(s) [%d], known good [%s], active election [%t]", len(localendpoints), lastKnownGoodEndpoint, leaderElectionActive)
 
 		case watch.Deleted:
 			// Close the goroutine that will end the retry watcher, then exit the endpoint watcher function
