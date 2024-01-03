@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/google/go-cmp/cmp"
 	log "github.com/sirupsen/logrus"
 	"github.com/vishvananda/netlink"
 	v1 "k8s.io/api/core/v1"
@@ -299,17 +300,13 @@ func (sm *Manager) updateStatus(i *Instance) error {
 			currentServiceCopy.Annotations[requestedIP] = i.dhcpInterfaceIP
 		}
 
-		var updatedService *v1.Service
 		if !cmp.Equal(currentService, currentServiceCopy) {
-			updatedService, err = sm.clientSet.CoreV1().Services(currentService.Namespace).Update(context.TODO(), currentServiceCopy, metav1.UpdateOptions{})
+			currentService, err = sm.clientSet.CoreV1().Services(currentServiceCopy.Namespace).Update(context.TODO(), currentServiceCopy, metav1.UpdateOptions{})
 			if err != nil {
 				log.Errorf("Error updating Service Spec [%s] : %v", i.serviceSnapshot.Name, err)
 				return err
 			}
-		} else {
-			return nil;
 		}
-
 		ports := make([]v1.PortStatus, 0, len(i.serviceSnapshot.Spec.Ports))
 		for _, port := range i.serviceSnapshot.Spec.Ports {
 			ports = append(ports, v1.PortStatus{
@@ -324,9 +321,9 @@ func (sm *Manager) updateStatus(i *Instance) error {
 				Ports: ports,
 			})
 		}
-		if !cmp.Equal(updatedService.Status.LoadBalancer.Ingress, ingresses) {
-			updatedService.Status.LoadBalancer.Ingress = lbIngress
-			_, err = sm.clientSet.CoreV1().Services(updatedService.Namespace).UpdateStatus(context.TODO(), updatedService, metav1.UpdateOptions{})
+		if !cmp.Equal(currentServiceCopy.Status.LoadBalancer.Ingress, ingresses) {
+			currentServiceCopy.Status.LoadBalancer.Ingress = ingresses
+			_, err = sm.clientSet.CoreV1().Services(currentServiceCopy.Namespace).UpdateStatus(context.TODO(), currentServiceCopy, metav1.UpdateOptions{})
 			if err != nil {
 				log.Errorf("Error updating Service %s/%s Status: %v", i.serviceSnapshot.Namespace, i.serviceSnapshot.Name, err)
 				return err
