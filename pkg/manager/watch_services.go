@@ -149,20 +149,25 @@ func (sm *Manager) servicesWatcher(ctx context.Context, serviceFunc func(context
 				activeServiceLoadBalancer[string(svc.UID)], activeServiceLoadBalancerCancel[string(svc.UID)] = context.WithCancel(context.TODO())
 				// Background the services election
 				if sm.config.EnableServicesElection {
+					log.Debugf("EnableServicesElection is true")
 					if svc.Spec.ExternalTrafficPolicy == v1.ServiceExternalTrafficPolicyTypeLocal {
+						log.Debugf("traffic policy type is local")
 						// Start an endpoint watcher if we're not watching it already
 						if !watchedService[string(svc.UID)] {
+							log.Debugf("is not watched")
 							// background the endpoint watcher
 							go func() {
 								if svc.Spec.ExternalTrafficPolicy == v1.ServiceExternalTrafficPolicyTypeLocal {
 									// Add Endpoint or EndpointSlices watcher
 									wg.Add(1)
 									if !sm.config.EnableEndpointSlices {
+										log.Debugf("will watch endpoins")
 										err = sm.watchEndpoint(activeServiceLoadBalancer[string(svc.UID)], id, svc, &wg)
 										if err != nil {
 											log.Error(err)
 										}
 									} else {
+										log.Debugf("will watch endpoint slices")
 										err = sm.watchEndpointSlices(activeServiceLoadBalancer[string(svc.UID)], id, svc, &wg)
 										if err != nil {
 											log.Error(err)
@@ -172,6 +177,7 @@ func (sm *Manager) servicesWatcher(ctx context.Context, serviceFunc func(context
 								}
 							}()
 							// We're now watching this service
+							log.Debugf("service is now watched")
 							watchedService[string(svc.UID)] = true
 						}
 					} else {

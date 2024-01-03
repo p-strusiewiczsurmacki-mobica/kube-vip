@@ -69,10 +69,49 @@ func netlinkParse(addr string) (*netlink.Addr, error) {
 func NewConfig(address string, iface string, subnet string, isDDNS bool, tableID int, tableType int, dnsMode string) ([]Network, error) {
 	networks := []Network{}
 
-	addresses := GetIPs(address)
+	if IsIP(address) {
+		result := &network{}
 
-	for _, addr := range addresses {
-		if IsIP(addr) {
+		link, err := netlink.LinkByName(iface)
+		if err != nil {
+			return networks, errors.Wrapf(err, "could not get link for interface '%s'", iface)
+		}
+
+		result.link = link
+		result.routeTable = tableID
+		result.routingTableType = tableType
+
+		// Check if the subnet needs overriding
+		if subnet != "" {
+			result.address, err = netlink.ParseAddr(address + subnet)
+			if err != nil {
+				return networks, errors.Wrapf(err, "could not parse address '%s'", address)
+			}
+		} else {
+			result.address, err = netlinkParse(address)
+			if err != nil {
+				return networks, errors.Wrapf(err, "could not parse address '%s'", address)
+			}
+		}
+		// Ensure we don't have a global address on loopback
+		if iface == "lo" {
+			result.address.Scope = unix.RT_SCOPE_HOST
+		}
+		networks = append(networks, result)
+	} else {
+		// try to resolve the address
+		ips, err := LookupHost(address, dnsMode)
+		if err != nil {
+			// return early for ddns if no IP is allocated for the domain
+			// when leader starts, should do get IP from DHCP for the domain
+			if isDDNS {
+				return networks, nil
+			}
+			return nil, err
+		}
+
+		for _, ip := range ips {
+
 			result := &network{}
 
 			link, err := netlink.LinkByName(iface)
@@ -84,63 +123,20 @@ func NewConfig(address string, iface string, subnet string, isDDNS bool, tableID
 			result.routeTable = tableID
 			result.routingTableType = tableType
 
-			// Check if the subnet needs overriding
-			if subnet != "" {
-				result.address, err = netlink.ParseAddr(addr + subnet)
-				if err != nil {
-					return networks, errors.Wrapf(err, "could not parse address '%s'", addr)
-				}
-			} else {
-				result.address, err = netlinkParse(addr)
-				if err != nil {
-					return networks, errors.Wrapf(err, "could not parse address '%s'", addr)
-				}
+			// address is DNS
+			result.isDDNS = isDDNS
+			result.dnsName = address
+
+			// we're able to resolve store this as the initial IP
+			if result.address, err = netlinkParse(ip); err != nil {
+				return networks, err
 			}
-			// Ensure we don't have a global address on loopback
-			if iface == "lo" {
-				result.address.Scope = unix.RT_SCOPE_HOST
-			}
+			// set ValidLft so that the VIP expires if the DNS entry is updated, otherwise it'll be refreshed by the DNS prober
+			result.address.ValidLft = defaultValidLft
+
 			networks = append(networks, result)
-		} else {
-			// try to resolve the address
-			ips, err := LookupHost(addr, dnsMode)
-			if err != nil {
-				// return early for ddns if no IP is allocated for the domain
-				// when leader starts, should do get IP from DHCP for the domain
-				if isDDNS {
-					return networks, nil
-				}
-				return nil, err
-			}
-
-			for _, ip := range ips {
-
-				result := &network{}
-
-				link, err := netlink.LinkByName(iface)
-				if err != nil {
-					return networks, errors.Wrapf(err, "could not get link for interface '%s'", iface)
-				}
-
-				result.link = link
-				result.routeTable = tableID
-				result.routingTableType = tableType
-
-				// address is DNS
-				result.isDDNS = isDDNS
-				result.dnsName = addr
-
-				// we're able to resolve store this as the initial IP
-				if result.address, err = netlinkParse(ip); err != nil {
-					return networks, err
-				}
-				// set ValidLft so that the VIP expires if the DNS entry is updated, otherwise it'll be refreshed by the DNS prober
-				result.address.ValidLft = defaultValidLft
-
-				networks = append(networks, result)
-			}
-
 		}
+
 	}
 
 	return networks, nil

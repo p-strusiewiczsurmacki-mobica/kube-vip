@@ -27,7 +27,6 @@ import (
 	"github.com/onsi/gomega/format"
 	"github.com/onsi/gomega/gexec"
 
-	"github.com/kube-vip/kube-vip/pkg/vip"
 	"github.com/kube-vip/kube-vip/testing/e2e"
 )
 
@@ -248,7 +247,7 @@ var _ = Describe("kube-vip broadcast neighbor", func() {
 			}
 
 			ipDualStackVIP := e2e.GenerateDualStackVIP()
-			vips = vip.GetIPs(ipDualStackVIP)
+			vips = e2e.GetIPs(ipDualStackVIP)
 
 			manifestFile, err := os.Create(manifestPath)
 			Expect(err).NotTo(HaveOccurred())

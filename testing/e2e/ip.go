@@ -103,17 +103,16 @@ func GenerateIPv4VIP() string {
 }
 
 func GenerateDualStackVIP() string {
-	ipv4 := GenerateIPv4VIP()
-	if ipv4 == "" {
-		return ""
-	}
+	return GenerateIPv4VIP() + "," + GenerateIPv6VIP()
+}
 
-	ipv6 := GenerateIPv6VIP()
-	if ipv6 == "" {
-		return ""
+func GetIPs(vip string) []string {
+	addresses := []string{}
+	vips := strings.Split(vip, ",")
+	for _, v := range vips {
+		addresses = append(addresses, strings.TrimSpace(v))
 	}
-
-	return ipv4 + "," + ipv6
+	return addresses
 }
 
 func getKindNetworkSubnetCIDRs() []string {

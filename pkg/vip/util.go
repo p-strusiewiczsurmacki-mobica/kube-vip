@@ -178,12 +178,3 @@ func GenerateMac() (mac string) {
 	log.Infof("Generated mac: %s", mac)
 	return mac
 }
-
-func GetIPs(vip string) []string {
-	addresses := []string{}
-	vips := strings.Split(vip, ",")
-	for _, v := range vips {
-		addresses = append(addresses, strings.TrimSpace(v))
-	}
-	return addresses
-}

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -24,7 +25,8 @@ const (
 	egress                   = "kube-vip.io/egress"
 	egressDestinationPorts   = "kube-vip.io/egress-destination-ports"
 	egressSourcePorts        = "kube-vip.io/egress-source-ports"
-	endpoint                 = "kube-vip.io/active-endpoint"
+	activeEndpoint           = "kube-vip.io/active-endpoint"
+	activeEndpointIPv6       = "kube-vip.io/active-endpoint-ipv6"
 	flushContrack            = "kube-vip.io/flush-conntrack"
 	loadbalancerIPAnnotation = "kube-vip.io/loadbalancerIPs"
 	loadbalancerHostname     = "kube-vip.io/loadbalancerHostname"
@@ -103,9 +105,11 @@ func (sm *Manager) addService(svc *v1.Service) error {
 		return err
 	}
 
-	log.Infof("(svcs) adding VIP [%s] for [%s/%s]", newService.Vip, newService.serviceSnapshot.Namespace, newService.serviceSnapshot.Name)
+	log.Infof("(svcs) adding VIP [%s] for [%s/%s]", newService.VIPs, newService.serviceSnapshot.Namespace, newService.serviceSnapshot.Name)
 
-	newService.cluster.StartLoadBalancerService(newService.vipConfig, sm.bgpServer)
+	for x := range newService.vipConfigs {
+		newService.clusters[x].StartLoadBalancerService(newService.vipConfigs[x], sm.bgpServer)
+	}
 
 	sm.upnpMap(newService)
 
@@ -115,7 +119,7 @@ func (sm *Manager) addService(svc *v1.Service) error {
 				log.Debugf("IP %s may have changed", ip)
 				newService.vipConfigs[0].VIP = ip
 				newService.dhcpInterfaceIP = ip
-				if !sm.config.DisableServiceUpdates) {
+				if !sm.config.DisableServiceUpdates {
 					if err := sm.updateStatus(newService); err != nil {
 						log.Warnf("error updating svc: %s", err)
 					}
@@ -341,8 +345,6 @@ func (sm *Manager) updateStatus(i *Instance) error {
 		}
 
 		ingresses := []v1.LoadBalancerIngress{}
-
-		vips := vip.GetIPs(i.vipConfig.VIP)
 
 		for _, c := range i.vipConfigs {
 			if !vip.IsIP(c.VIP) {

@@ -54,118 +54,113 @@ func getSameFamilyCidr(source, ip string) string {
 	return ""
 }
 
-func (sm *Manager) configureEgress(vipIP, podIPs, destinationPorts, namespace string) error {
+func (sm *Manager) configureEgress(vipIP, podIP, destinationPorts, namespace string) error {
 	// serviceCIDR, podCIDR, err := sm.AutoDiscoverCIDRs()
 	// if err != nil {
 	// 	serviceCIDR = "10.96.0.0/12"
 	// 	podCIDR = "10.0.0.0/16"
 	// }
 
-	addresses := vip.GetIPs(podIPs)
-
 	var podCidr, serviceCidr string
 
-	for _, podIP := range addresses {
-
-		if sm.config.EgressPodCidr != "" {
-			podCidr = getSameFamilyCidr(sm.config.EgressPodCidr, podIP)
-		} else {
-			if !vip.IsIPv4(podIP) {
-				continue
-			}
-			podCidr = defaultPodCIDR
-		}
-
-		if sm.config.EgressServiceCidr != "" {
-			serviceCidr = getSameFamilyCidr(sm.config.EgressServiceCidr, vipIP)
-		} else {
-			if !vip.IsIPv4(vipIP) {
-				continue
-			}
-			serviceCidr = defaultServiceCIDR
-		}
-
-		protocol := iptables.ProtocolIPv4
-
-		if vip.IsIPv6(vipIP) {
-			protocol = iptables.ProtocolIPv6
-		}
-
-		i, err := vip.CreateIptablesClient(sm.config.EgressWithNftables, namespace, protocol)
-		if err != nil {
-			return fmt.Errorf("error Creating iptables client [%s]", err)
-		}
-
-		// Check if the kube-vip mangle chain exists, if not create it
-		exists, err := i.CheckMangleChain(vip.MangleChainName)
-		if err != nil {
-			return fmt.Errorf("error checking for existence of mangle chain [%s], error [%s]", vip.MangleChainName, err)
-		}
-		if !exists {
-			err = i.CreateMangleChain(vip.MangleChainName)
-			if err != nil {
-				return fmt.Errorf("error creating mangle chain [%s], error [%s]", vip.MangleChainName, err)
-			}
-		}
-		err = i.AppendReturnRulesForDestinationSubnet(vip.MangleChainName, podCidr)
-		if err != nil {
-			return fmt.Errorf("error adding rules to mangle chain [%s], error [%s]", vip.MangleChainName, err)
-		}
-		err = i.AppendReturnRulesForDestinationSubnet(vip.MangleChainName, serviceCidr)
-		if err != nil {
-			return fmt.Errorf("error adding rules to mangle chain [%s], error [%s]", vip.MangleChainName, err)
-		}
-
-		mask := "/32"
+	if sm.config.EgressPodCidr != "" {
+		podCidr = getSameFamilyCidr(sm.config.EgressPodCidr, podIP)
+	} else {
 		if !vip.IsIPv4(podIP) {
-			mask = "/128"
+			return nil
 		}
+		podCidr = defaultPodCIDR
+	}
 
-		err = i.AppendReturnRulesForMarking(vip.MangleChainName, podIP+mask)
+	if sm.config.EgressServiceCidr != "" {
+		serviceCidr = getSameFamilyCidr(sm.config.EgressServiceCidr, vipIP)
+	} else {
+		if !vip.IsIPv4(vipIP) {
+			return nil
+		}
+		serviceCidr = defaultServiceCIDR
+	}
+
+	protocol := iptables.ProtocolIPv4
+
+	if vip.IsIPv6(vipIP) {
+		protocol = iptables.ProtocolIPv6
+	}
+
+	i, err := vip.CreateIptablesClient(sm.config.EgressWithNftables, namespace, protocol)
+	if err != nil {
+		return fmt.Errorf("error Creating iptables client [%s]", err)
+	}
+
+	// Check if the kube-vip mangle chain exists, if not create it
+	exists, err := i.CheckMangleChain(vip.MangleChainName)
+	if err != nil {
+		return fmt.Errorf("error checking for existence of mangle chain [%s], error [%s]", vip.MangleChainName, err)
+	}
+	if !exists {
+		err = i.CreateMangleChain(vip.MangleChainName)
 		if err != nil {
-			return fmt.Errorf("error adding marking rules to mangle chain [%s], error [%s]", vip.MangleChainName, err)
+			return fmt.Errorf("error creating mangle chain [%s], error [%s]", vip.MangleChainName, err)
 		}
+	}
+	err = i.AppendReturnRulesForDestinationSubnet(vip.MangleChainName, podCidr)
+	if err != nil {
+		return fmt.Errorf("error adding rules to mangle chain [%s], error [%s]", vip.MangleChainName, err)
+	}
+	err = i.AppendReturnRulesForDestinationSubnet(vip.MangleChainName, serviceCidr)
+	if err != nil {
+		return fmt.Errorf("error adding rules to mangle chain [%s], error [%s]", vip.MangleChainName, err)
+	}
 
-		err = i.InsertMangeTableIntoPrerouting(vip.MangleChainName)
-		if err != nil {
-			return fmt.Errorf("error adding prerouting mangle chain [%s], error [%s]", vip.MangleChainName, err)
-		}
+	mask := "/32"
+	if !vip.IsIPv4(podIP) {
+		mask = "/128"
+	}
 
-		if destinationPorts != "" {
+	err = i.AppendReturnRulesForMarking(vip.MangleChainName, podIP+mask)
+	if err != nil {
+		return fmt.Errorf("error adding marking rules to mangle chain [%s], error [%s]", vip.MangleChainName, err)
+	}
 
-			fixedPorts := strings.Split(destinationPorts, ",")
+	err = i.InsertMangeTableIntoPrerouting(vip.MangleChainName)
+	if err != nil {
+		return fmt.Errorf("error adding prerouting mangle chain [%s], error [%s]", vip.MangleChainName, err)
+	}
 
-			for _, fixedPort := range fixedPorts {
-				var proto, port string
+	if destinationPorts != "" {
 
-				data := strings.Split(fixedPort, ":")
-				if len(data) == 0 {
-					continue
-				} else if len(data) == 1 {
-					proto = "tcp"
-					port = data[0]
-				} else {
-					proto = data[0]
-					port = data[1]
-				}
+		fixedPorts := strings.Split(destinationPorts, ",")
 
-				err = i.InsertSourceNatForDestinationPort(vipIP, podIP, port, proto)
-				if err != nil {
-					return fmt.Errorf("error adding snat rules to nat chain [%s], error [%s]", vip.MangleChainName, err)
-				}
+		for _, fixedPort := range fixedPorts {
+			var proto, port string
 
+			data := strings.Split(fixedPort, ":")
+			if len(data) == 0 {
+				continue
+			} else if len(data) == 1 {
+				proto = "tcp"
+				port = data[0]
+			} else {
+				proto = data[0]
+				port = data[1]
 			}
-		} else {
-			err = i.InsertSourceNat(vipIP, podIP)
+
+			err = i.InsertSourceNatForDestinationPort(vipIP, podIP, port, proto)
 			if err != nil {
 				return fmt.Errorf("error adding snat rules to nat chain [%s], error [%s]", vip.MangleChainName, err)
 			}
+
 		}
-		//_ = i.DumpChain(vip.MangleChainName)
-		err = vip.DeleteExistingSessions(podIP, false)
+	} else {
+		err = i.InsertSourceNat(vipIP, podIP)
 		if err != nil {
-			return err
+			return fmt.Errorf("error adding snat rules to nat chain [%s], error [%s]", vip.MangleChainName, err)
 		}
+	}
+	//_ = i.DumpChain(vip.MangleChainName)
+	err = vip.DeleteExistingSessions(podIP, false)
+	if err != nil {
+		return err
 	}
 
 	return nil
