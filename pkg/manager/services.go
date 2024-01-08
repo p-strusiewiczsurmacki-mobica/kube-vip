@@ -25,7 +25,7 @@ const (
 	egress                   = "kube-vip.io/egress"
 	egressDestinationPorts   = "kube-vip.io/egress-destination-ports"
 	egressSourcePorts        = "kube-vip.io/egress-source-ports"
-	endpoint                 = "kube-vip.io/active-endpoint"
+	activeEndpoint           = "kube-vip.io/active-endpoint"
 	flushContrack            = "kube-vip.io/flush-conntrack"
 	loadbalancerIPAnnotation = "kube-vip.io/loadbalancerIPs"
 	loadbalancerHostname     = "kube-vip.io/loadbalancerHostname"
@@ -151,17 +151,17 @@ func (sm *Manager) addService(svc *v1.Service) error {
 	if svc.Annotations[egress] == "true" && len(serviceIPs) > 0 {
 		log.Debugf("Enabling egress for the service [%s]", svc.Name)
 		serviceIP := serviceIPs[0]
-		if svc.Annotations[endpoint] != "" {
+		if svc.Annotations[activeEndpoint] != "" {
 			// We will need to modify the iptables rules
 			err = sm.iptablesCheck()
 			if err != nil {
 				log.Errorf("Error configuring egress for loadbalancer [%s]", err)
 			}
-			err = sm.configureEgress(serviceIP, svc.Annotations[endpoint], svc.Annotations[egressDestinationPorts], svc.Namespace)
+			err = sm.configureEgress(serviceIP, svc.Annotations[activeEndpoint], svc.Annotations[egressDestinationPorts], svc.Namespace)
 			if err != nil {
 				log.Errorf("Error configuring egress for loadbalancer [%s]", err)
 			} else {
-				err = sm.updateServiceEndpointAnnotation(svc.Annotations[endpoint], svc)
+				err = sm.updateServiceEndpointAnnotation(svc.Annotations[activeEndpoint], svc)
 				if err != nil {
 					log.Errorf("Error configuring egress annotation for loadbalancer [%s]", err)
 				}
@@ -237,10 +237,10 @@ func (sm *Manager) deleteService(uid string) error {
 
 		// We will need to tear down the egress
 		if serviceInstance.serviceSnapshot.Annotations[egress] == "true" {
-			if serviceInstance.serviceSnapshot.Annotations[endpoint] != "" {
+			if serviceInstance.serviceSnapshot.Annotations[activeEndpoint] != "" {
 
 				log.Infof("service [%s] has an egress re-write enabled", serviceInstance.serviceSnapshot.Name)
-				err := sm.TeardownEgress(serviceInstance.serviceSnapshot.Annotations[endpoint], serviceInstance.serviceSnapshot.Spec.LoadBalancerIP, serviceInstance.serviceSnapshot.Annotations[egressDestinationPorts], serviceInstance.serviceSnapshot.Namespace)
+				err := sm.TeardownEgress(serviceInstance.serviceSnapshot.Annotations[activeEndpoint], serviceInstance.serviceSnapshot.Spec.LoadBalancerIP, serviceInstance.serviceSnapshot.Annotations[egressDestinationPorts], serviceInstance.serviceSnapshot.Namespace)
 				if err != nil {
 					log.Errorf("%v", err)
 				}
@@ -321,9 +321,9 @@ func (sm *Manager) updateStatus(i *Instance) error {
 				Ports: ports,
 			})
 		}
-		if !cmp.Equal(currentServiceCopy.Status.LoadBalancer.Ingress, ingresses) {
-			currentServiceCopy.Status.LoadBalancer.Ingress = ingresses
-			_, err = sm.clientSet.CoreV1().Services(currentServiceCopy.Namespace).UpdateStatus(context.TODO(), currentServiceCopy, metav1.UpdateOptions{})
+		if !cmp.Equal(currentService.Status.LoadBalancer.Ingress, ingresses) {
+			currentService.Status.LoadBalancer.Ingress = ingresses
+			_, err = sm.clientSet.CoreV1().Services(currentService.Namespace).UpdateStatus(context.TODO(), currentService, metav1.UpdateOptions{})
 			if err != nil {
 				log.Errorf("Error updating Service %s/%s Status: %v", i.serviceSnapshot.Namespace, i.serviceSnapshot.Name, err)
 				return err

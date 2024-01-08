@@ -71,6 +71,7 @@ func (sm *Manager) watchEndpoint(ctx context.Context, id string, service *v1.Ser
 
 		// We need to inspect the event and get ResourceVersion out of it
 		switch event.Type {
+
 		case watch.Added, watch.Modified:
 			ep, ok := event.Object.(*v1.Endpoints)
 			if !ok {
@@ -79,40 +80,7 @@ func (sm *Manager) watchEndpoint(ctx context.Context, id string, service *v1.Ser
 			}
 
 			// Build endpoints
-			var localendpoints []string
-			for subset := range ep.Subsets {
-				for address := range ep.Subsets[subset].Addresses {
-					// 1. Compare the hostname on the endpoint to the hostname
-					// 2. Compare the nodename on the endpoint to the hostname
-					// 3. Drop the FQDN to a shortname and compare to the nodename on the endpoint
-
-					// 1. Compare the Hostname first (should be FQDN)
-					if id == ep.Subsets[subset].Addresses[address].Hostname {
-						log.Debugf("[endpoint] address: %s, hostname: %s", ep.Subsets[subset].Addresses[address].IP, ep.Subsets[subset].Addresses[address].Hostname)
-						localendpoints = append(localendpoints, ep.Subsets[subset].Addresses[address].IP)
-					} else {
-						// 2. Compare the Nodename (from testing could be FQDN or short)
-						if ep.Subsets[subset].Addresses[address].NodeName != nil {
-							log.Debugf("[endpoint] address: %s, hostname: %s, node: %s", ep.Subsets[subset].Addresses[address].IP, ep.Subsets[subset].Addresses[address].Hostname, *ep.Subsets[subset].Addresses[address].NodeName)
-							if id == *ep.Subsets[subset].Addresses[address].NodeName {
-								localendpoints = append(localendpoints, ep.Subsets[subset].Addresses[address].IP)
-							} else {
-								// 3. Compare to shortname
-								shortname, err := getShortname(id)
-								if err != nil {
-									log.Errorf("[endpoint] %v", err)
-								} else {
-									log.Debugf("[endpoint] address: %s, shortname: %s, node: %s", ep.Subsets[subset].Addresses[address].IP, shortname, *ep.Subsets[subset].Addresses[address].NodeName)
-
-									if shortname == *ep.Subsets[subset].Addresses[address].NodeName {
-										localendpoints = append(localendpoints, ep.Subsets[subset].Addresses[address].IP)
-									}
-								}
-							}
-						}
-					}
-				}
-			}
+			localendpoints := getLocalEndpoints(ep, id)
 
 			// Find out if we have any local endpoints
 			// if out endpoint is empty then populate it
@@ -174,7 +142,22 @@ func (sm *Manager) watchEndpoint(ctx context.Context, id string, service *v1.Ser
 						}
 					}()
 				}
+
+				// There are local endpoints available on the node, therefore route(s) should be added to the table
+				if !sm.config.EnableServicesElection && !sm.config.EnableLeaderElection && sm.config.EnableRoutingTable {
+					if instance := sm.findServiceInstance(service); instance != nil {
+						for _, cluster := range instance.clusters {
+							cluster.Network.AddRoute()
+						}
+					}
+				}
+
 			} else {
+				// There are no local enpoints - routes should be deleted
+				if !sm.config.EnableServicesElection && !sm.config.EnableLeaderElection && sm.config.EnableRoutingTable {
+					sm.clearRoutes(service)
+				}
+
 				// If there are no local endpoints, and we had one then remove it and stop the leaderElection
 				if lastKnownGoodEndpoint != "" {
 					log.Warnf("[endpoint] existing [%s] has been removed, no remaining endpoints for leaderElection", lastKnownGoodEndpoint)
@@ -186,9 +169,23 @@ func (sm *Manager) watchEndpoint(ctx context.Context, id string, service *v1.Ser
 			log.Debugf("[endpoint watcher] local endpoint(s) [%d], known good [%s], active election [%t]", len(localendpoints), lastKnownGoodEndpoint, leaderElectionActive)
 
 		case watch.Deleted:
+			// Check if deleted endpoints were local endpoints for this node, if so, clear routes
+			if !sm.config.EnableServicesElection && !sm.config.EnableLeaderElection && sm.config.EnableRoutingTable {
+				ep, ok := event.Object.(*v1.Endpoints)
+				if !ok {
+					cancel()
+					return fmt.Errorf("unable to parse Kubernetes services from API watcher")
+				}
+				localEndpoints := getLocalEndpoints(ep, id)
+				if len(localEndpoints) > 0 {
+					sm.clearRoutes(service)
+				}
+			}
+
 			// Close the goroutine that will end the retry watcher, then exit the endpoint watcher function
 			close(exitFunction)
 			log.Infof("[endpoints] deleted stopping watching for [%s] in namespace [%s]", service.Name, service.Namespace)
+
 			return nil
 		case watch.Error:
 			errObject := apierrors.FromObject(event.Object)
@@ -199,6 +196,56 @@ func (sm *Manager) watchEndpoint(ctx context.Context, id string, service *v1.Ser
 	close(exitFunction)
 	log.Infof("[endpoints] stopping watching for [%s] in namespace [%s]", service.Name, service.Namespace)
 	return nil //nolint:govet
+}
+
+func getLocalEndpoints(ep *v1.Endpoints, id string) []string {
+	var localendpoints []string
+
+	for subset := range ep.Subsets {
+		for address := range ep.Subsets[subset].Addresses {
+			// 1. Compare the hostname on the endpoint to the hostname
+			// 2. Compare the nodename on the endpoint to the hostname
+			// 3. Drop the FQDN to a shortname and compare to the nodename on the endpoint
+
+			// 1. Compare the Hostname first (should be FQDN)
+			if id == ep.Subsets[subset].Addresses[address].Hostname {
+				log.Debugf("[endpoint] address: %s, hostname: %s", ep.Subsets[subset].Addresses[address].IP, ep.Subsets[subset].Addresses[address].Hostname)
+				localendpoints = append(localendpoints, ep.Subsets[subset].Addresses[address].IP)
+			} else {
+				// 2. Compare the Nodename (from testing could be FQDN or short)
+				if ep.Subsets[subset].Addresses[address].NodeName != nil {
+					log.Debugf("[endpoint] address: %s, hostname: %s, node: %s", ep.Subsets[subset].Addresses[address].IP, ep.Subsets[subset].Addresses[address].Hostname, *ep.Subsets[subset].Addresses[address].NodeName)
+					if id == *ep.Subsets[subset].Addresses[address].NodeName {
+						localendpoints = append(localendpoints, ep.Subsets[subset].Addresses[address].IP)
+					} else {
+						// 3. Compare to shortname
+						shortname, err := getShortname(id)
+						if err != nil {
+							log.Errorf("[endpoint] %v", err)
+						} else {
+							log.Debugf("[endpoint] address: %s, shortname: %s, node: %s", ep.Subsets[subset].Addresses[address].IP, shortname, *ep.Subsets[subset].Addresses[address].NodeName)
+
+							if shortname == *ep.Subsets[subset].Addresses[address].NodeName {
+								localendpoints = append(localendpoints, ep.Subsets[subset].Addresses[address].IP)
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+	return localendpoints
+}
+
+func (sm *Manager) clearRoutes(service *v1.Service) {
+	if instance := sm.findServiceInstance(service); instance != nil {
+		for _, cluster := range instance.clusters {
+			err := cluster.Network.DeleteRoute()
+			if err != nil && !strings.Contains(err.Error(), "no such process") {
+				log.Errorf("failed to delete route for %s: %s", cluster.Network.IP(), err.Error())
+			}
+		}
+	}
 }
 
 func (sm *Manager) updateServiceEndpointAnnotation(endpoint string, service *v1.Service) error {

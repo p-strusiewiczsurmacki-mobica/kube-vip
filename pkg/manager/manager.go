@@ -16,6 +16,7 @@ import (
 	"github.com/kube-vip/kube-vip/pkg/kubevip"
 	"github.com/prometheus/client_golang/prometheus"
 	log "github.com/sirupsen/logrus"
+	v1 "k8s.io/api/core/v1"
 	"k8s.io/client-go/kubernetes"
 )
 
@@ -215,4 +216,14 @@ func fileExists(filename string) bool {
 		return false
 	}
 	return !info.IsDir()
+}
+
+func (sm *Manager) findServiceInstance(svc *v1.Service) *Instance {
+	svcUID := string(svc.UID)
+	for i := range sm.serviceInstances {
+		if sm.serviceInstances[i].UID == svcUID {
+			return sm.serviceInstances[i]
+		}
+	}
+	return nil
 }

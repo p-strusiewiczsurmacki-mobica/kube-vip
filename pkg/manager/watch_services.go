@@ -32,6 +32,9 @@ var activeService map[string]bool
 // watchedService keeps track of services that are already being watched
 var watchedService map[string]bool
 
+// watchedService keeps track of routes that has been configured on the node
+var configuredLocalRoutes map[string]bool
+
 func init() {
 	// Set up the caches for monitoring existing active or watched services
 	activeServiceLoadBalancerCancel = make(map[string]func())
