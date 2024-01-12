@@ -6,6 +6,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/kube-vip/kube-vip/pkg/kubevip"
 	log "github.com/sirupsen/logrus"
 	v1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -80,7 +81,7 @@ func (sm *Manager) watchEndpoint(ctx context.Context, id string, service *v1.Ser
 			}
 
 			// Build endpoints
-			localendpoints := getLocalEndpoints(ep, id)
+			localendpoints := getLocalEndpoints(ep, id, sm.config)
 
 			// Find out if we have any local endpoints
 			// if out endpoint is empty then populate it
@@ -147,12 +148,14 @@ func (sm *Manager) watchEndpoint(ctx context.Context, id string, service *v1.Ser
 				if !sm.config.EnableServicesElection && !sm.config.EnableLeaderElection && sm.config.EnableRoutingTable && !configuredLocalRoutes[string(service.UID)] {
 					if instance := sm.findServiceInstance(service); instance != nil {
 						for _, cluster := range instance.clusters {
-							err := cluster.Network.AddRoute()
-							if err != nil {
-								log.Errorf("[endpoint] error adding route: %s\n", err.Error())
-							} else {
-								log.Infof("[endpoint]  added route: %s, service: %s/%s, interface: %s, table: %d",
-									cluster.Network.IP(), service.Namespace, service.Name, cluster.Network.Interface(), sm.config.RoutingTableID)
+							for i := range cluster.Network {
+								err := cluster.Network[i].AddRoute()
+								if err != nil {
+									log.Errorf("[endpoint] error adding route: %s\n", err.Error())
+								} else {
+									log.Infof("[endpoint]  added route: %s, service: %s/%s, interface: %s, table: %d",
+										cluster.Network[i].IP(), service.Namespace, service.Name, cluster.Network[i].Interface(), sm.config.RoutingTableID)
+								}
 							}
 						}
 					}
@@ -175,7 +178,8 @@ func (sm *Manager) watchEndpoint(ctx context.Context, id string, service *v1.Ser
 					leaderElectionActive = false
 				}
 			}
-			log.Debugf("[endpoint watcher] local endpoint(s) [%d], known good [%s], active election [%t]", len(localendpoints), lastKnownGoodEndpoint, leaderElectionActive)
+			log.Debugf("[endpoint watcher] service %s/%s: local endpoint(s) [%d], known good [%s], active election [%t]",
+				service.Namespace, service.Name, len(localendpoints), lastKnownGoodEndpoint, leaderElectionActive)
 
 		case watch.Deleted:
 			// Check if deleted endpoints were local endpoints for this node, if so, clear routes
@@ -185,7 +189,7 @@ func (sm *Manager) watchEndpoint(ctx context.Context, id string, service *v1.Ser
 					cancel()
 					return fmt.Errorf("unable to parse Kubernetes services from API watcher")
 				}
-				localEndpoints := getLocalEndpoints(ep, id)
+				localEndpoints := getLocalEndpoints(ep, id, sm.config)
 				if len(localEndpoints) > 0 {
 					sm.clearRoutes(service)
 				}
@@ -207,8 +211,17 @@ func (sm *Manager) watchEndpoint(ctx context.Context, id string, service *v1.Ser
 	return nil //nolint:govet
 }
 
-func getLocalEndpoints(ep *v1.Endpoints, id string) []string {
+func getLocalEndpoints(ep *v1.Endpoints, id string, config *kubevip.Config) []string {
 	var localendpoints []string
+
+	shortname, shortnameErr := getShortname(id)
+	if shortnameErr != nil {
+		if config.EnableRoutingTable && (!config.EnableLeaderElection && !config.EnableServicesElection) {
+			log.Debugf("[endpoint] %v, shortname will not be used", shortnameErr)
+		} else {
+			log.Errorf("[endpoint] %v", shortnameErr)
+		}
+	}
 
 	for subset := range ep.Subsets {
 		for address := range ep.Subsets[subset].Addresses {
@@ -217,28 +230,21 @@ func getLocalEndpoints(ep *v1.Endpoints, id string) []string {
 			// 3. Drop the FQDN to a shortname and compare to the nodename on the endpoint
 
 			// 1. Compare the Hostname first (should be FQDN)
+			log.Debugf("[endpoint] processing endpoint [%s]", ep.Subsets[subset].Addresses[address].IP)
 			if id == ep.Subsets[subset].Addresses[address].Hostname {
-				log.Debugf("[endpoint] address: %s, hostname: %s", ep.Subsets[subset].Addresses[address].IP, ep.Subsets[subset].Addresses[address].Hostname)
+				log.Debugf("[endpoint] found local endpoint - address: %s, hostname: %s", ep.Subsets[subset].Addresses[address].IP, ep.Subsets[subset].Addresses[address].Hostname)
 				localendpoints = append(localendpoints, ep.Subsets[subset].Addresses[address].IP)
 			} else {
 				// 2. Compare the Nodename (from testing could be FQDN or short)
 				if ep.Subsets[subset].Addresses[address].NodeName != nil {
-					log.Debugf("[endpoint] address: %s, hostname: %s, node: %s", ep.Subsets[subset].Addresses[address].IP, ep.Subsets[subset].Addresses[address].Hostname, *ep.Subsets[subset].Addresses[address].NodeName)
 					if id == *ep.Subsets[subset].Addresses[address].NodeName {
+						log.Debugf("[endpoint] found local endpoint - address: %s, hostname: %s, node: %s", ep.Subsets[subset].Addresses[address].IP, ep.Subsets[subset].Addresses[address].Hostname, *ep.Subsets[subset].Addresses[address].NodeName)
 						localendpoints = append(localendpoints, ep.Subsets[subset].Addresses[address].IP)
-					} else {
-						// 3. Compare to shortname
-						shortname, err := getShortname(id)
-						if err != nil {
-							log.Errorf("[endpoint] %v", err)
-						} else {
-							log.Debugf("[endpoint] address: %s, shortname: %s, node: %s", ep.Subsets[subset].Addresses[address].IP, shortname, *ep.Subsets[subset].Addresses[address].NodeName)
-
-							if shortname == *ep.Subsets[subset].Addresses[address].NodeName {
-								localendpoints = append(localendpoints, ep.Subsets[subset].Addresses[address].IP)
-							}
-						}
+					} else if shortnameErr == nil && shortname == *ep.Subsets[subset].Addresses[address].NodeName {
+						log.Debugf("[endpoint] found local endpoint -  address: %s, shortname: %s, node: %s", ep.Subsets[subset].Addresses[address].IP, shortname, *ep.Subsets[subset].Addresses[address].NodeName)
+						localendpoints = append(localendpoints, ep.Subsets[subset].Addresses[address].IP)
 					}
+
 				}
 			}
 		}
@@ -249,12 +255,14 @@ func getLocalEndpoints(ep *v1.Endpoints, id string) []string {
 func (sm *Manager) clearRoutes(service *v1.Service) {
 	if instance := sm.findServiceInstance(service); instance != nil {
 		for _, cluster := range instance.clusters {
-			err := cluster.Network.DeleteRoute()
-			if err != nil && !strings.Contains(err.Error(), "no such process") {
-				log.Errorf("failed to delete route for %s: %s", cluster.Network.IP(), err.Error())
-			} else {
-				log.Infof("deleted route: %s, service: %s/%s, interface: %s, table: %d",
-					cluster.Network.IP(), service.Namespace, service.Name, cluster.Network.Interface(), sm.config.RoutingTableID)
+			for i := range cluster.Network {
+				err := cluster.Network[i].DeleteRoute()
+				if err != nil && !strings.Contains(err.Error(), "no such process") {
+					log.Errorf("failed to delete route for %s: %s", cluster.Network[i].IP(), err.Error())
+				} else {
+					log.Infof("deleted route: %s, service: %s/%s, interface: %s, table: %d",
+						cluster.Network[i].IP(), service.Namespace, service.Name, cluster.Network[i].Interface(), sm.config.RoutingTableID)
+				}
 			}
 		}
 	}

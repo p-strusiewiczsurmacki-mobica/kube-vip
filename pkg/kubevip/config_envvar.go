@@ -193,6 +193,6 @@ const (
 	// disableServiceUpdates disables service updating
 	disableServiceUpdates = "disable_service_updates"
 
-	// enableEndpointSlices enables use of EndpointSLices instead of Endpoints
+	// enableEndpointSlices enables use of EndpointSlices instead of Endpoints
 	enableEndpointSlices = "enable_endpointslices"
 )
