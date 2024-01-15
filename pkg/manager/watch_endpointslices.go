@@ -283,7 +283,7 @@ func getLocalEndpointsFromEndpointslices(eps *discoveryv1.EndpointSlice, id stri
 							log.Debugf("[endpointslices] found endpoint - address: %s, node: %s", eps.Endpoints[i].Addresses[j], *eps.Endpoints[i].NodeName)
 						}
 						localendpoints = append(localendpoints, eps.Endpoints[i].Addresses[j])
-					// 3. Compare to shortname
+						// 3. Compare to shortname
 					} else if shortnameErr != nil && shortname == *eps.Endpoints[i].NodeName && *eps.Endpoints[i].Conditions.Serving {
 						log.Debugf("[endpointslices] found endpoint - address: %s, shortname: %s, node: %s", eps.Endpoints[i].Addresses[j], shortname, *eps.Endpoints[i].NodeName)
 						localendpoints = append(localendpoints, eps.Endpoints[i].Addresses[j])
