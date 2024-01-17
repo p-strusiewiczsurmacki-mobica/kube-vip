@@ -81,7 +81,14 @@ func (sm *Manager) watchEndpoint(ctx context.Context, id string, service *v1.Ser
 			}
 
 			// Build endpoints
-			localendpoints := getLocalEndpoints(ep, id, sm.config)
+			endpoints := []string{}
+
+			if sm.config.EnableBGP && !sm.config.EnableLeaderElection && !sm.config.EnableServicesElection &&
+				service.Spec.ExternalTrafficPolicy == v1.ServiceExternalTrafficPolicyTypeCluster {
+				endpoints = getAllEndpoints(ep)
+			} else {
+				endpoints = getLocalEndpoints(ep, id, sm.config)
+			}
 
 			// Find out if we have any local endpoints
 			// if out endpoint is empty then populate it
@@ -90,15 +97,15 @@ func (sm *Manager) watchEndpoint(ctx context.Context, id string, service *v1.Ser
 			//
 
 			// Check that we have local endpoints
-			if len(localendpoints) != 0 {
+			if len(endpoints) != 0 {
 				// if we haven't populated one, then do so
 				if lastKnownGoodEndpoint != "" {
 
 					// check out previous endpoint exists
 					stillExists := false
 
-					for x := range localendpoints {
-						if localendpoints[x] == lastKnownGoodEndpoint {
+					for x := range endpoints {
+						if endpoints[x] == lastKnownGoodEndpoint {
 							stillExists = true
 						}
 					}
@@ -108,13 +115,13 @@ func (sm *Manager) watchEndpoint(ctx context.Context, id string, service *v1.Ser
 						// Stop the existing leaderElection
 						cancel()
 						// Set our active endpoint to an existing one
-						lastKnownGoodEndpoint = localendpoints[0]
+						lastKnownGoodEndpoint = endpoints[0]
 						// disable last leaderElection flag
 						leaderElectionActive = false
 					}
 
 				} else {
-					lastKnownGoodEndpoint = localendpoints[0]
+					lastKnownGoodEndpoint = endpoints[0]
 				}
 
 				// Set the service accordingly
@@ -145,28 +152,76 @@ func (sm *Manager) watchEndpoint(ctx context.Context, id string, service *v1.Ser
 					}()
 				}
 
-				// There are local endpoints available on the node, therefore route(s) should be added to the table
-				if !sm.config.EnableServicesElection && !sm.config.EnableLeaderElection && sm.config.EnableRoutingTable && !configuredLocalRoutes[string(service.UID)] {
-					if instance := sm.findServiceInstance(service); instance != nil {
-						for _, cluster := range instance.clusters {
-							err := cluster.Network.AddRoute()
-							if err != nil {
-								log.Errorf("[endpoint] error adding route: %s\n", err.Error())
-							} else {
-								log.Infof("[endpoint] added route: %s, service: %s/%s, interface: %s, table: %d",
-									cluster.Network.IP(), service.Namespace, service.Name, cluster.Network.Interface(), sm.config.RoutingTableID)
+				// There are local endpoints available on the node
+				if !sm.config.EnableServicesElection && !sm.config.EnableLeaderElection && !configuredLocalRoutes[string(service.UID)] {
+					log.Debugf("no-leader-election mode and no configured local route")
+					// If routing table mode is enabled - routes should be added per node
+					if sm.config.EnableRoutingTable {
+						log.Debugf("no-leader-election mode for routing table")
+						if instance := sm.findServiceInstance(service); instance != nil {
+							log.Debugf("Found service instance")
+							for _, cluster := range instance.clusters {
+								err := cluster.Network.AddRoute()
+								if err != nil {
+									log.Errorf("[endpoint] error adding route: %s\n", err.Error())
+								} else {
+									log.Infof("[endpoint] added route: %s, service: %s/%s, interface: %s, table: %d",
+										cluster.Network.IP(), service.Namespace, service.Name, cluster.Network.Interface(), sm.config.RoutingTableID)
+									configuredLocalRoutes[string(service.UID)] = true
+									leaderElectionActive = true
+								}
+							}
+						}
+
+					}
+
+					// If BGP mode is enabled - hosts should be added per node
+					if sm.config.EnableBGP {
+						log.Debugf("no-leader-election mode for bgp")
+						if instance := sm.findServiceInstance(service); instance != nil {
+							log.Debugf("Found service instance")
+							for _, cluster := range instance.clusters {
+								address := fmt.Sprintf("%s/%s", cluster.Network.IP(), sm.config.VIPCIDR)
+								err := sm.bgpServer.AddHost(address)
+								if err != nil {
+									log.Errorf("[endpoint] error adding BGP host %s\n", err.Error())
+								} else {
+									log.Infof("[endpoint] added BGP host: %s, service: %s/%s",
+										address, service.Namespace, service.Name)
+									configuredLocalRoutes[string(service.UID)] = true
+									leaderElectionActive = true
+								}
 							}
 						}
 					}
-					configuredLocalRoutes[string(service.UID)] = true
-					leaderElectionActive = true
 				}
 
 			} else {
-				// There are no local enpoints - routes should be deleted
-				if !sm.config.EnableServicesElection && !sm.config.EnableLeaderElection && sm.config.EnableRoutingTable && configuredLocalRoutes[string(service.UID)] {
-					sm.clearRoutes(service)
-					configuredLocalRoutes[string(service.UID)] = false
+				// There are no local enpoints
+				if !sm.config.EnableServicesElection && !sm.config.EnableLeaderElection && configuredLocalRoutes[string(service.UID)] {
+					// If routing table mode is enabled - routes should be deleted
+					if sm.config.EnableRoutingTable {
+						sm.clearRoutes(service)
+						configuredLocalRoutes[string(service.UID)] = false
+					}
+
+					// If BGP mode is enabled - routes should be deleted
+					if sm.config.EnableBGP {
+						if instance := sm.findServiceInstance(service); instance != nil {
+							for _, cluster := range instance.clusters {
+								address := fmt.Sprintf("%s/%s", cluster.Network.IP(), sm.config.VIPCIDR)
+								err := sm.bgpServer.DelHost(address)
+								if err != nil {
+									log.Errorf("[endpoint] error deleting BGP host %s\n", err.Error())
+								} else {
+									log.Infof("[endpoint] deleted BGP host: %s, service: %s/%s",
+										address, service.Namespace, service.Name)
+									configuredLocalRoutes[string(service.UID)] = true
+									leaderElectionActive = true
+								}
+							}
+						}
+					}
 				}
 
 				// If there are no local endpoints, and we had one then remove it and stop the leaderElection
@@ -178,19 +233,30 @@ func (sm *Manager) watchEndpoint(ctx context.Context, id string, service *v1.Ser
 				}
 			}
 			log.Debugf("[endpoint watcher] service %s/%s: local endpoint(s) [%d], known good [%s], active election [%t]",
-				service.Namespace, service.Name, len(localendpoints), lastKnownGoodEndpoint, leaderElectionActive)
+				service.Namespace, service.Name, len(endpoints), lastKnownGoodEndpoint, leaderElectionActive)
 
 		case watch.Deleted:
-			// Check if deleted endpoints were local endpoints for this node, if so, clear routes
-			if !sm.config.EnableServicesElection && !sm.config.EnableLeaderElection && sm.config.EnableRoutingTable {
+			// When no-leade-elecition mode
+			if !sm.config.EnableServicesElection && !sm.config.EnableLeaderElection {
+				// find all existing local endpoints
 				ep, ok := event.Object.(*v1.Endpoints)
 				if !ok {
 					cancel()
 					return fmt.Errorf("unable to parse Kubernetes services from API watcher")
 				}
 				localEndpoints := getLocalEndpoints(ep, id, sm.config)
+
+				// If there were local endpints deleted
 				if len(localEndpoints) > 0 {
-					sm.clearRoutes(service)
+					// Delete all routes in routing table mode
+					if sm.config.EnableRoutingTable {
+						sm.clearRoutes(service)
+					}
+
+					// Delete all hosts in BGP mode
+					if sm.config.EnableBGP {
+						sm.clearBGPHosts(service)
+					}
 				}
 			}
 
@@ -208,6 +274,17 @@ func (sm *Manager) watchEndpoint(ctx context.Context, id string, service *v1.Ser
 	close(exitFunction)
 	log.Infof("[endpoints] stopping watching for [%s] in namespace [%s]", service.Name, service.Namespace)
 	return nil //nolint:govet
+}
+
+func getAllEndpoints(ep *v1.Endpoints) []string {
+	endpoints := []string{}
+	for subset := range ep.Subsets {
+		for address := range ep.Subsets[subset].Addresses {
+			addr := strings.Split(ep.Subsets[subset].Addresses[address].IP, "/")
+			endpoints = append(endpoints, addr[0])
+		}
+	}
+	return endpoints
 }
 
 func getLocalEndpoints(ep *v1.Endpoints, id string, config *kubevip.Config) []string {
@@ -260,6 +337,21 @@ func (sm *Manager) clearRoutes(service *v1.Service) {
 			} else {
 				log.Infof("deleted route: %s, service: %s/%s, interface: %s, table: %d",
 					cluster.Network.IP(), service.Namespace, service.Name, cluster.Network.Interface(), sm.config.RoutingTableID)
+			}
+		}
+	}
+}
+
+func (sm *Manager) clearBGPHosts(service *v1.Service) {
+	if instance := sm.findServiceInstance(service); instance != nil {
+		for _, cluster := range instance.clusters {
+			address := fmt.Sprintf("%s/%s", cluster.Network.IP(), sm.config.VIPCIDR)
+			err := sm.bgpServer.DelHost(address)
+			if err != nil {
+				log.Errorf("[endpoint] error deleting BGP host %s\n", err.Error())
+			} else {
+				log.Infof("[endpoint] deleted BGP host: %s, service: %s/%s",
+					address, service.Namespace, service.Name)
 			}
 		}
 	}

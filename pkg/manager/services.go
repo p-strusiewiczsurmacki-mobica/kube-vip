@@ -100,7 +100,7 @@ func (sm *Manager) addService(svc *v1.Service) error {
 	log.Infof("(svcs) adding VIP(s) [%s] for [%s/%s]", newService.VIPs, newService.serviceSnapshot.Namespace, newService.serviceSnapshot.Name)
 
 	for x := range newService.vipConfigs {
-		newService.clusters[x].StartLoadBalancerService(newService.vipConfigs[x], sm.bgpServer)
+		newService.clusters[x].StartLoadBalancerService(newService.vipConfigs[x], sm.bgpServer, svc)
 	}
 
 	sm.upnpMap(newService)
