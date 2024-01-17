@@ -1,0 +1,100 @@
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  annotations:
+    deprecated.daemonset.template.generation: "4"
+  labels:
+    app.kubernetes.io/name: kube-vip-svc
+    app.kubernetes.io/version: v0.7.0
+  name: kube-vip-svc
+  namespace: kube-system
+spec:
+  revisionHistoryLimit: 10
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: kube-vip-svc
+  template:
+    metadata:
+      creationTimestamp: null
+      labels:
+        app.kubernetes.io/name: kube-vip-svc
+        app.kubernetes.io/version: v0.7.0
+    spec:
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+            - matchExpressions:
+              - key: node-role.kubernetes.io/control-plane
+                operator: DoesNotExist
+            - matchExpressions:
+              - key: node-role.kubernetes.io/worker
+                operator: Exists
+      containers:
+      - args:
+        - manager
+        env:
+        - name: vip_loglevel
+          value: "6"
+        - name: vip_arp
+          value: "false"
+        - name: port
+          value: "6443"
+        - name: vip_cidr
+          value: "32"
+        - name: svc_enable
+          value: "true"
+        - name: svc_election
+          value: "false"
+        - name: vip_leaderelection
+          value: "false"
+        - name: vip_interface
+          value: lo
+        - name: bgp_enable
+          value: "true"
+        # - name: disable_service_updates
+        #   value: "true"
+        - name: bgp_hold_time
+          value: "3"
+        - name: bgp_keepalive_interval
+          value: "1"
+        - name: bgp_sourceip
+          valueFrom:
+            fieldRef:
+              apiVersion: v1
+              fieldPath: status.hostIP
+        - name: bgp_routerid
+          valueFrom:
+            fieldRef:
+              apiVersion: v1
+              fieldPath: status.hostIP
+        - name: bgp_as
+          value: "1"
+        - name: bgp_peers
+          value: 192.168.1.8:0::false
+        - name: prometheus_server
+          value: :2112
+        image: plndr/kube-vip:v5
+        imagePullPolicy: Never
+        name: kube-vip
+        resources: {}
+        securityContext:
+          capabilities:
+            add:
+            - NET_ADMIN
+            - NET_RAW
+        terminationMessagePath: /dev/termination-log
+        terminationMessagePolicy: File
+      dnsPolicy: ClusterFirst
+      hostNetwork: true
+      restartPolicy: Always
+      schedulerName: default-scheduler
+      securityContext: {}
+      serviceAccount: kube-vip
+      serviceAccountName: kube-vip
+      terminationGracePeriodSeconds: 30
+  updateStrategy:
+    rollingUpdate:
+      maxSurge: 0
+      maxUnavailable: 1
+    type: RollingUpdate

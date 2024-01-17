@@ -1,7 +1,6 @@
 package bgp
 
 import (
-	"context"
 	"fmt"
 	"net"
 	"strconv"
@@ -10,6 +9,7 @@ import (
 	"github.com/golang/protobuf/ptypes" //nolint
 	"github.com/golang/protobuf/ptypes/any"
 	api "github.com/osrg/gobgp/v3/api"
+	logrus "github.com/sirupsen/logrus"
 )
 
 // AddPeer will add peers to the BGP configuration
@@ -50,9 +50,13 @@ func (b *Server) AddPeer(peer Peer) (err error) {
 		p.Transport.BindInterface = b.c.SourceIF
 	}
 
-	return b.s.AddPeer(context.Background(), &api.AddPeerRequest{
-		Peer: p,
-	})
+	logrus.Infof("[BGP] Added peer: %s", p.String())
+
+	return nil
+
+	// return b.s.AddPeer(context.Background(), &api.AddPeerRequest{
+	// 	Peer: p,
+	// })
 }
 
 func (b *Server) getPath(ip net.IP) (path *api.Path) {

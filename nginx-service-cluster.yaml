@@ -1,0 +1,20 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: nginx-service
+  annotations:
+    kube-vip.io/loadbalancerIPs: 182.168.100.2
+    # kube-vip.io/egress: "true"
+      #kube-vip.io/ignore: "true"
+
+spec:
+  type: LoadBalancer
+  selector:
+    app: nginx
+  ports:
+    - protocol: TCP
+      port: 80
+      targetPort: 9376
+  ipFamilyPolicy: SingleStack
+  ipFamilies: ["IPv4"]
+  externalTrafficPolicy: Cluster
