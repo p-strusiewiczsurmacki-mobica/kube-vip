@@ -15,7 +15,6 @@ import (
 	"github.com/kube-vip/kube-vip/pkg/vip"
 	"github.com/packethost/packngo"
 	log "github.com/sirupsen/logrus"
-	v1 "k8s.io/api/core/v1"
 )
 
 func (cluster *Cluster) vipService(ctxArp, ctxDNS context.Context, c *kubevip.Config, sm *Manager, bgpServer *bgp.Server, packetClient *packngo.Client) error {
@@ -143,7 +142,7 @@ func (cluster *Cluster) vipService(ctxArp, ctxDNS context.Context, c *kubevip.Co
 }
 
 // StartLoadBalancerService will start a VIP instance and leave it for kube-proxy to handle
-func (cluster *Cluster) StartLoadBalancerService(c *kubevip.Config, bgp *bgp.Server, service *v1.Service) {
+func (cluster *Cluster) StartLoadBalancerService(c *kubevip.Config, bgp *bgp.Server) {
 	// use a Go context so we can tell the arp loop code when we
 	// want to step down
 	//nolint

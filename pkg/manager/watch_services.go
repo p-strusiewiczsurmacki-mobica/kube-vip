@@ -192,7 +192,7 @@ func (sm *Manager) servicesWatcher(ctx context.Context, serviceFunc func(context
 							// We're now watching this service
 							watchedService[string(svc.UID)] = true
 						}
-					} else if sm.config.EnableBGP {
+					} else if sm.config.EnableBGP || sm.config.EnableRoutingTable {
 						go func() {
 							if svc.Spec.ExternalTrafficPolicy == v1.ServiceExternalTrafficPolicyTypeCluster {
 								// Add Endpoint watcher

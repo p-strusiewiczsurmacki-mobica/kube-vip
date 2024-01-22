@@ -81,9 +81,8 @@ func (sm *Manager) watchEndpoint(ctx context.Context, id string, service *v1.Ser
 			}
 
 			// Build endpoints
-			endpoints := []string{}
-
-			if sm.config.EnableBGP && !sm.config.EnableLeaderElection && !sm.config.EnableServicesElection &&
+			var endpoints []string
+			if (sm.config.EnableBGP || sm.config.EnableRoutingTable) && !sm.config.EnableLeaderElection && !sm.config.EnableServicesElection &&
 				service.Spec.ExternalTrafficPolicy == v1.ServiceExternalTrafficPolicyTypeCluster {
 				endpoints = getAllEndpoints(ep)
 			} else {
@@ -216,8 +215,8 @@ func (sm *Manager) watchEndpoint(ctx context.Context, id string, service *v1.Ser
 								} else {
 									log.Infof("[endpoint] deleted BGP host: %s, service: %s/%s",
 										address, service.Namespace, service.Name)
-									configuredLocalRoutes[string(service.UID)] = true
-									leaderElectionActive = true
+									configuredLocalRoutes[string(service.UID)] = false
+									leaderElectionActive = false
 								}
 							}
 						}
