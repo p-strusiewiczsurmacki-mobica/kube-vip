@@ -153,12 +153,9 @@ func (sm *Manager) watchEndpoint(ctx context.Context, id string, service *v1.Ser
 
 				// There are local endpoints available on the node
 				if !sm.config.EnableServicesElection && !sm.config.EnableLeaderElection && !configuredLocalRoutes[string(service.UID)] {
-					log.Debugf("no-leader-election mode and no configured local route")
 					// If routing table mode is enabled - routes should be added per node
 					if sm.config.EnableRoutingTable {
-						log.Debugf("no-leader-election mode for routing table")
 						if instance := sm.findServiceInstance(service); instance != nil {
-							log.Debugf("Found service instance")
 							for _, cluster := range instance.clusters {
 								err := cluster.Network.AddRoute()
 								if err != nil {
@@ -176,9 +173,7 @@ func (sm *Manager) watchEndpoint(ctx context.Context, id string, service *v1.Ser
 
 					// If BGP mode is enabled - hosts should be added per node
 					if sm.config.EnableBGP {
-						log.Debugf("no-leader-election mode for bgp")
 						if instance := sm.findServiceInstance(service); instance != nil {
-							log.Debugf("Found service instance")
 							for _, cluster := range instance.clusters {
 								address := fmt.Sprintf("%s/%s", cluster.Network.IP(), sm.config.VIPCIDR)
 								err := sm.bgpServer.AddHost(address)
