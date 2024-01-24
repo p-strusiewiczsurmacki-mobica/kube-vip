@@ -192,7 +192,7 @@ func (sm *Manager) servicesWatcher(ctx context.Context, serviceFunc func(context
 							// We're now watching this service
 							watchedService[string(svc.UID)] = true
 						}
-					} else if sm.config.EnableBGP || sm.config.EnableRoutingTable {
+					} else if (sm.config.EnableBGP || sm.config.EnableRoutingTable) && (!sm.config.EnableLeaderElection && !sm.config.EnableServicesElection) {
 						go func() {
 							if svc.Spec.ExternalTrafficPolicy == v1.ServiceExternalTrafficPolicyTypeCluster {
 								// Add Endpoint watcher
@@ -280,6 +280,22 @@ func (sm *Manager) servicesWatcher(ctx context.Context, serviceFunc func(context
 				activeService[string(svc.UID)] = false
 				watchedService[string(svc.UID)] = false
 			}
+
+			if (sm.config.EnableBGP || sm.config.EnableRoutingTable) && sm.config.EnableLeaderElection && !sm.config.EnableServicesElection {
+				if sm.config.EnableBGP {
+					instance := sm.findServiceInstance(svc)
+					for _, vip := range instance.vipConfigs {
+						vipCidr := fmt.Sprintf("%s/%s", vip.VIP, vip.VIPCIDR)
+						err = sm.bgpServer.DelHost(vipCidr)
+						if err != nil {
+							log.Errorf("error deleting host %s: %s", vipCidr, err.Error())
+						}
+					}
+				} else {
+					sm.clearRoutes(svc)
+				}
+			}
+
 			log.Infof("(svcs) [%s/%s] has been deleted", svc.Namespace, svc.Name)
 		case watch.Bookmark:
 			// Un-used

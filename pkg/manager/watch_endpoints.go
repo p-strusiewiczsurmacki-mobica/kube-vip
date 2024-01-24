@@ -176,6 +176,7 @@ func (sm *Manager) watchEndpoint(ctx context.Context, id string, service *v1.Ser
 						if instance := sm.findServiceInstance(service); instance != nil {
 							for _, cluster := range instance.clusters {
 								address := fmt.Sprintf("%s/%s", cluster.Network.IP(), sm.config.VIPCIDR)
+								log.Debugf("Attempting to advertise BGP service")
 								err := sm.bgpServer.AddHost(address)
 								if err != nil {
 									log.Errorf("[endpoint] error adding BGP host %s\n", err.Error())
