@@ -82,114 +82,48 @@ func (sm *Manager) watchEndpointSlices(ctx context.Context, id string, service *
 			}
 
 			// Build endpoints
-			localendpoints := getLocalEndpointsFromEndpointslices(eps, id, sm.config)
-
-			// Find out if we have any local endpoints
-			// if out endpoint is empty then populate it
-			// if not, go through the endpoints and see if ours still exists
-			// If we have a local endpoint then begin the leader Election, unless it's already running
-			//
-
-			// Check that we have local endpoints
-			if len(localendpoints) != 0 {
-				// if we haven't populated one, then do so
-				if lastKnownGoodEndpoint != "" {
-
-					// check out previous endpoint exists
-					stillExists := false
-
-					for x := range localendpoints {
-						if localendpoints[x] == lastKnownGoodEndpoint {
-							stillExists = true
-						}
-					}
-					// If the last endpoint no longer exists, we cancel our leader Election
-					if !stillExists && leaderElectionActive {
-						log.Warnf("[endpointslices] existing endpoint [%s] has been removed, restarting leaderElection", lastKnownGoodEndpoint)
-						// Stop the existing leaderElection
-						cancel()
-						// Set our active endpoint to an existing one
-						lastKnownGoodEndpoint = localendpoints[0]
-						// disable last leaderElection flag
-						leaderElectionActive = false
-					}
-
-				} else {
-					lastKnownGoodEndpoint = localendpoints[0]
-				}
-
-				// Set the service accordingly
-				if service.Annotations[egress] == "true" {
-					service.Annotations[activeEndpoint] = lastKnownGoodEndpoint
-				}
-
-				if !leaderElectionActive && sm.config.EnableServicesElection {
-					go func() {
-						leaderContext, cancel = context.WithCancel(context.Background())
-
-						// This is a blocking function, that will restart (in the event of failure)
-						for {
-							// if the context isn't cancelled restart
-							if leaderContext.Err() != context.Canceled {
-								leaderElectionActive = true
-								err = sm.StartServicesLeaderElection(leaderContext, service, wg)
-								if err != nil {
-									log.Error(err)
-								}
-								leaderElectionActive = false
-							} else {
-								leaderElectionActive = false
-								break
-							}
-						}
-					}()
-				}
-
-				// There are local endpoints available on the node, therefore route(s) should be added to the table
-				if !sm.config.EnableServicesElection && !sm.config.EnableLeaderElection && sm.config.EnableRoutingTable && !configuredLocalRoutes[string(service.UID)] {
-					if instance := sm.findServiceInstance(service); instance != nil {
-						for _, cluster := range instance.clusters {
-							err := cluster.Network.AddRoute()
-							if err != nil {
-								log.Errorf("[endpointslices] error adding route: %s\n", err.Error())
-							} else {
-								log.Infof("[endpointslices] added route: %s, service: %s/%s, interface: %s, table: %d",
-									cluster.Network.IP(), service.Namespace, service.Name, cluster.Network.Interface(), sm.config.RoutingTableID)
-							}
-						}
-					}
-					configuredLocalRoutes[string(service.UID)] = true
-					leaderElectionActive = true
-				}
+			var endpoints []string
+			if (sm.config.EnableBGP || sm.config.EnableRoutingTable) && !sm.config.EnableLeaderElection && !sm.config.EnableServicesElection &&
+				service.Spec.ExternalTrafficPolicy == v1.ServiceExternalTrafficPolicyTypeCluster {
+				endpoints = getAllEndpointsFromEndpointslices(eps)
 			} else {
-				// There are no local enpoints - routes should be deleted
-				if !sm.config.EnableServicesElection && !sm.config.EnableLeaderElection && sm.config.EnableRoutingTable && configuredLocalRoutes[string(service.UID)] {
-					sm.clearRoutes(service)
-					configuredLocalRoutes[string(service.UID)] = false
-					leaderElectionActive = false
-				}
-
-				// If there are no local endpoints, and we had one then remove it and stop the leaderElection
-				if lastKnownGoodEndpoint != "" {
-					log.Warnf("[endpointslices] existing endpoint [%s] has been removed, no remaining endpoints for leaderElection", lastKnownGoodEndpoint)
-					lastKnownGoodEndpoint = "" // reset endpoint
-					cancel()                   // stop services watcher
-					leaderElectionActive = false
-				}
+				endpoints = getLocalEndpointsFromEndpointslices(eps, id, sm.config)
 			}
+
+			sm.processEndpoints(leaderContext, cancel, endpoints, &lastKnownGoodEndpoint, &leaderElectionActive, id, service, wg, "endpointslices")
+
 			log.Debugf("[endpointslices watcher] service %s/%s: local endpoint(s) [%d], known good [%s], active election [%t]",
-				service.Namespace, service.Name, len(localendpoints), lastKnownGoodEndpoint, leaderElectionActive)
+				service.Namespace, service.Name, len(endpoints), lastKnownGoodEndpoint, leaderElectionActive)
 
 		case watch.Deleted:
-			if !sm.config.EnableServicesElection && !sm.config.EnableLeaderElection && sm.config.EnableRoutingTable {
+			// When no-leade-elecition mode
+			if !sm.config.EnableServicesElection && !sm.config.EnableLeaderElection {
+				// find all existing local endpoints
 				eps, ok := event.Object.(*discoveryv1.EndpointSlice)
 				if !ok {
 					cancel()
-					return fmt.Errorf("[endpointslices] unable to parse Kubernetes services from API watcher")
+					return fmt.Errorf("unable to parse Kubernetes services from API watcher")
 				}
-				localEndpoints := getLocalEndpointsFromEndpointslices(eps, id, sm.config)
-				if len(localEndpoints) > 0 {
-					sm.clearRoutes(service)
+
+				var endpoints []string
+				if (sm.config.EnableBGP || sm.config.EnableRoutingTable) && !sm.config.EnableLeaderElection && !sm.config.EnableServicesElection &&
+					service.Spec.ExternalTrafficPolicy == v1.ServiceExternalTrafficPolicyTypeCluster {
+					endpoints = getAllEndpointsFromEndpointslices(eps)
+				} else {
+					endpoints = getLocalEndpointsFromEndpointslices(eps, id, sm.config)
+				}
+
+				// If there were local endpints deleted
+				if len(endpoints) > 0 {
+					// Delete all routes in routing table mode
+					if sm.config.EnableRoutingTable {
+						sm.clearRoutes(service)
+					}
+
+					// Delete all hosts in BGP mode
+					if sm.config.EnableBGP {
+						sm.clearBGPHosts(service)
+					}
 				}
 			}
 
@@ -214,9 +148,9 @@ func getLocalEndpointsFromEndpointslices(eps *discoveryv1.EndpointSlice, id stri
 	shortname, shortnameErr := getShortname(id)
 	if shortnameErr != nil {
 		if config.EnableRoutingTable && (!config.EnableLeaderElection && !config.EnableServicesElection) {
-			log.Debugf("[endpoint] %v, shortname will not be used", shortnameErr)
+			log.Debugf("[endpointslices] %v, shortname will not be used", shortnameErr)
 		} else {
-			log.Errorf("[endpoint] %v", shortnameErr)
+			log.Errorf("[endpointslices] %v", shortnameErr)
 		}
 	}
 
@@ -253,4 +187,12 @@ func getLocalEndpointsFromEndpointslices(eps *discoveryv1.EndpointSlice, id stri
 		}
 	}
 	return localendpoints
+}
+
+func getAllEndpointsFromEndpointslices(eps *discoveryv1.EndpointSlice) []string {
+	endpoints := []string{}
+	for _, ep := range eps.Endpoints {
+		endpoints = append(endpoints, ep.Addresses...)
+	}
+	return endpoints
 }
