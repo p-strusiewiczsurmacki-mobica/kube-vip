@@ -407,3 +407,151 @@ func getShortname(hostname string) (string, error) {
 	}
 	return "", fmt.Errorf("unable to find shortname from %s", hostname)
 }
+
+func processAdd(ctx context.Context, endpoints *[]string, lastKnownGoodEndpoint *string,
+	leaderElectionActive *bool, cancel context.CancelFunc, service *v1.Service, sm *Manager,
+	wg *sync.WaitGroup, logLabel string) {
+	// Find out if we have any local endpoints
+	// if out endpoint is empty then populate it
+	// if not, go through the endpoints and see if ours still exists
+	// If we have a local endpoint then begin the leader Election, unless it's already running
+	//
+
+	// Check that we have local endpoints
+	if len(*endpoints) != 0 {
+		// if we haven't populated one, then do so
+		if *lastKnownGoodEndpoint != "" {
+
+			// check out previous endpoint exists
+			stillExists := false
+
+			for x := range *endpoints {
+				if (*endpoints)[x] == *lastKnownGoodEndpoint {
+					stillExists = true
+				}
+			}
+			// If the last endpoint no longer exists, we cancel our leader Election
+			if !stillExists && *leaderElectionActive {
+				log.Warnf("[%s] existing [%s] has been removed, restarting leaderElection", logLabel, lastKnownGoodEndpoint)
+				// Stop the existing leaderElection
+				cancel()
+				// Set our active endpoint to an existing one
+				*lastKnownGoodEndpoint = (*endpoints)[0]
+				// disable last leaderElection flag
+				*leaderElectionActive = false
+			}
+
+		} else {
+			*lastKnownGoodEndpoint = (*endpoints)[0]
+		}
+
+		// Set the service accordingly
+		if service.Annotations[egress] == "true" {
+			service.Annotations[activeEndpoint] = *lastKnownGoodEndpoint
+		}
+
+		if !*leaderElectionActive && sm.config.EnableServicesElection {
+			go func() {
+				ctx, cancel = context.WithCancel(context.Background())
+
+				// This is a blocking function, that will restart (in the event of failure)
+				for {
+					// if the context isn't cancelled restart
+					if ctx.Err() != context.Canceled {
+						*leaderElectionActive = true
+						err := sm.StartServicesLeaderElection(ctx, service, wg)
+						if err != nil {
+							log.Error(err)
+						}
+						*leaderElectionActive = false
+					} else {
+						*leaderElectionActive = false
+						break
+					}
+				}
+			}()
+		}
+
+		// There are local endpoints available on the node
+		if !sm.config.EnableServicesElection && !sm.config.EnableLeaderElection && !configuredLocalRoutes[string(service.UID)] {
+			// If routing table mode is enabled - routes should be added per node
+			if sm.config.EnableRoutingTable {
+				if instance := sm.findServiceInstance(service); instance != nil {
+					for _, cluster := range instance.clusters {
+						for i := range cluster.Network {
+							err := cluster.Network[i].AddRoute()
+							if err != nil {
+								log.Errorf("[%s] error adding route: %s\n", logLabel, err.Error())
+							} else {
+								log.Infof("[%s]  added route: %s, service: %s/%s, interface: %s, table: %d",
+									logLabel, cluster.Network[i].IP(), service.Namespace, service.Name,
+									cluster.Network[i].Interface(), sm.config.RoutingTableID)
+								configuredLocalRoutes[string(service.UID)] = true
+								*leaderElectionActive = true
+							}
+						}
+					}
+				}
+			}
+
+			// If BGP mode is enabled - hosts should be added per node
+			if sm.config.EnableBGP {
+				if instance := sm.findServiceInstance(service); instance != nil {
+					for _, cluster := range instance.clusters {
+						for i := range cluster.Network {
+							address := fmt.Sprintf("%s/%s", cluster.Network[i].IP(), sm.config.VIPCIDR)
+							log.Debugf("[%s] Attempting to advertise BGP service: %s", logLabel, address)
+							err := sm.bgpServer.AddHost(address)
+							if err != nil {
+								log.Errorf("[%s] error adding BGP host %s\n", logLabel, err.Error())
+							} else {
+								log.Infof("[%s] added BGP host: %s, service: %s/%s", logLabel, address, service.Namespace, service.Name)
+								configuredLocalRoutes[string(service.UID)] = true
+								*leaderElectionActive = true
+							}
+						}
+					}
+				}
+			}
+		}
+	} else {
+		// There are no local enpoints
+		if !sm.config.EnableServicesElection && !sm.config.EnableLeaderElection && configuredLocalRoutes[string(service.UID)] {
+			// If routing table mode is enabled - routes should be deleted
+			if sm.config.EnableRoutingTable {
+				sm.clearRoutes(service)
+				configuredLocalRoutes[string(service.UID)] = false
+			}
+
+			// If BGP mode is enabled - routes should be deleted
+			if sm.config.EnableBGP {
+				if instance := sm.findServiceInstance(service); instance != nil {
+					for _, cluster := range instance.clusters {
+						for i := range cluster.Network {
+							address := fmt.Sprintf("%s/%s", cluster.Network[i].IP(), sm.config.VIPCIDR)
+							err := sm.bgpServer.DelHost(address)
+							if err != nil {
+								log.Errorf("[%s] error deleting BGP host %s: %s\n", logLabel, address, err.Error())
+							} else {
+								log.Infof("[%s] deleted BGP host: %s, service: %s/%s",
+									logLabel, address, service.Namespace, service.Name)
+								configuredLocalRoutes[string(service.UID)] = false
+								*leaderElectionActive = false
+							}
+						}
+					}
+				}
+			}
+		}
+
+		// If there are no local endpoints, and we had one then remove it and stop the leaderElection
+		if *lastKnownGoodEndpoint != "" {
+			log.Warnf("[%s] existing [%s] has been removed, no remaining endpoints for leaderElection", logLabel, lastKnownGoodEndpoint)
+			*lastKnownGoodEndpoint = "" // reset endpoint
+			cancel()                    // stop services watcher
+			*leaderElectionActive = false
+		}
+	}
+	log.Debugf("[%s watcher] service %s/%s: local endpoint(s) [%d], known good [%s], active election [%t]",
+		logLabel, service.Namespace, service.Name, len(*endpoints), lastKnownGoodEndpoint, leaderElectionActive)
+}
