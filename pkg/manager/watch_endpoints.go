@@ -2,9 +2,11 @@ package manager
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
+	"syscall"
 
 	"github.com/kube-vip/kube-vip/pkg/kubevip"
 	log "github.com/sirupsen/logrus"
@@ -159,9 +161,12 @@ func (sm *Manager) watchEndpoint(ctx context.Context, id string, service *v1.Ser
 								for i := range cluster.Network {
 									err := cluster.Network[i].AddRoute()
 									if err != nil {
-										log.Errorf("[endpoint] error adding route: %s\n", err.Error())
+										// If file exists error is returned by netlink continue quietly
+										if !errors.Is(err, syscall.EEXIST) {
+											log.Errorf("[endpoint] error adding route: %s", err.Error())
+										}
 									} else {
-										log.Infof("[endpoint]  added route: %s, service: %s/%s, interface: %s, table: %d",
+										log.Infof("[endpoint] added route: %s, service: %s/%s, interface: %s, table: %d",
 											cluster.Network[i].IP(), service.Namespace, service.Name, cluster.Network[i].Interface(), sm.config.RoutingTableID)
 										configuredLocalRoutes[string(service.UID)] = true
 										leaderElectionActive = true
