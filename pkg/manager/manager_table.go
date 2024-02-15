@@ -25,7 +25,9 @@ func (sm *Manager) startTableMode() error {
 	// want to step down
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	log.Infof("all routing table entries will exist in table [%d]", sm.config.RoutingTableID)
+	log.Infof("all routing table entries will exist in table [%d] with protocol [%d]", sm.config.RoutingTableID, sm.config.RoutingProtocol)
+
+	go sm.watchRoutes(ctx)
 
 	// Shutdown function that will wait on this signal, unless we call it ourselves
 	go func() {
