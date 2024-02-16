@@ -154,9 +154,8 @@ func GetRoutes(table, protocol int) ([]netlink.Route, error) {
 	}
 	routes, err := netlink.RouteListFiltered(nl.FAMILY_ALL, route, netlink.RT_FILTER_PROTOCOL|netlink.RT_FILTER_TABLE)
 	if err != nil {
-		return nil, fmt.Errorf("error getting routes from table[%d] with protocol [%d]: %w", table, protocol, err)
+		return nil, fmt.Errorf("error getting routes from table [%d] with protocol [%d]: %w", table, protocol, err)
 	}
-	log.Debugf("found %d routes", len(routes))
 	return routes, nil
 }
 
