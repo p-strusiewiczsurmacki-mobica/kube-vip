@@ -27,7 +27,12 @@ func (sm *Manager) startTableMode() error {
 	defer cancel()
 	log.Infof("all routing table entries will exist in table [%d] with protocol [%d]", sm.config.RoutingTableID, sm.config.RoutingProtocol)
 
-	go sm.watchRoutes(ctx)
+	go func() {
+		time.Sleep(defaultSleepDuration)
+		sm.checkRoutes()
+	}()
+
+	log.Infof("started route watcher")
 
 	// Shutdown function that will wait on this signal, unless we call it ourselves
 	go func() {

@@ -146,16 +146,17 @@ func NewConfig(address string, iface string, subnet string, isDDNS bool, tableID
 	return networks, nil
 }
 
-// GetAllRoutes returns all routes from selected table with selected protocol
-func GetAllRoutes(table, protocol int) ([]netlink.Route, error) {
+// GetRoutes returns all routes from selected table with selected protocol
+func GetRoutes(table, protocol int) ([]netlink.Route, error) {
 	route := &netlink.Route{
 		Table:    table,
 		Protocol: netlink.RouteProtocol(protocol),
 	}
-	routes, err := netlink.RouteListFiltered(nl.FAMILY_ALL, route, netlink.RT_FILTER_PROTOCOL&netlink.RT_FILTER_TABLE)
+	routes, err := netlink.RouteListFiltered(nl.FAMILY_ALL, route, netlink.RT_FILTER_PROTOCOL|netlink.RT_FILTER_TABLE)
 	if err != nil {
 		return nil, fmt.Errorf("error getting routes from table[%d] with protocol [%d]: %w", table, protocol, err)
 	}
+	log.Debugf("found %d routes", len(routes))
 	return routes, nil
 }
 

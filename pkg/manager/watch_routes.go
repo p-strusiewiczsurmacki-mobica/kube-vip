@@ -10,26 +10,31 @@ import (
 	"github.com/vishvananda/netlink"
 )
 
+const defaultSleepDuration = time.Second * 10
+
 func (sm *Manager) watchRoutes(ctx context.Context) {
+	log.Debugf("[routes] started watcher")
 	for {
+		time.Sleep(defaultSleepDuration)
 		select {
 		case <-ctx.Done():
+			log.Debugf("[routes] context cancelled")
 			return
 		default:
 			err := sm.checkRoutes()
 			if err != nil {
-				log.Warn("[routes] issue while watching routes: %w", err)
+				log.Warnf("[routes] issue while watching routes: %v", err)
 			}
-			time.Sleep(time.Second * 10)
 		}
 	}
 }
 
 func (sm *Manager) checkRoutes() error {
-	routes, err := vip.GetAllRoutes(sm.config.RoutingTableID, sm.config.RoutingProtocol)
+	routes, err := vip.GetRoutes(sm.config.RoutingTableID, sm.config.RoutingProtocol)
 	if err != nil {
-		return fmt.Errorf("error while checking routes: %w", err)
+		return fmt.Errorf("error getting routes: %w", err)
 	}
+
 	for i := range routes {
 		found := false
 		for _, instance := range sm.serviceInstances {
@@ -48,6 +53,7 @@ func (sm *Manager) checkRoutes() error {
 				return fmt.Errorf("error deleting route [%s], table [%d], protocol [%d]: %w",
 					routes[i].Dst.String(), sm.config.RoutingTableID, sm.config.RoutingProtocol, err)
 			}
+			log.Debugf("[route] deleted route: %v", routes[i])
 		}
 	}
 	return nil
