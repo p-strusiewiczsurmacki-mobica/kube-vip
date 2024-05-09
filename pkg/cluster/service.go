@@ -2,12 +2,15 @@ package cluster
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"os/signal"
 	"syscall"
 	"time"
 
+	"github.com/kube-vip/kube-vip/pkg/backend"
 	"github.com/kube-vip/kube-vip/pkg/bgp"
 	"github.com/kube-vip/kube-vip/pkg/equinixmetal"
 	"github.com/kube-vip/kube-vip/pkg/kubevip"
@@ -31,7 +34,6 @@ func (cluster *Cluster) vipService(ctxArp, ctxDNS context.Context, c *kubevip.Co
 	signal.Notify(signalChan, syscall.SIGTERM)
 
 	for i := range cluster.Network {
-
 		if cluster.Network[i].IsDDNS() {
 			if err := cluster.StartDDNS(ctxDNS); err != nil {
 				log.Error(err)
@@ -45,9 +47,11 @@ func (cluster *Cluster) vipService(ctxArp, ctxDNS context.Context, c *kubevip.Co
 			ipUpdater.Run(ctxDNS)
 		}
 
-		err = cluster.Network[i].AddIP()
-		if err != nil {
-			log.Fatalf("%v", err)
+		if !c.EnableRoutingTable {
+			err = cluster.Network[i].AddIP()
+			if err != nil {
+				log.Fatalf("%v", err)
+			}
 		}
 
 		if c.EnableMetal {
@@ -74,7 +78,6 @@ func (cluster *Cluster) vipService(ctxArp, ctxDNS context.Context, c *kubevip.Co
 		}
 
 		if c.EnableLoadBalancer {
-
 			log.Infof("Starting IPVS LoadBalancer")
 
 			lb, err := loadbalancer.NewIPVSLB(cluster.Network[i].IP(), c.LoadBalancerPort, c.LoadBalancerForwardingMethod, c.BackendHealthCheckInterval)
@@ -101,8 +104,7 @@ func (cluster *Cluster) vipService(ctxArp, ctxDNS context.Context, c *kubevip.Co
 
 		if c.EnableARP {
 			// ctxArp, cancelArp = context.WithCancel(context.Background())
-
-			go func(ctx context.Context) {
+			go func(ctx context.Context, i int) {
 				ipString := cluster.Network[i].IP()
 				isIPv6 := vip.IsIPv6(ipString)
 
@@ -127,15 +129,65 @@ func (cluster *Cluster) vipService(ctxArp, ctxDNS context.Context, c *kubevip.Co
 					}
 					time.Sleep(3 * time.Second)
 				}
-			}(ctxArp)
+			}(ctxArp, i)
 		}
+	}
 
-		if c.EnableRoutingTable {
-			err = cluster.Network[i].AddRoute()
-			if err != nil {
-				log.Warnf("%v", err)
+	if c.EnableRoutingTable {
+		backendMap := backend.Map{}
+		// only check localhost
+		entry := backend.Entry{Addr: "127.0.0.1", Port: c.Port}
+		backendMap[entry] = false
+
+		stop := make(chan struct{})
+
+		// will wait for system interrupt and will send stop signal to backend watch
+		go func() {
+			<-signalChan
+			stop <- struct{}{}
+		}()
+
+		backend.Watch(func() {
+			for backend := range backendMap {
+				if backend.Check() {
+					for i := range cluster.Network {
+						err = cluster.Network[i].AddIP()
+						if err != nil {
+							log.Fatalf("error adding IP: %v", err)
+						}
+						if !backendMap[backend] {
+							log.Infof("added IP: %s", cluster.Network[i].IP())
+						}
+
+						err = cluster.Network[i].AddRoute()
+						if err != nil && !errors.Is(err, fs.ErrExist) && !errors.Is(err, syscall.ESRCH) {
+							log.Warnf("%v", err)
+						} else if err == nil && !backendMap[backend] {
+							log.Infof("added route: %s", cluster.Network[i].PrepareRoute().String())
+						}
+					}
+					backendMap[backend] = true
+				} else {
+					for i := range cluster.Network {
+						err = cluster.Network[i].DeleteRoute()
+						if err != nil && !errors.Is(err, fs.ErrNotExist) && !errors.Is(err, syscall.ESRCH) {
+							log.Warnf("%v", err)
+						} else if err == nil && backendMap[backend] {
+							log.Infof("deleted route: %s", cluster.Network[i].PrepareRoute().String())
+						}
+
+						err = cluster.Network[i].DeleteIP()
+						if err != nil {
+							log.Fatalf("error deleting IP: %v", err)
+						}
+						if backendMap[backend] {
+							log.Infof("deleted IP: %s", cluster.Network[i].IP())
+						}
+					}
+					backendMap[backend] = false
+				}
 			}
-		}
+		}, c.BackendHealthCheckInterval, stop)
 	}
 
 	return nil
