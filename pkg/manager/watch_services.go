@@ -119,15 +119,17 @@ func (sm *Manager) servicesWatcher(ctx context.Context, serviceFunc func(context
 				break
 			}
 
+			svcLbClass := ""
 			// Check the loadBalancer class
 			if svc.Spec.LoadBalancerClass != nil {
+				svcLbClass = *svc.Spec.LoadBalancerClass
 				// if this isn't nil then it has been configured, check if it the kube-vip loadBalancer class
-				if *svc.Spec.LoadBalancerClass != sm.config.LoadBalancerClassName {
-					log.Infof("(svcs) [%s] specified the loadBalancer class [%s], ignoring", svc.Name, *svc.Spec.LoadBalancerClass)
+				if svcLbClass != sm.config.LoadBalancerClassName {
+					log.Infof("(svcs) [%s] specified the loadBalancer class [%s], ignoring", svc.Name, svcLbClass)
 					break
 				}
-			} else if sm.config.LoadBalancerClassOnly {
-				// if kube-vip is configured to only recognize services with kube-vip's lb class, then ignore the services without any lb class
+			} else if sm.config.LoadBalancerClassOnly && sm.config.LoadBalancerClassName != svcLbClass {
+				// if kube-vip is configured to only recognize services with kube-vip's lb class, then ignore any service that have different lb class than the one configured in kube-vip
 				log.Infof("(svcs) kube-vip configured to only recognize services with kube-vip's lb class but the service [%s] didn't specify any loadBalancer class, ignoring", svc.Name)
 				break
 			}

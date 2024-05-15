@@ -39,7 +39,7 @@ type Config struct {
 	// EnableNodeLabeling, will enable node labeling as it becomes leader
 	EnableNodeLabeling bool `yaml:"enableNodeLabeling"`
 
-	// LoadBalancerClassOnly, will enable load balancing only for services with LoadBalancerClass set to "kube-vip.io/kube-vip-class"
+	// LoadBalancerClassOnly, will enable load balancing only for services with provided LoadBalancerClass
 	LoadBalancerClassOnly bool `yaml:"lbClassOnly"`
 
 	// LoadBalancerClassName, will limit the load balancing services to services with LoadBalancerClass set to this value
