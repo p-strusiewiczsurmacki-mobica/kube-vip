@@ -112,29 +112,35 @@ func (sm *Manager) servicesWatcher(ctx context.Context, serviceFunc func(context
 				break
 			}
 
-			svcAddresses := fetchServiceAddresses(svc)
-
-			// We only care about LoadBalancer services that have been allocated an address
-			if len(svcAddresses) <= 0 {
+			// Check if we ignore this service
+			if svc.Annotations["kube-vip.io/ignore"] == "true" {
+				log.Infof("(svcs) [%s] has an ignore annotation for kube-vip", svc.Name)
 				break
 			}
 
 			// Check the loadBalancer class
 			if svc.Spec.LoadBalancerClass != nil {
+				log.Infof("(svcs) [%s] specified the loadBalancer class [%s]", svc.Name, *svc.Spec.LoadBalancerClass)
 				// if this isn't nil then it has been configured, check if it the kube-vip loadBalancer class
 				if *svc.Spec.LoadBalancerClass != sm.config.LoadBalancerClassName {
 					log.Infof("(svcs) [%s] specified the loadBalancer class [%s], ignoring", svc.Name, *svc.Spec.LoadBalancerClass)
 					break
 				}
-			} else if sm.config.LoadBalancerClassOnly {
-				// if kube-vip is configured to only recognize services with kube-vip's lb class, then ignore the services without any lb class
-				log.Infof("(svcs) kube-vip configured to only recognize services with kube-vip's lb class but the service [%s] didn't specify any loadBalancer class, ignoring", svc.Name)
-				break
+			} else {
+				log.Infof("(svcs) [%s] specified nil loadBalancer", svc.Name)
+				if sm.config.LoadBalancerClassOnly {
+					// if kube-vip is configured to only recognize services with kube-vip's lb class, then ignore the services without any lb class
+					log.Infof("(svcs) kube-vip configured to only recognize services with kube-vip's lb class but the service [%s] didn't specify any loadBalancer class, ignoring", svc.Name)
+					break
+				}
 			}
 
-			// Check if we ignore this service
-			if svc.Annotations["kube-vip.io/ignore"] == "true" {
-				log.Infof("(svcs) [%s] has an ignore annotation for kube-vip", svc.Name)
+			log.Infof("(svcs) [%s] processing]", svc.Name)
+
+			svcAddresses := fetchServiceAddresses(svc)
+
+			// We only care about LoadBalancer services that have been allocated an address
+			if len(svcAddresses) <= 0 {
 				break
 			}
 
