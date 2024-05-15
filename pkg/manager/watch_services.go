@@ -125,7 +125,7 @@ func (sm *Manager) servicesWatcher(ctx context.Context, serviceFunc func(context
 
 			// Check the loadBalancer class
 			if sm.config.LoadBalancerClassOnly && svcLbClass != sm.config.LoadBalancerClassName {
-				log.Infof("(svcs) [%s] specified the loadBalancer class [%s], ignoring", svc.Name, svcLbClass)
+				log.Infof("(svcs) [%s] specified the loadBalancer class [%s], but kube-vip is configured to reconcile only loadbalancers with class [%s], ignoring", svc.Name, svcLbClass, sm.config.LoadBalancerClassName)
 				break
 			}
 
