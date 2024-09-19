@@ -31,14 +31,14 @@ func (e *Entry) Check() bool {
 			log.Infof("could not create k8s clientset from external file: %q: %v", adminConfigPath, err)
 			return false
 		}
-		log.Debugf("Using external Kubernetes configuration from %q.", adminConfigPath)
+		log.Debugf("using external Kubernetes configuration from %q.", adminConfigPath)
 	default:
 		client, err = k8s.NewClientset("", true, fmt.Sprintf("%s:%v", e.Addr, e.Port))
 		if err != nil {
 			log.Infof("could not create k8s clientset %v", err)
 			return false
 		}
-		log.Debug("Using external Kubernetes configuration from incluster config.")
+		log.Debug("using external Kubernetes configuration from incluster config.")
 	}
 
 	_, err = client.DiscoveryClient.ServerVersion()
