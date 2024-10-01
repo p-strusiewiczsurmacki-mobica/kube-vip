@@ -171,8 +171,6 @@ func (cluster *Cluster) vipService(ctxArp, ctxDNS context.Context, c *kubevip.Co
 			log.Infof("no IP address found for node - will fallback to use localhost address: %v", ips)
 		}
 
-		log.Debugf("will use IPs: %v", ips)
-
 		for _, ip := range ips {
 			entry := backend.Entry{Addr: ip, Port: c.Port}
 			ipv6, err := isV6(ip)
@@ -218,7 +216,7 @@ func (cluster *Cluster) vipService(ctxArp, ctxDNS context.Context, c *kubevip.Co
 							log.Infof("added IP: %s", cluster.Network[i].IP())
 						}
 
-						err = cluster.Network[i].AddIP(true)
+						err = cluster.Network[i].AddRoute(true)
 						if err != nil && !errors.Is(err, fs.ErrExist) && !errors.Is(err, syscall.ESRCH) {
 							log.Warnf("%v", err)
 						} else if err == nil && !(*backendMap)[entry] {
