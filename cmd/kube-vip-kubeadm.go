@@ -55,7 +55,16 @@ var kubeKubeadmInit = &cobra.Command{
 
 		// Ensure there is an address to generate the CIDR from
 		if initConfig.VIPCIDR == "" && initConfig.Address != "" {
-			initConfig.VIPCIDR, err = GenerateCidrRange(initConfig.Address)
+			initConfig.VIPCIDR, err = initConfig.GenerateMasks(initConfig.VIPCIDR, "")
+			if err != nil {
+				log.Fatalln(err)
+			}
+		}
+
+		if initConfig.VIPSubnet == "" {
+			initConfig.VIPSubnet = kubevip.ConvertCIDRsToSubnets(initConfig.VIPCIDR)
+		} else {
+			initConfig.VIPSubnet, err = initConfig.GenerateMasks(initConfig.VIPSubnet, "/")
 			if err != nil {
 				log.Fatalln(err)
 			}
@@ -97,7 +106,16 @@ var kubeKubeadmJoin = &cobra.Command{
 
 		// Ensure there is an address to generate the CIDR from
 		if initConfig.VIPCIDR == "" && initConfig.Address != "" {
-			initConfig.VIPCIDR, err = GenerateCidrRange(initConfig.Address)
+			initConfig.VIPCIDR, err = initConfig.GenerateMasks(initConfig.VIPCIDR, "")
+			if err != nil {
+				log.Fatalln(err)
+			}
+		}
+
+		if initConfig.VIPSubnet == "" {
+			initConfig.VIPSubnet = kubevip.ConvertCIDRsToSubnets(initConfig.VIPCIDR)
+		} else {
+			initConfig.VIPSubnet, err = initConfig.GenerateMasks(initConfig.VIPSubnet, "/")
 			if err != nil {
 				log.Fatalln(err)
 			}

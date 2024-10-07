@@ -1,7 +1,14 @@
 package kubevip
 
 import (
+	"fmt"
+	"net"
+	"strconv"
+	"strings"
+
 	"github.com/kube-vip/kube-vip/pkg/bgp"
+	"github.com/kube-vip/kube-vip/pkg/vip"
+	"github.com/vishvananda/netlink"
 )
 
 // Config defines all of the settings for the Kube-Vip Pod
@@ -247,4 +254,80 @@ type Port struct {
 
 	// Listening frontend port of this LoadBalancer instance
 	Port int `yaml:"port"`
+}
+
+func (c *Config) GenerateMasks(subnets, prefix string) (string, error) {
+	defIPv4Subnet := prefix + "32"
+	defIPv6Subnet := prefix + "128"
+
+	addresses := vip.Split(c.Address)
+	mask := vip.Split(subnets)
+
+	if len(mask) > 0 && (len(addresses) != len(mask)) {
+		return "", fmt.Errorf("number of specified vip_cidrs has to be equal to the number of specified vip_address")
+	}
+
+	if len(mask) == 0 {
+		mask = make([]string, len(addresses))
+	}
+
+	if c.EnableARP && c.Interface != "" {
+		link, err := netlink.LinkByName(c.Interface)
+		if err != nil {
+			return "", fmt.Errorf("failed to get interface %s: %w", c.Interface, err)
+		}
+
+		if strings.Contains(c.VIPCIDR, "auto") {
+			addrv4, err := netlink.AddrList(link, netlink.FAMILY_V4)
+			if err != nil {
+				return "", fmt.Errorf("failed to get IPv4 addresses for interface %s: %w", c.Interface, err)
+			}
+
+			addrv6, err := netlink.AddrList(link, netlink.FAMILY_V6)
+			if err != nil {
+				return "", fmt.Errorf("failed to get IPv6 addresses for interface %s: %w", c.Interface, err)
+			}
+
+			defIPv4Subnet = getDefaultSubnet(addrv4, "127.0.0.1", defIPv4Subnet, prefix)
+			defIPv6Subnet = getDefaultSubnet(addrv6, "::1", defIPv6Subnet, prefix)
+		}
+	}
+
+	for i := range addresses {
+		ip := net.ParseIP(addresses[i])
+
+		if ip == nil {
+			return "", fmt.Errorf("invalid IP address: %s from [%s]", addresses[i], address)
+		}
+
+		if mask[i] == "" || mask[i] == "auto" {
+			if ip.To4() != nil {
+				mask[i] = defIPv4Subnet
+			} else {
+				mask[i] = defIPv6Subnet
+			}
+		}
+	}
+
+	return strings.Join(mask, ","), nil
+}
+
+func getDefaultSubnet(addr []netlink.Addr, toExxclude, defaultSubnet, prefix string) string {
+	for _, a := range addr {
+		if !a.IP.Equal(net.ParseIP(toExxclude)) {
+			m, _ := a.Mask.Size()
+			return prefix + strconv.Itoa(m)
+		}
+	}
+	return defaultSubnet
+}
+
+// ConvertCIDRsToSubnets adds "/" character to each element of provided string
+func ConvertCIDRsToSubnets(cidrs string) string {
+	subnets := []string{}
+	c := strings.Split(cidrs, ",")
+	for _, val := range c {
+		subnets = append(subnets, "/"+val)
+	}
+	return strings.Join(subnets, ",")
 }

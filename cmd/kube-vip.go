@@ -3,7 +3,6 @@ package cmd
 import (
 	"context"
 	"fmt"
-	"net"
 	"net/http"
 	"os"
 	"strings"
@@ -211,7 +210,16 @@ var kubeVipService = &cobra.Command{
 
 		// Ensure there is an address to generate the CIDR from
 		if initConfig.VIPCIDR == "" && initConfig.Address != "" {
-			initConfig.VIPCIDR, err = GenerateCidrRange(initConfig.Address)
+			initConfig.VIPCIDR, err = initConfig.GenerateMasks(initConfig.VIPCIDR, "")
+			if err != nil {
+				log.Fatalln(err)
+			}
+		}
+
+		if initConfig.VIPSubnet == "" {
+			initConfig.VIPSubnet = kubevip.ConvertCIDRsToSubnets(initConfig.VIPCIDR)
+		} else {
+			initConfig.VIPSubnet, err = initConfig.GenerateMasks(initConfig.VIPSubnet, "/")
 			if err != nil {
 				log.Fatalln(err)
 			}
@@ -239,14 +247,6 @@ var kubeVipManager = &cobra.Command{
 		err := kubevip.ParseEnvironment(&initConfig)
 		if err != nil {
 			log.Fatalln(err)
-		}
-
-		// Ensure there is an address to generate the CIDR from
-		if initConfig.VIPCIDR == "" && initConfig.Address != "" {
-			initConfig.VIPCIDR, err = GenerateCidrRange(initConfig.Address)
-			if err != nil {
-				log.Fatalln(err)
-			}
 		}
 
 		// Set the logging level for all subsequent functions
@@ -335,9 +335,26 @@ var kubeVipManager = &cobra.Command{
 				}()
 			}
 		}
-		// Perform a check on th state of the interface
+		// Perform a check on the state of the interface
 		if err := initConfig.CheckInterface(); err != nil {
 			log.Fatalln(err)
+		}
+
+		// Ensure there is an address to generate the CIDR from
+		if initConfig.VIPCIDR == "" && initConfig.Address != "" {
+			initConfig.VIPCIDR, err = initConfig.GenerateMasks(initConfig.VIPCIDR, "")
+			if err != nil {
+				log.Fatalln(err)
+			}
+		}
+
+		if initConfig.VIPSubnet == "" {
+			initConfig.VIPSubnet = kubevip.ConvertCIDRsToSubnets(initConfig.VIPCIDR)
+		} else {
+			initConfig.VIPSubnet, err = initConfig.GenerateMasks(initConfig.VIPSubnet, "/")
+			if err != nil {
+				log.Fatalln(err)
+			}
 		}
 
 		// User Environment variables as an option to make manifest clearer
@@ -424,25 +441,4 @@ func servePrometheusHTTPServer(ctx context.Context, config PrometheusHTTPServerC
 	if err == http.ErrServerClosed {
 		err = nil
 	}
-}
-
-func GenerateCidrRange(address string) (string, error) {
-	var cidrs []string
-
-	addresses := strings.Split(address, ",")
-	for _, a := range addresses {
-		ip := net.ParseIP(a)
-
-		if ip == nil {
-			return "", fmt.Errorf("invalid IP address: %s from [%s]", a, address)
-		}
-
-		if ip.To4() != nil {
-			cidrs = append(cidrs, "32")
-		} else {
-			cidrs = append(cidrs, "128")
-		}
-	}
-
-	return strings.Join(cidrs, ","), nil
 }

@@ -195,11 +195,13 @@ func GenerateMac() (mac string) {
 	return mac
 }
 
-func GetIPs(vip string) []string {
-	addresses := []string{}
-	vips := strings.Split(vip, ",")
-	for _, v := range vips {
-		addresses = append(addresses, strings.TrimSpace(v))
+func Split(data string) []string {
+	result := []string{}
+	values := strings.Split(data, ",")
+	for _, v := range values {
+		if v != "" {
+			result = append(result, strings.TrimSpace(v))
+		}
 	}
-	return addresses
+	return result
 }
