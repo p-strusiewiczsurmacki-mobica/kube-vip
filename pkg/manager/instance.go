@@ -52,7 +52,7 @@ func NewInstance(svc *v1.Service, config *kubevip.Config) (*Instance, error) {
 		// Detect if we're using a specific interface for services
 		var svcInterface string
 		svcInterface = svc.Annotations[serviceInterface] // If the service has a specific interface defined, then use it
-		if svcInterface == "auto" {
+		if svcInterface == kubevip.Autodetection {
 			link, err := autoFindInterface(address)
 			if err != nil {
 				log.Errorf("failed to automatically discover network interface for annotated IP address [%s] with error: %s", address, err.Error())
@@ -70,7 +70,7 @@ func NewInstance(svc *v1.Service, config *kubevip.Config) (*Instance, error) {
 		// If it is still blank then use the
 		if svcInterface == "" {
 			switch config.ServicesInterface {
-			case "auto":
+			case kubevip.Autodetection:
 				link, err := autoFindInterface(address)
 				if err != nil {
 					log.Errorf("failed to automatically discover network interface for IP address [%s] with error: %s - defaulting to: %s", address, err.Error(), config.Interface)

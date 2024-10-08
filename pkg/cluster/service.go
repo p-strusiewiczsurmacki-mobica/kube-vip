@@ -216,11 +216,11 @@ func (cluster *Cluster) vipService(ctxArp, ctxDNS context.Context, c *kubevip.Co
 							log.Infof("added IP: %s", cluster.Network[i].IP())
 						}
 
-						err = cluster.Network[i].AddRoute(true)
+						addedRoute, err := cluster.Network[i].AddRoute(true)
 						if err != nil && !errors.Is(err, fs.ErrExist) && !errors.Is(err, syscall.ESRCH) {
 							log.Warnf("%v", err)
 						} else if err == nil && !(*backendMap)[entry] {
-							log.Infof("added route: %s", cluster.Network[i].PrepareRoute().String())
+							log.Infof("added route: %s", addedRoute.String())
 						}
 
 						(*backendMap)[entry] = true
@@ -242,7 +242,12 @@ func (cluster *Cluster) vipService(ctxArp, ctxDNS context.Context, c *kubevip.Co
 					if err != nil && !errors.Is(err, fs.ErrNotExist) && !errors.Is(err, syscall.ESRCH) {
 						log.Warnf("error while deleting route: %v", err)
 					} else if err == nil {
-						log.Infof("deleted route: %s", cluster.Network[i].PrepareRoute().String())
+						r, err := cluster.Network[i].PrepareRoute()
+						if err != nil {
+							log.Warnf("failed to prepare route: %s", err.Error())
+						} else {
+							log.Infof("deleted route: %s", r.String())
+						}
 					}
 
 					isSet, err := cluster.Network[i].IsSet()
@@ -304,10 +309,11 @@ func (cluster *Cluster) StartLoadBalancerService(c *kubevip.Config, bgp *bgp.Ser
 			log.Warnf("Attempted to clean existing VIP => %v", err)
 		}
 		if c.EnableRoutingTable && (c.EnableLeaderElection || c.EnableServicesElection) {
-			err = network.AddRoute(false)
+			addedRoute, err := network.AddRoute(false)
 			if err != nil {
 				log.Warnf("%v", err)
 			}
+			log.Debugf("added route: %v", addedRoute)
 		} else if !c.EnableRoutingTable {
 			err = network.AddIP(false)
 			if err != nil {

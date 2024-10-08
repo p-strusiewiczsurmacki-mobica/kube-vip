@@ -161,7 +161,10 @@ func (sm *Manager) cleanRoutes() error {
 			for _, instance := range sm.serviceInstances {
 				for _, cluster := range instance.clusters {
 					for n := range cluster.Network {
-						r := cluster.Network[n].PrepareRoute()
+						r, err := cluster.Network[n].PrepareRoute()
+						if err != nil {
+							return fmt.Errorf("failed to prepare route: %w", err)
+						}
 						if r.Dst.String() == routes[i].Dst.String() {
 							found = true
 						}
@@ -187,7 +190,11 @@ func (sm *Manager) countRouteReferences(route *netlink.Route) int {
 	for _, instance := range sm.serviceInstances {
 		for _, cluster := range instance.clusters {
 			for n := range cluster.Network {
-				r := cluster.Network[n].PrepareRoute()
+				r, err := cluster.Network[n].PrepareRoute()
+				if err != nil {
+					log.Warnf("failed to prepare route: %s", err.Error())
+					continue
+				}
 				if r.Dst.String() == route.Dst.String() {
 					cnt++
 				}

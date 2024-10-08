@@ -293,7 +293,7 @@ func (sm *Manager) watchEndpoint(ctx context.Context, id string, service *v1.Ser
 						if instance := sm.findServiceInstance(service); instance != nil {
 							for _, cluster := range instance.clusters {
 								for i := range cluster.Network {
-									err := cluster.Network[i].AddRoute(false)
+									addedRoute, err := cluster.Network[i].AddRoute(false)
 									if err != nil {
 										if errors.Is(err, syscall.EEXIST) {
 											// If route exists try to update it if necessary
@@ -302,7 +302,7 @@ func (sm *Manager) watchEndpoint(ctx context.Context, id string, service *v1.Ser
 												return fmt.Errorf("[%s] error updating existing routes: %w", provider.getLabel(), err)
 											}
 											if isUpdated {
-												log.Debugf("[%s] updated route: %s", provider.getLabel(), cluster.Network[i].IP())
+												log.Debugf("[%s] updated route: %s", provider.getLabel(), addedRoute.String())
 											}
 										} else {
 											// If other error occurs, return error
@@ -310,7 +310,7 @@ func (sm *Manager) watchEndpoint(ctx context.Context, id string, service *v1.Ser
 										}
 									} else {
 										log.Infof("[%s] added route: %s, service: %s/%s, interface: %s, table: %d",
-											provider.getLabel(), cluster.Network[i].IP(), service.Namespace, service.Name, cluster.Network[i].Interface(), sm.config.RoutingTableID)
+											provider.getLabel(), addedRoute.String(), service.Namespace, service.Name, cluster.Network[i].Interface(), sm.config.RoutingTableID)
 										configuredLocalRoutes.Store(string(service.UID), true)
 										leaderElectionActive = true
 									}
@@ -435,7 +435,11 @@ func (sm *Manager) clearRoutes(service *v1.Service) []error {
 	if instance := sm.findServiceInstance(service); instance != nil {
 		for _, cluster := range instance.clusters {
 			for i := range cluster.Network {
-				route := cluster.Network[i].PrepareRoute()
+				route, err := cluster.Network[i].PrepareRoute()
+				if err != nil {
+					errs = append(errs, err)
+					continue
+				}
 				// check if route we are about to delete is not referenced by more than one service
 				if sm.countRouteReferences(route) <= 1 {
 					err := cluster.Network[i].DeleteRoute()

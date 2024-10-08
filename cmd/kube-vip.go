@@ -216,7 +216,7 @@ var kubeVipService = &cobra.Command{
 			}
 		}
 
-		if initConfig.VIPSubnet == "" {
+		if initConfig.VIPSubnet == "" && initConfig.Address != "" {
 			initConfig.VIPSubnet = kubevip.ConvertCIDRsToSubnets(initConfig.VIPCIDR)
 		} else {
 			initConfig.VIPSubnet, err = initConfig.GenerateMasks(initConfig.VIPSubnet, "/")

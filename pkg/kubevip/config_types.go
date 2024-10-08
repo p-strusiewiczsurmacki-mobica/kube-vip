@@ -11,6 +11,8 @@ import (
 	"github.com/vishvananda/netlink"
 )
 
+const Autodetection = "auto"
+
 // Config defines all of the settings for the Kube-Vip Pod
 type Config struct {
 	// Logging, settings
@@ -257,18 +259,30 @@ type Port struct {
 }
 
 func (c *Config) GenerateMasks(subnets, prefix string) (string, error) {
+
+	if strings.Contains(subnets, Autodetection) && !c.EnableARP {
+		return "", fmt.Errorf("auto subnet detection cannot be used in mode other than ARP")
+	}
+
 	defIPv4Subnet := prefix + "32"
 	defIPv6Subnet := prefix + "128"
 
 	addresses := vip.Split(c.Address)
 	mask := vip.Split(subnets)
 
-	if len(mask) > 0 && (len(addresses) != len(mask)) {
+	if len(mask) > 1 && (len(addresses) != len(mask)) {
 		return "", fmt.Errorf("number of specified vip_cidrs has to be equal to the number of specified vip_address")
 	}
 
 	if len(mask) == 0 {
 		mask = make([]string, len(addresses))
+	}
+	if len(mask) == 1 {
+		masks := make([]string, len(addresses))
+		for i := range masks {
+			masks[i] = mask[0]
+		}
+		mask = masks
 	}
 
 	if c.EnableARP && c.Interface != "" {
@@ -277,7 +291,7 @@ func (c *Config) GenerateMasks(subnets, prefix string) (string, error) {
 			return "", fmt.Errorf("failed to get interface %s: %w", c.Interface, err)
 		}
 
-		if strings.Contains(c.VIPCIDR, "auto") {
+		if strings.Contains(c.VIPCIDR, Autodetection) {
 			addrv4, err := netlink.AddrList(link, netlink.FAMILY_V4)
 			if err != nil {
 				return "", fmt.Errorf("failed to get IPv4 addresses for interface %s: %w", c.Interface, err)
@@ -300,7 +314,7 @@ func (c *Config) GenerateMasks(subnets, prefix string) (string, error) {
 			return "", fmt.Errorf("invalid IP address: %s from [%s]", addresses[i], address)
 		}
 
-		if mask[i] == "" || mask[i] == "auto" {
+		if mask[i] == "" || strings.Contains(mask[i], Autodetection) {
 			if ip.To4() != nil {
 				mask[i] = defIPv4Subnet
 			} else {

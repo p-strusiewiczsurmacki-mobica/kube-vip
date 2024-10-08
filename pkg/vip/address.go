@@ -28,13 +28,13 @@ const (
 // Network is an interface that enable managing operations for a given IP
 type Network interface {
 	AddIP(precheck bool) error
-	AddRoute(precheck bool) error
+	AddRoute(precheck bool) (*netlink.Route, error)
 	DeleteIP() error
 	DeleteRoute() error
 	UpdateRoutes() (bool, error)
 	IsSet() (bool, error)
 	IP() string
-	PrepareRoute() *netlink.Route
+	PrepareRoute() (*netlink.Route, error)
 	SetIP(ip string) error
 	SetServicePorts(service *v1.Service)
 	Interface() string
@@ -189,42 +189,61 @@ func ListRoutesByDst(table int, dst *net.IPNet) ([]netlink.Route, error) {
 	return routes, nil
 }
 
-func (configurator *network) PrepareRoute() *netlink.Route {
+func (configurator *network) PrepareRoute() (*netlink.Route, error) {
 	routeScope := netlink.SCOPE_UNIVERSE
 	if configurator.routingTableType == unix.RTN_LOCAL {
 		routeScope = netlink.SCOPE_LINK
 	}
+
+	mask := 32
+	if IsIPv6(configurator.address.String()) {
+		mask = 128
+	}
+
+	ipNet := configurator.address.IPNet
+
+	var err error
+	if val, _ := configurator.address.IPNet.Mask.Size(); val != mask {
+		_, ipNet, err = net.ParseCIDR(configurator.address.IPNet.String())
+		if err != nil {
+			return nil, fmt.Errorf("error parsing CIDR for address %s: %w", configurator.address.IP.String(), err)
+		}
+	}
+
 	route := &netlink.Route{
 		Scope:     routeScope,
-		Dst:       configurator.address.IPNet,
+		Dst:       ipNet,
 		LinkIndex: configurator.link.Attrs().Index,
 		Table:     configurator.routeTable,
 		Type:      configurator.routingTableType,
 		Protocol:  netlink.RouteProtocol(configurator.routingProtocol),
 	}
-	return route
+
+	return route, nil
 }
 
 // AddRoute - Add an IP address to a route table
-func (configurator *network) AddRoute(precheck bool) error {
-	route := configurator.PrepareRoute()
+func (configurator *network) AddRoute(precheck bool) (*netlink.Route, error) {
+	route, err := configurator.PrepareRoute()
+	if err != nil {
+		return nil, errors.Wrap(err, "failed to prepare route")
+	}
 
 	exists := false
-	var err error
 	if precheck {
 		exists, err = configurator.routeExists(route)
 		if err != nil {
-			return errors.Wrap(err, "failed to check route")
+			return route, errors.Wrap(err, "failed to check route")
 		}
 	}
 
 	if !exists {
 		if err := netlink.RouteAdd(route); err != nil {
-			return errors.Wrap(err, "failed to add route")
+			return route, errors.Wrap(err, "failed to add route")
 		}
 	}
 
-	return nil
+	return route, nil
 }
 
 func (configurator *network) routeExists(route *netlink.Route) (bool, error) {
@@ -244,7 +263,10 @@ func (configurator *network) routeExists(route *netlink.Route) (bool, error) {
 
 // DeleteRoute - Delete an IP address from a route table
 func (configurator *network) DeleteRoute() error {
-	route := configurator.PrepareRoute()
+	route, err := configurator.PrepareRoute()
+	if err != nil {
+		return fmt.Errorf("failed to prepare route: %w", err)
+	}
 	return netlink.RouteDel(route)
 }
 
@@ -263,7 +285,10 @@ func (configurator *network) UpdateRoutes() (bool, error) {
 		return false, fmt.Errorf("error updating routes: %w", err)
 	}
 	isUpdated := false
-	r := configurator.PrepareRoute()
+	r, err := configurator.PrepareRoute()
+	if err != nil {
+		return false, fmt.Errorf("failed to rpepare route: %w", err)
+	}
 	for _, route := range *routes {
 		if route.Protocol == unix.RTPROT_BOOT &&
 			(route.Type == r.Type || route.Type == unix.RTN_UNICAST) &&
