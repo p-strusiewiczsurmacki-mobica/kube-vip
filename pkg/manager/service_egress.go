@@ -53,19 +53,46 @@ func getSameFamilyCidr(sourceCidrs, ip string) string { //Todo: not sure how thi
 		// Is the ip an IPv6 address
 		if vip.IsIPv6(ip) {
 			if vip.IsIPv6CIDR(cidr) {
-				return cidr
+				selectedCIDR, err := checkCIDR(ip, cidr)
+				if err != nil {
+					log.Warnf("CIDR check failed: %s", err.Error())
+					continue
+				}
+				if selectedCIDR != "" {
+					return selectedCIDR
+				}
 			}
 		} else {
 			if vip.IsIPv4CIDR(cidr) {
-				_, ipnetA, _ := net.ParseCIDR(cidr)
-				if ipnetA.Contains(net.ParseIP(ip)) {
-					return cidr
+				selectedCidr, err := checkCIDR(ip, cidr)
+				if err != nil {
+					log.Warnf("CIDR check failed: %s", err.Error())
+					continue
+				}
+				if selectedCidr != "" {
+					return selectedCidr
 				}
 			}
 		}
 	}
 	// return to the default behaviour of setting the CIDR to the first one (or only one)
 	return cidrs[0]
+}
+
+func checkCIDR(ip, cidr string) (string, error) {
+	_, ipnetA, err := net.ParseCIDR(cidr)
+	if err != nil {
+		return "", fmt.Errorf("failed to parse CIDR [%s]: %w", cidr, err)
+	}
+	parsedIP := net.ParseIP(ip)
+	if parsedIP == nil {
+		return "", fmt.Errorf("failed to parse IP [%s]", ip)
+	}
+	if ipnetA.Contains(parsedIP) {
+		return cidr, nil
+	}
+
+	return "", nil
 }
 
 func (sm *Manager) configureEgress(vipIP, podIP, destinationPorts, namespace string) error {
