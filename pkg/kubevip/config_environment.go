@@ -153,17 +153,6 @@ func ParseEnvironment(c *Config) error {
 		c.DDNS = b
 	}
 
-	// Set Egress configuration(s)
-	env = os.Getenv(egressPodCidr)
-	if env != "" {
-		c.EgressPodCidr = env
-	}
-
-	env = os.Getenv(egressServiceCidr)
-	if env != "" {
-		c.EgressServiceCidr = env
-	}
-
 	// Find the namespace that the control plane should use (for leaderElection lock)
 	env = os.Getenv(cpNamespace)
 	if env != "" {
@@ -345,12 +334,12 @@ func ParseEnvironment(c *Config) error {
 		}
 		if i >= 0 && i <= math.MaxInt {
 			c.RoutingTableID = int(i)
-			return nil
 		} else if i < 0 {
 			return fmt.Errorf("no support of negative [%d] in env var %q", i, vipRoutingTableID)
+		} else {
+			// +1 for the signing bit as it is 0 for positive integers
+			return fmt.Errorf("no support for int64, system natively supports [int%d]", bits.OnesCount(math.MaxInt)+1)
 		}
-		// +1 for the signing bit as it is 0 for positive integers
-		return fmt.Errorf("no support for int64, system natively supports [int%d]", bits.OnesCount(math.MaxInt)+1)
 	}
 
 	// Routing Table Type
@@ -582,6 +571,17 @@ func ParseEnvironment(c *Config) error {
 	env = os.Getenv(prometheusServer)
 	if env != "" {
 		c.PrometheusHTTPServer = env
+	}
+
+	// Set Egress configuration(s)
+	env = os.Getenv(egressPodCidr)
+	if env != "" {
+		c.EgressPodCidr = env
+	}
+
+	env = os.Getenv(egressServiceCidr)
+	if env != "" {
+		c.EgressServiceCidr = env
 	}
 
 	// if this is set then we're enabling nftables
