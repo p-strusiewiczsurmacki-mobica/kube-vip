@@ -49,9 +49,10 @@ func (sm *Manager) iptablesCheck() error {
 
 func getSameFamilyCidr(sourceCidrs, ip string) string { //Todo: not sure how this ever worked
 	cidrs := strings.Split(sourceCidrs, ",")
+	isV6 := vip.IsIPv6(ip)
 	for _, cidr := range cidrs {
 		// Is the ip an IPv6 address
-		if vip.IsIPv6(ip) {
+		if isV6 {
 			if vip.IsIPv6CIDR(cidr) {
 				selectedCIDR, err := checkCIDR(ip, cidr)
 				if err != nil {
@@ -66,7 +67,6 @@ func getSameFamilyCidr(sourceCidrs, ip string) string { //Todo: not sure how thi
 			if vip.IsIPv4CIDR(cidr) {
 				selectedCidr, err := checkCIDR(ip, cidr)
 				if err != nil {
-					log.Warnf("CIDR check failed: %s", err.Error())
 					continue
 				}
 				if selectedCidr != "" {
@@ -103,40 +103,46 @@ func (sm *Manager) configureEgress(vipIP, podIP, destinationPorts, namespace str
 		protocol = iptables.ProtocolIPv6
 	}
 
-	autoServiceCIDR, autoPodCIDR, discoverErr := sm.AutoDiscoverCIDRs()
+	var autoServiceCIDR, autoPodCIDR string
+	var discoverErr error
+	if sm.config.EgressPodCidr == "" || sm.config.EgressServiceCidr == "" {
+		autoServiceCIDR, autoPodCIDR, discoverErr = sm.AutoDiscoverCIDRs()
+	}
+
 	if discoverErr != nil {
 		log.Warn(discoverErr)
 	}
+
 	if sm.config.EgressPodCidr != "" {
 		podCidr = getSameFamilyCidr(sm.config.EgressPodCidr, podIP)
-
 	} else {
 		if discoverErr == nil {
 			podCidr = getSameFamilyCidr(autoPodCIDR, podIP)
 		}
-		if podCidr == "" {
-			// There's no default IPv6 pod CIDR, therefore we silently back off if CIDR s not specified.
-			if !vip.IsIPv4(podIP) {
-				return nil
-			}
+	}
 
-			podCidr = defaultPodCIDR
+	if podCidr == "" {
+		// There's no default IPv6 pod CIDR, therefore we silently back off if CIDR s not specified.
+		if !vip.IsIPv4(podIP) {
+			return nil
 		}
+		podCidr = defaultPodCIDR
 	}
 
 	if sm.config.EgressServiceCidr != "" {
 		serviceCidr = getSameFamilyCidr(sm.config.EgressServiceCidr, vipIP)
 	} else {
 		if discoverErr == nil {
-			serviceCidr = getSameFamilyCidr(autoServiceCIDR, podIP)
+			serviceCidr = getSameFamilyCidr(autoServiceCIDR, vipIP)
 		}
-		if serviceCidr == "" {
-			// There's no default IPv6 service CIDR, therefore we silently back off if CIDR s not specified.
-			if !vip.IsIPv4(vipIP) {
-				return nil
-			}
-			serviceCidr = defaultServiceCIDR
+	}
+
+	if serviceCidr == "" {
+		// There's no default IPv6 service CIDR, therefore we silently back off if CIDR s not specified.
+		if !vip.IsIPv4(vipIP) {
+			return nil
 		}
+		serviceCidr = defaultServiceCIDR
 	}
 
 	log.Infof("[Egress] pod CIDR [%s], service CIDR [%s] for vip [%s] / pod [%s]", podCidr, serviceCidr, vipIP, podIP)
@@ -221,24 +227,19 @@ func (sm *Manager) configureEgress(vipIP, podIP, destinationPorts, namespace str
 }
 
 func (sm *Manager) AutoDiscoverCIDRs() (serviceCIDR, podCIDR string, err error) {
-	podList, err := sm.clientSet.CoreV1().Pods("kube-system").List(context.TODO(), v1.ListOptions{})
+	log.Debugf("Trying to automatically discover Service and Pod CIDRs")
+	options := v1.ListOptions{
+		LabelSelector: "component=kube-controller-manager",
+	}
+	podList, err := sm.clientSet.CoreV1().Pods("kube-system").List(context.TODO(), options)
 	if err != nil {
-		return "", "", err
+		return "", "", fmt.Errorf("[Egress] Unable to get kube-controller-manager pod: %w", err)
 	}
-	var podName string
-	for x := range podList.Items {
-		if strings.Contains(podList.Items[x].Name, "kube-controller-manager") {
-			podName = podList.Items[x].Name
-			break
-		}
+	if len(podList.Items) < 1 {
+		return "", "", fmt.Errorf("[Egress] Unable to auto-discover the pod/service CIDRs: kube-controller-manager not found")
 	}
-	if podName == "" {
-		return "", "", fmt.Errorf("[Egress] Unable to auto-discover the pod/service CIDRs")
-	}
-	pod, err := sm.clientSet.CoreV1().Pods("kube-system").Get(context.TODO(), podName, v1.GetOptions{})
-	if err != nil {
-		return "", "", err
-	}
+
+	pod := podList.Items[0]
 	for flags := range pod.Spec.Containers[0].Command {
 		if strings.Contains(pod.Spec.Containers[0].Command[flags], "--cluster-cidr=") {
 			podCIDR = strings.ReplaceAll(pod.Spec.Containers[0].Command[flags], "--cluster-cidr=", "")

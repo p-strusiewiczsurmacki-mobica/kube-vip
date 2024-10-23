@@ -153,6 +153,17 @@ func ParseEnvironment(c *Config) error {
 		c.DDNS = b
 	}
 
+	// Set Egress configuration(s)
+	env = os.Getenv(egressPodCidr)
+	if env != "" {
+		c.EgressPodCidr = env
+	}
+
+	env = os.Getenv(egressServiceCidr)
+	if env != "" {
+		c.EgressServiceCidr = env
+	}
+
 	// Find the namespace that the control plane should use (for leaderElection lock)
 	env = os.Getenv(cpNamespace)
 	if env != "" {
@@ -571,17 +582,6 @@ func ParseEnvironment(c *Config) error {
 	env = os.Getenv(prometheusServer)
 	if env != "" {
 		c.PrometheusHTTPServer = env
-	}
-
-	// Set Egress configuration(s)
-	env = os.Getenv(egressPodCidr)
-	if env != "" {
-		c.EgressPodCidr = env
-	}
-
-	env = os.Getenv(egressServiceCidr)
-	if env != "" {
-		c.EgressServiceCidr = env
 	}
 
 	// if this is set then we're enabling nftables
