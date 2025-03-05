@@ -67,12 +67,16 @@ func (b *Server) AddPeer(peer Peer) (err error) {
 			},
 		}
 
+		fmt.Printf("BGP server: %v\n", b.c)
+
 		peer.setMpbgpOptions(b.c)
 
 		ipv4Address, ipv6Address, err := peer.findMpbgpAddresses(p, b.c)
 		if err != nil {
 			return fmt.Errorf("failed to get MP-BGP addresses: %w", err)
 		}
+
+		fmt.Println("MP-BGP Addresses", "v4", ipv4Address, "v6", ipv6Address)
 
 		mask := "128"
 		address := ipv4Address

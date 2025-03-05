@@ -49,12 +49,15 @@ func (sm *Manager) syncServices(ctx context.Context, svc *v1.Service) error {
 					(!sm.serviceInstances[x].isDHCP && len(svc.Status.LoadBalancer.Ingress) > 0 && !slices.Contains(ingressIPs, newServiceAddress)) ||
 					(len(svc.Status.LoadBalancer.Ingress) > 0 && !comparePortsAndPortStatuses(svc)) ||
 					(sm.serviceInstances[x].isDHCP && len(svc.Status.LoadBalancer.Ingress) > 0 && !slices.Contains(ingressIPs, sm.serviceInstances[x].dhcpInterfaceIP)) {
+					log.Debug("deleting service", "newServiceUID", newServiceUID)
 					if err := sm.deleteService(newServiceUID); err != nil {
 						return err
 					}
+					log.Debug("shouldBreake=true")
 					shouldBreake = true
 					break
 				}
+				log.Debug("foundInstance=true")
 				foundInstance = true
 			}
 		}
@@ -62,6 +65,7 @@ func (sm *Manager) syncServices(ctx context.Context, svc *v1.Service) error {
 
 	// This instance wasn't found, we need to add it to the manager
 	if !foundInstance && len(newServiceAddresses) > 0 {
+		log.Debug("adding service")
 		if err := sm.addService(ctx, svc); err != nil {
 			return err
 		}

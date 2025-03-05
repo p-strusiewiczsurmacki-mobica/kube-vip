@@ -167,6 +167,10 @@ func (sm *Manager) servicesWatcher(ctx context.Context, serviceFunc func(context
 							if err != nil {
 								log.Error("(svc) unable to remove", "service", svc.UID)
 							}
+							activeService[string(svc.UID)] = false
+							watchedService[string(svc.UID)] = false
+							delete(activeServiceLoadBalancer, string(svc.UID))
+							configuredLocalRoutes.Store(string(svc.UID), false)
 						}
 						// in theory this should never fail
 
@@ -205,6 +209,7 @@ func (sm *Manager) servicesWatcher(ctx context.Context, serviceFunc func(context
 									} else {
 										provider = &endpointslicesProvider{label: "endpointslices"}
 									}
+									log.Info("watchEndpoint A")
 									if err = sm.watchEndpoint(activeServiceLoadBalancer[string(svc.UID)], sm.config.NodeName, svc, provider); err != nil {
 										log.Error(err.Error())
 									}
@@ -212,6 +217,7 @@ func (sm *Manager) servicesWatcher(ctx context.Context, serviceFunc func(context
 							}()
 
 							if (sm.config.EnableRoutingTable || sm.config.EnableBGP) && (!sm.config.EnableLeaderElection && !sm.config.EnableServicesElection) {
+								log.Info("will call service func")
 								go func() {
 									err = serviceFunc(activeServiceLoadBalancer[string(svc.UID)], svc)
 									if err != nil {
@@ -232,6 +238,7 @@ func (sm *Manager) servicesWatcher(ctx context.Context, serviceFunc func(context
 								} else {
 									provider = &endpointslicesProvider{label: "endpointslices"}
 								}
+								log.Info("watchEndpoint B")
 								if err = sm.watchEndpoint(activeServiceLoadBalancer[string(svc.UID)], sm.config.NodeName, svc, provider); err != nil {
 									log.Error(err.Error())
 								}

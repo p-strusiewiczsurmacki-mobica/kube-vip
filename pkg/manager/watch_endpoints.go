@@ -223,6 +223,7 @@ func (sm *Manager) watchEndpoint(ctx context.Context, id string, service *v1.Ser
 
 			// Check that we have local endpoints
 			if len(endpoints) != 0 {
+				log.Debug("found endpoints", "number", len(endpoints))
 				// Ignore IPv4
 				if service.Annotations[egressIPv6] == "true" && net.ParseIP(endpoints[0]).To4() != nil {
 					continue
@@ -287,6 +288,7 @@ func (sm *Manager) watchEndpoint(ctx context.Context, id string, service *v1.Ser
 				if err != nil {
 					return fmt.Errorf("[%s] error while checking if route is configured: %w", provider.getLabel(), err)
 				}
+				log.Debug("isRouteConfigured", "value", isRouteConfigured)
 				// There are local endpoints available on the node
 				if !sm.config.EnableServicesElection && !sm.config.EnableLeaderElection && !isRouteConfigured {
 					// If routing table mode is enabled - routes should be added per node
@@ -322,6 +324,7 @@ func (sm *Manager) watchEndpoint(ctx context.Context, id string, service *v1.Ser
 
 					// If BGP mode is enabled - hosts should be added per node
 					if sm.config.EnableBGP {
+						log.Debug("I AM HERE")
 						if instance := sm.findServiceInstance(service); instance != nil {
 							for _, cluster := range instance.clusters {
 								for i := range cluster.Network {

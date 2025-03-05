@@ -40,6 +40,7 @@ func (p *Peer) findMpbgpAddresses(ap *api.Peer, server *Config) (string, string,
 	var ipv4Address, ipv6Address string
 	switch p.MpbgpNexthop {
 	case "fixed":
+		fmt.Println("MP-BGP fixed")
 		ap.Transport.LocalAddress = server.SourceIP
 		if p.MpbgpIPv4 == "" && p.MpbgpIPv6 == "" {
 			return "", "", fmt.Errorf("to use MP-BGP with fixed address at least one IPv4 or IPv6 address has to be provided [current - IPv4: %s, IPv6: %s]",
@@ -60,6 +61,7 @@ func (p *Peer) findMpbgpAddresses(ap *api.Peer, server *Config) (string, string,
 		ipv4Address = p.MpbgpIPv4
 		ipv6Address = p.MpbgpIPv6
 	case "auto_sourceip":
+		fmt.Println("MP-BGP auto_sourceip")
 		ap.Transport.LocalAddress = server.SourceIP
 
 		// Resolve the local interface by SourceIP
@@ -67,6 +69,8 @@ func (p *Peer) findMpbgpAddresses(ap *api.Peer, server *Config) (string, string,
 		if err != nil {
 			return "", "", fmt.Errorf("failed to get interface by IP: %v", err)
 		}
+
+		fmt.Println("MP-BGP interface", (*iface).Attrs().Name)
 
 		if vip.IsIPv4(server.SourceIP) {
 			// Get the non link-local IPv6 address on that interface
@@ -82,6 +86,7 @@ func (p *Peer) findMpbgpAddresses(ap *api.Peer, server *Config) (string, string,
 			}
 		}
 	case "auto_sourceif":
+		fmt.Println("MP-BGP auto_sourceif")
 		ap.Transport.BindInterface = server.SourceIF
 
 		iface, err := netlink.LinkByName(server.SourceIF)
