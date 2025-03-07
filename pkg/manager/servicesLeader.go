@@ -3,6 +3,7 @@ package manager
 import (
 	"context"
 	"fmt"
+	"sync"
 	"time"
 
 	log "log/slog"
@@ -12,6 +13,14 @@ import (
 	"k8s.io/client-go/tools/leaderelection"
 	"k8s.io/client-go/tools/leaderelection/resourcelock"
 )
+
+var (
+	svcLocks map[string]*sync.Mutex
+)
+
+func init() {
+	svcLocks = make(map[string]*sync.Mutex)
+}
 
 // The startServicesWatchForLeaderElection function will start a services watcher, the
 func (sm *Manager) startServicesWatchForLeaderElection(ctx context.Context) error {
@@ -53,6 +62,13 @@ func (sm *Manager) StartServicesLeaderElection(ctx context.Context, service *v1.
 	childCtx, childCancel := context.WithCancel(ctx)
 	defer childCancel()
 
+	if _, ok := svcLocks[serviceLease]; !ok {
+		svcLocks[serviceLease] = new(sync.Mutex)
+	}
+
+	svcLocks[serviceLease].Lock()
+	defer svcLocks[serviceLease].Unlock()
+
 	activeService[string(service.UID)] = true
 	// start the leader election code loop
 	leaderelection.RunOrDie(childCtx, leaderelection.LeaderElectionConfig{
@@ -64,9 +80,10 @@ func (sm *Manager) StartServicesLeaderElection(ctx context.Context, service *v1.
 		// get elected before your background loop finished, violating
 		// the stated goal of the lease.
 		ReleaseOnCancel: true,
-		LeaseDuration:   time.Duration(sm.config.LeaseDuration) * time.Second,
-		RenewDeadline:   time.Duration(sm.config.RenewDeadline) * time.Second,
-		RetryPeriod:     time.Duration(sm.config.RetryPeriod) * time.Second,
+
+		LeaseDuration: time.Duration(sm.config.LeaseDuration) * time.Second,
+		RenewDeadline: time.Duration(sm.config.RenewDeadline) * time.Second,
+		RetryPeriod:   time.Duration(sm.config.RetryPeriod) * time.Second,
 		Callbacks: leaderelection.LeaderCallbacks{
 			OnStartedLeading: func(ctx context.Context) {
 				// Mark this service as active (as we've started leading)
@@ -97,6 +114,8 @@ func (sm *Manager) StartServicesLeaderElection(ctx context.Context, service *v1.
 			},
 		},
 	})
+
 	log.Info("stopping leader election", "service", service.Name)
+
 	return nil
 }

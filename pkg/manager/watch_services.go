@@ -137,8 +137,9 @@ func (sm *Manager) servicesWatcher(ctx context.Context, serviceFunc func(context
 
 			// The modified event should only be triggered if the service has been modified (i.e. moved somewhere else)
 			if event.Type == watch.Modified {
+				log.Info("modified event")
 				for _, addr := range svcAddresses {
-					// log.Debugf("(svcs) Retreiving local addresses, to ensure that this modified address doesn't exist: %s", addr)
+					log.Debug("(svcs) Retreiving local addresses, to ensure that this modified address doesn't exist", "addr", addr)
 					f, err := vip.GarbageCollect(sm.config.Interface, addr)
 					if err != nil {
 						log.Error("(svcs) cleaning existing address error", "err", err)
@@ -154,6 +155,7 @@ func (sm *Manager) servicesWatcher(ctx context.Context, serviceFunc func(context
 					if i != nil {
 						originalService := fetchServiceAddresses(i.serviceSnapshot)
 						newService := fetchServiceAddresses(svc)
+						log.Debug("update addresses", "original", originalService, "new", newService)
 						if !reflect.DeepEqual(originalService, newService) {
 
 							// Calls the cancel function of the context

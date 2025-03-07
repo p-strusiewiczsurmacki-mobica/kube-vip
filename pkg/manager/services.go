@@ -3,6 +3,7 @@ package manager
 import (
 	"context"
 	"fmt"
+	"net"
 	"slices"
 	"strings"
 	"time"
@@ -357,6 +358,10 @@ func (sm *Manager) upnpMap(ctx context.Context, s *Instance) {
 }
 
 func (sm *Manager) updateStatus(i *Instance) error {
+	log.Info("updating status")
+	if i != nil {
+		log.Info("updating status for", "instance", *i)
+	}
 	retryErr := retry.RetryOnConflict(retry.DefaultRetry, func() error {
 		// Retrieve the latest version of Deployment before attempting update
 		// RetryOnConflict uses exponential backoff to avoid exhausting the apiserver
@@ -462,23 +467,40 @@ func fetchServiceAddresses(s *v1.Service) []string {
 			for _, ip := range ips {
 				trimmedIPs = append(trimmedIPs, strings.TrimSpace(ip))
 			}
+			fmt.Println("RETURNING Annotations", trimmedIPs)
 			return trimmedIPs
 		}
 	}
 
+	lbStatusAddresses := []string{}
 	if !annotationAvailable {
 		if len(s.Status.LoadBalancer.Ingress) > 0 {
-			addresses := []string{}
 			for _, ingress := range s.Status.LoadBalancer.Ingress {
-				addresses = append(addresses, ingress.IP)
+				lbStatusAddresses = append(lbStatusAddresses, ingress.IP)
 			}
-			return addresses
 		}
 	}
 
+	lbIP := net.ParseIP(s.Spec.LoadBalancerIP)
+	isLbIPv4 := vip.IsIPv4(s.Spec.LoadBalancerIP)
+
+	if len(lbStatusAddresses) > 0 {
+		for _, a := range lbStatusAddresses {
+			if lbStatusIP := net.ParseIP(a); lbStatusIP != nil && lbIP != nil && vip.IsIPv4(a) == isLbIPv4 && !lbIP.Equal(lbStatusIP) {
+				fmt.Println("RETURNING s.Spec.LoadBalancerIP as an update", s.Spec.LoadBalancerIP)
+				return []string{s.Spec.LoadBalancerIP}
+			}
+		}
+		fmt.Println("RETURNING lbStatusAddresses", lbStatusAddresses)
+		return lbStatusAddresses
+	}
+
 	if s.Spec.LoadBalancerIP != "" {
+		fmt.Println("RETURNING s.Spec.LoadBalancerIP", s.Spec.LoadBalancerIP)
 		return []string{s.Spec.LoadBalancerIP}
 	}
+
+	fmt.Println("RETURNING EMPTY")
 
 	return []string{}
 }

@@ -166,6 +166,8 @@ func ARPSendGratuitous(address, ifaceName string) error {
 		return fmt.Errorf("failed to parse address %s", ip)
 	}
 
+	fmt.Println("SENDING ARP", "address", address)
+
 	// This is a debug message, enable debugging to ensure that the gratuitous arp is repeating
 	m, err := gratuitousARP(ip, iface.HardwareAddr)
 	if err != nil {
