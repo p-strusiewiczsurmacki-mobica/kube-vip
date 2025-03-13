@@ -4,10 +4,13 @@ import (
 	"context"
 	"fmt"
 	log "log/slog"
+	"sync"
 
 	"github.com/kube-vip/kube-vip/pkg/bgp"
+	"github.com/kube-vip/kube-vip/pkg/egress"
 	"github.com/kube-vip/kube-vip/pkg/endpoints/providers"
 	"github.com/kube-vip/kube-vip/pkg/kubevip"
+	"github.com/kube-vip/kube-vip/pkg/instance"
 	"github.com/kube-vip/kube-vip/pkg/services"
 	v1 "k8s.io/api/core/v1"
 )
@@ -37,7 +40,7 @@ func newEndpointWorker(config *kubevip.Config, provider providers.Provider, bgpS
 type generic struct {
 	config    *kubevip.Config
 	provider  providers.Provider
-	instances *[]*services.Instance
+	instances *[]*instance.Instance
 }
 
 func newGeneric(config *kubevip.Config, provider providers.Provider, instances *[]*services.Instance) generic {
@@ -59,7 +62,7 @@ func (g *generic) clear(_ *services.Context, lastKnownGoodEndpoint *string, serv
 func (g *generic) clearEgress(lastKnownGoodEndpoint *string, service *v1.Service, cancel context.CancelFunc, leaderElectionActive *bool) {
 	if *lastKnownGoodEndpoint != "" {
 		log.Warn("existing  endpoint has been removed, no remaining endpoints for leaderElection", "provider", g.provider.GetLabel(), "endpoint", lastKnownGoodEndpoint)
-		if err := services.TeardownEgress(*lastKnownGoodEndpoint, service.Spec.LoadBalancerIP, service.Namespace, service.Annotations, g.config.EgressWithNftables); err != nil {
+		if err := egress.TeardownEgress(*lastKnownGoodEndpoint, service.Spec.LoadBalancerIP, service.Namespace, service.Annotations, g.config.EgressWithNftables); err != nil {
 			log.Error("error removing redundant egress rules", "err", err)
 		}
 

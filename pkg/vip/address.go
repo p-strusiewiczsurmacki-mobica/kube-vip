@@ -37,6 +37,7 @@ type Network interface {
 	DeleteIP() (bool, error)
 	DeleteRoute() error
 	UpdateRoutes() (bool, error)
+	IsSet() (bool, error)
 	IP() string
 	CIDR() string
 	IPisLinkLocal() bool
@@ -63,6 +64,7 @@ type network struct {
 	link           *networkinterface.Link
 	ports          []v1.ServicePort
 	serviceName    string
+	enableSecurity bool
 	ignoreSecurity bool
 
 	dnsName string
@@ -80,9 +82,18 @@ type network struct {
 	hasEndpoints bool
 }
 
+func netlinkParse(addr string) (*netlink.Addr, error) {
+	mask, err := GetFullMask(addr)
+	if err != nil {
+		return nil, err
+	}
+	return netlink.ParseAddr(addr + mask)
+}
+
 // NewConfig will attempt to provide an interface to the kernel network configuration
 func NewConfig(address string, iface string, loGlobalScope bool, subnet string, isDDNS bool, tableID int, tableType int,
-	routingProtocol int, dnsMode, forwardMethod, iptablesBackend string, ipvsEnabled bool, intfMgr *networkinterface.Manager) ([]Network, error) {
+	routingProtocol int, dnsMode, forwardMethod, iptablesBackend string,
+	ipvsEnabled, enableSecurity bool, intfMgr *networkinterface.Manager) ([]Network, error) {
 	networks := []Network{}
 
 	link, err := netlink.LinkByName(iface)
@@ -146,6 +157,8 @@ func NewConfig(address string, iface string, loGlobalScope bool, subnet string, 
 					iptablesBackend:  iptablesBackend,
 					isDDNS:           isDDNS,
 					dnsName:          address,
+					ipvsEnabled:      ipvsEnabled,
+					enableSecurity:   enableSecurity,
 				}
 
 				networks = append(networks, result)
@@ -164,6 +177,8 @@ func NewConfig(address string, iface string, loGlobalScope bool, subnet string, 
 				iptablesBackend:  iptablesBackend,
 				isDDNS:           isDDNS,
 				dnsName:          address,
+				ipvsEnabled:      ipvsEnabled,
+				enableSecurity:   enableSecurity,
 			}
 
 			// we're able to resolve store this as the initial IP
@@ -329,7 +344,7 @@ func (configurator *network) AddIP(precheck bool) (bool, error) {
 }
 
 func (configurator *network) configureIPTables() error {
-	if os.Getenv("enable_service_security") == "true" && !configurator.ignoreSecurity {
+	if configurator.enableSecurity && !configurator.ignoreSecurity {
 		if err := configurator.addIptablesRulesToLimitTrafficPorts(); err != nil {
 			return errors.Wrap(err, "could not add iptables rules to limit traffic ports")
 		}
@@ -343,6 +358,21 @@ func (configurator *network) configureIPTables() error {
 	}
 
 	return nil
+}
+
+func (configurator *network) addressExists() (bool, error) {
+	addrs, err := netlink.AddrList(configurator.link, netlink.FAMILY_ALL)
+	if err != nil {
+		return false, errors.Wrap(err, "could not list addresses")
+	}
+
+	for _, addr := range addrs {
+		if addr.Equal(*configurator.address) {
+			return true, nil
+		}
+	}
+
+	return false, nil
 }
 
 func (configurator *network) addIptablesRulesToLimitTrafficPorts() error {
@@ -488,12 +518,13 @@ func (configurator *network) DeleteIP() (bool, error) {
 		return false, nil
 	}
 
-	if err = netlink.AddrDel(configurator.link.Intf, configurator.address); err != nil {
-		return false, fmt.Errorf("could not delete IP %q from interface %q: %w", configurator.address.IPNet.String(), configurator.link.Intf.Attrs().Name, err)
+	if err = netlink.AddrDel(configurator.link, configurator.address); err != nil {
+		return errors.Wrap(err, "could not delete ip")
 	}
-	if os.Getenv("enable_service_security") == "true" && !configurator.ignoreSecurity {
+
+	if configurator.enableSecurity && !configurator.ignoreSecurity {
 		if err := configurator.removeIptablesRuleToLimitTrafficPorts(); err != nil {
-			return true, errors.Wrap(err, "could not remove iptables rules to limit traffic ports")
+			return errors.Wrap(err, "could not remove iptables rules to limit traffic ports")
 		}
 	}
 

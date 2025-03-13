@@ -9,6 +9,8 @@ import (
 
 	log "log/slog"
 
+	"github.com/kube-vip/kube-vip/pkg/egress"
+	"github.com/kube-vip/kube-vip/pkg/instance"
 	"github.com/kube-vip/kube-vip/pkg/services"
 	"github.com/vishvananda/netlink"
 	v1 "k8s.io/api/core/v1"
@@ -25,7 +27,7 @@ func newRoutingTable(generic generic) endpointWorker {
 }
 
 func (rt *RoutingTable) processInstance(ctx *services.Context, service *v1.Service, leaderElectionActive *bool) error {
-	instance := services.FindServiceInstance(service, *rt.instances)
+	instance := instance.FindServiceInstance(service, *rt.instances)
 	if instance != nil {
 		for _, cluster := range instance.Clusters {
 			for i := range cluster.Network {
@@ -86,7 +88,7 @@ func (rt *RoutingTable) getEndpoints(service *v1.Service, id string) ([]string, 
 }
 
 func (rt *RoutingTable) removeEgress(service *v1.Service, lastKnownGoodEndpoint *string) {
-	if err := services.TeardownEgress(*lastKnownGoodEndpoint, service.Spec.LoadBalancerIP,
+	if err := egress.TeardownEgress(*lastKnownGoodEndpoint, service.Spec.LoadBalancerIP,
 		service.Namespace, service.Annotations, rt.config.EgressWithNftables); err != nil {
 		log.Warn("removing redundant egress rules", "err", err)
 	}
@@ -138,7 +140,7 @@ func (rt *RoutingTable) setInstanceEndpointsStatus(service *v1.Service, endpoint
 
 func ClearRoutes(service *v1.Service, instances *[]*services.Instance) []error {
 	errs := []error{}
-	if instance := services.FindServiceInstance(service, *instances); instance != nil {
+	if instance := instance.FindServiceInstance(service, *instances); instance != nil {
 		for _, cluster := range instance.Clusters {
 			for i := range cluster.Network {
 				route := cluster.Network[i].PrepareRoute()
@@ -158,7 +160,7 @@ func ClearRoutes(service *v1.Service, instances *[]*services.Instance) []error {
 	return errs
 }
 
-func countRouteReferences(route *netlink.Route, instances *[]*services.Instance) int {
+func countRouteReferences(route *netlink.Route, instances *[]*instance.Instance) int {
 	cnt := 0
 	for _, instance := range *instances {
 		for _, cluster := range instance.Clusters {

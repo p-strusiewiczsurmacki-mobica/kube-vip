@@ -4,15 +4,18 @@ import (
 	"context"
 	"fmt"
 	"net"
+	"sync"
 
 	log "log/slog"
 
 	"github.com/kube-vip/kube-vip/pkg/bgp"
 	"github.com/kube-vip/kube-vip/pkg/endpoints/providers"
+	"github.com/kube-vip/kube-vip/pkg/instance"
 	"github.com/kube-vip/kube-vip/pkg/kubevip"
 	"github.com/kube-vip/kube-vip/pkg/services"
 	v1 "k8s.io/api/core/v1"
 	discoveryv1 "k8s.io/api/discovery/v1"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/watch"
 )
 
@@ -21,11 +24,11 @@ type Processor struct {
 	provider  providers.Provider
 	bgpServer *bgp.Server
 	worker    endpointWorker
-	instances *[]*services.Instance
+	instances *[]*instance.Instance
 }
 
 func NewEndpointProcessor(config *kubevip.Config, provider providers.Provider, bgpServer *bgp.Server,
-	instances *[]*services.Instance) *Processor {
+	instances *[]*instance.Instance) *Processor {
 	return &Processor{
 		config:    config,
 		provider:  provider,

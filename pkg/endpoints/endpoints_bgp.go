@@ -6,6 +6,7 @@ import (
 	log "log/slog"
 
 	"github.com/kube-vip/kube-vip/pkg/bgp"
+	"github.com/kube-vip/kube-vip/pkg/instance"
 	"github.com/kube-vip/kube-vip/pkg/services"
 	v1 "k8s.io/api/core/v1"
 )
@@ -23,7 +24,7 @@ func newBGP(generic generic, bgpServer *bgp.Server) endpointWorker {
 }
 
 func (b *BGP) processInstance(ctx *services.Context, service *v1.Service, leaderElectionActive *bool) error {
-	if instance := services.FindServiceInstance(service, *b.instances); instance != nil {
+	if instance := instance.FindServiceInstance(service, *b.instances); instance != nil {
 		for _, cluster := range instance.Clusters {
 			for i := range cluster.Network {
 				if !ctx.IsNetworkConfigured(cluster.Network[i].IP()) {
@@ -47,7 +48,7 @@ func (b *BGP) processInstance(ctx *services.Context, service *v1.Service, leader
 func (b *BGP) clear(ctx *services.Context, lastKnownGoodEndpoint *string, service *v1.Service, cancel context.CancelFunc, leaderElectionActive *bool) {
 	if !b.config.EnableServicesElection && !b.config.EnableLeaderElection {
 		// If BGP mode is enabled - routes should be deleted
-		if instance := services.FindServiceInstance(service, *b.instances); instance != nil {
+		if instance := instance.FindServiceInstance(service, *b.instances); instance != nil {
 			for _, cluster := range instance.Clusters {
 				for i := range cluster.Network {
 					err := b.bgpServer.DelHost(cluster.Network[i].CIDR())
@@ -95,7 +96,7 @@ func (b *BGP) deleteAction(service *v1.Service) {
 }
 
 func (b *BGP) ClearBGPHosts(service *v1.Service) {
-	if instance := services.FindServiceInstance(service, *b.instances); instance != nil {
+	if instance := instance.FindServiceInstance(service, *b.instances); instance != nil {
 		for _, cluster := range instance.Clusters {
 			for i := range cluster.Network {
 				err := b.bgpServer.DelHost(cluster.Network[i].CIDR())
