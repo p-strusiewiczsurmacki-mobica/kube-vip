@@ -150,7 +150,7 @@ func (lb *IPVSLoadBalancer) AddBackend(address string, port uint16) error {
 
 	lb.lock.Lock()
 	defer lb.lock.Unlock()
-	if _, ok := lb.backendMap[backend]; !ok {
+	if _, ok := lb.backendMap[backend]; !ok || (ok && !lb.backendMap[backend]) {
 		isHealth := backend.Check()
 		if isHealth {
 			err := lb.addBackend(address, port)
