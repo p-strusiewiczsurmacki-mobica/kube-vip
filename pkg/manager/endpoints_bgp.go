@@ -5,6 +5,7 @@ import (
 	"fmt"
 	log "log/slog"
 
+	"github.com/kube-vip/kube-vip/pkg/kubevip"
 	v1 "k8s.io/api/core/v1"
 )
 
@@ -12,10 +13,10 @@ type BGP struct {
 	Generic
 }
 
-func NewBGP(sm *Manager, provider epProvider) EndpointWorker {
+func NewBGP(config *kubevip.Config, provider EpProvider) EndpointWorker {
 	return &BGP{
 		Generic: Generic{
-			sm:       sm,
+			config:   config,
 			provider: provider,
 		},
 	}

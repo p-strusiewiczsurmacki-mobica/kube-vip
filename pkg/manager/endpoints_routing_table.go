@@ -8,6 +8,7 @@ import (
 
 	log "log/slog"
 
+	"github.com/kube-vip/kube-vip/pkg/kubevip"
 	v1 "k8s.io/api/core/v1"
 )
 
@@ -15,10 +16,10 @@ type RoutingTable struct {
 	Generic
 }
 
-func NewRoutingTable(sm *Manager, provider epProvider) EndpointWorker {
+func NewRoutingTable(config *kubevip.Config, provider EpProvider) EndpointWorker {
 	return &RoutingTable{
 		Generic: Generic{
-			sm:       sm,
+			config:   config,
 			provider: provider,
 		},
 	}
@@ -77,7 +78,7 @@ func (rt *RoutingTable) GetEndpoints(service *v1.Service, id string) ([]string, 
 }
 
 func (rt *RoutingTable) RemoveEgress(service *v1.Service, lastKnownGoodEndpoint *string) {
-	if err := rt.sm.TeardownEgress(*lastKnownGoodEndpoint, service.Spec.LoadBalancerIP,
+	if err := TeardownEgress(rt.config, *lastKnownGoodEndpoint, service.Spec.LoadBalancerIP,
 		service.Namespace, service.Annotations); err != nil {
 		log.Warn("removing redundant egress rules", "err", err)
 	}

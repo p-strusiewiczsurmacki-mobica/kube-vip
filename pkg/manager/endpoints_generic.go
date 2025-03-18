@@ -5,6 +5,7 @@ import (
 	"fmt"
 	log "log/slog"
 
+	"github.com/kube-vip/kube-vip/pkg/kubevip"
 	v1 "k8s.io/api/core/v1"
 )
 
@@ -16,22 +17,22 @@ type EndpointWorker interface {
 	Delete(service *v1.Service, id string) error
 }
 
-func NewEndpointWorker(sm *Manager, provider epProvider) EndpointWorker {
-	if sm.config.EnableRoutingTable {
-		return NewRoutingTable(sm, provider)
+func NewEndpointWorker(config *kubevip.Config, provider EpProvider) EndpointWorker {
+	if config.EnableRoutingTable {
+		return NewRoutingTable(config, provider)
 	}
-	if sm.config.EnableBGP {
-		return NewBGP(sm, provider)
+	if config.EnableBGP {
+		return NewBGP(config, provider)
 	}
 	return &Generic{
-		sm:       sm,
+		config:   config,
 		provider: provider,
 	}
 }
 
 type Generic struct {
-	sm       *Manager
-	provider epProvider
+	config   *kubevip.Config
+	provider EpProvider
 }
 
 func (g *Generic) ProcessInstance(_ context.Context, _ *v1.Service, _ *bool) error {
@@ -45,7 +46,7 @@ func (g *Generic) Clear(lastKnownGoodEndpoint *string, service *v1.Service, canc
 func (g *Generic) clearEgress(lastKnownGoodEndpoint *string, service *v1.Service, cancel context.CancelFunc, leaderElectionActive *bool) {
 	if *lastKnownGoodEndpoint != "" {
 		log.Warn("existing  endpoint has been removed, no remaining endpoints for leaderElection", "provider", g.provider.getLabel(), "endpoint", lastKnownGoodEndpoint)
-		if err := g.sm.TeardownEgress(*lastKnownGoodEndpoint, service.Spec.LoadBalancerIP, service.Namespace, service.Annotations); err != nil {
+		if err := TeardownEgress(*lastKnownGoodEndpoint, service.Spec.LoadBalancerIP, service.Namespace, service.Annotations); err != nil {
 			log.Error("error removing redundant egress rules", "err", err)
 		}
 

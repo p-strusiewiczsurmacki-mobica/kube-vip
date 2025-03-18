@@ -14,28 +14,29 @@ import (
 	"k8s.io/apimachinery/pkg/fields"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/watch"
+	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/tools/cache"
 	watchtools "k8s.io/client-go/tools/watch"
 	"k8s.io/client-go/util/retry"
 )
 
-type epProvider interface {
+type EpProvider interface {
 	createRetryWatcher(context.Context, *Manager,
 		*v1.Service) (*watchtools.RetryWatcher, error)
 	getAllEndpoints() ([]string, error)
 	getLocalEndpoints(string, *kubevip.Config) ([]string, error)
 	getLabel() string
-	updateServiceAnnotation(string, string, *v1.Service, *Manager) error
+	UpdateServiceAnnotation(string, string, *v1.Service, *kubernetes.Clientset) error
 	loadObject(runtime.Object, context.CancelFunc) error
 	getProtocol() string
 }
 
-type endpointsProvider struct {
-	label     string
+type EndpointsProvider struct {
+	Label     string
 	endpoints *v1.Endpoints
 }
 
-func (ep *endpointsProvider) createRetryWatcher(ctx context.Context, sm *Manager,
+func (ep *EndpointsProvider) createRetryWatcher(ctx context.Context, sm *Manager,
 	service *v1.Service) (*watchtools.RetryWatcher, error) {
 	opts := metav1.ListOptions{
 		FieldSelector: fields.OneTermEqualSelector("metadata.name", service.Name).String(),
@@ -54,7 +55,7 @@ func (ep *endpointsProvider) createRetryWatcher(ctx context.Context, sm *Manager
 	return rw, nil
 }
 
-func (ep *endpointsProvider) loadObject(endpoints runtime.Object, cancel context.CancelFunc) error {
+func (ep *EndpointsProvider) loadObject(endpoints runtime.Object, cancel context.CancelFunc) error {
 	eps, ok := endpoints.(*v1.Endpoints)
 	if !ok {
 		cancel()
@@ -64,7 +65,7 @@ func (ep *endpointsProvider) loadObject(endpoints runtime.Object, cancel context
 	return nil
 }
 
-func (ep *endpointsProvider) getAllEndpoints() ([]string, error) {
+func (ep *EndpointsProvider) getAllEndpoints() ([]string, error) {
 	result := []string{}
 	for subset := range ep.endpoints.Subsets {
 		for address := range ep.endpoints.Subsets[subset].Addresses {
@@ -76,22 +77,22 @@ func (ep *endpointsProvider) getAllEndpoints() ([]string, error) {
 	return result, nil
 }
 
-func (ep *endpointsProvider) getLocalEndpoints(id string, _ *kubevip.Config) ([]string, error) {
+func (ep *EndpointsProvider) getLocalEndpoints(id string, _ *kubevip.Config) ([]string, error) {
 	var localEndpoints []string
 
 	for _, subset := range ep.endpoints.Subsets {
 		for _, address := range subset.Addresses {
-			log.Debug("processing endpoint", "label", ep.label, "ip", address.IP)
+			log.Debug("processing endpoint", "label", ep.Label, "ip", address.IP)
 
 			// 1. Compare the Nodename
 			if address.NodeName != nil && id == *address.NodeName {
-				log.Debug("found local endpoint", "label", ep.label, "ip", address.IP, "hostname", address.Hostname, "nodename", *address.NodeName)
+				log.Debug("found local endpoint", "label", ep.Label, "ip", address.IP, "hostname", address.Hostname, "nodename", *address.NodeName)
 				localEndpoints = append(localEndpoints, address.IP)
 				continue
 			}
 			// 2. Compare the Hostname (only useful if address.NodeName is not available)
 			if id == address.Hostname {
-				log.Debug("found local endpoint", "label", ep.label, "ip", address.IP, "hostname", address.Hostname)
+				log.Debug("found local endpoint", "label", ep.Label, "ip", address.IP, "hostname", address.Hostname)
 				localEndpoints = append(localEndpoints, address.IP)
 				continue
 			}
@@ -100,11 +101,11 @@ func (ep *endpointsProvider) getLocalEndpoints(id string, _ *kubevip.Config) ([]
 	return localEndpoints, nil
 }
 
-func (ep *endpointsProvider) updateServiceAnnotation(endpoint string, _ string, service *v1.Service, sm *Manager) error {
+func (ep *EndpointsProvider) UpdateServiceAnnotation(endpoint string, _ string, service *v1.Service, clientSet *kubernetes.Clientset) error {
 	retryErr := retry.RetryOnConflict(retry.DefaultRetry, func() error {
 		// Retrieve the latest version of Deployment before attempting update
 		// RetryOnConflict uses exponential backoff to avoid exhausting the apiserver
-		currentService, err := sm.clientSet.CoreV1().Services(service.Namespace).Get(context.TODO(), service.Name, metav1.GetOptions{})
+		currentService, err := clientSet.CoreV1().Services(service.Namespace).Get(context.TODO(), service.Name, metav1.GetOptions{})
 		if err != nil {
 			return err
 		}
@@ -114,9 +115,9 @@ func (ep *endpointsProvider) updateServiceAnnotation(endpoint string, _ string, 
 			currentServiceCopy.Annotations = make(map[string]string)
 		}
 
-		currentServiceCopy.Annotations[activeEndpoint] = endpoint
+		currentServiceCopy.Annotations[ActiveEndpoint] = endpoint
 
-		_, err = sm.clientSet.CoreV1().Services(currentService.Namespace).Update(context.TODO(), currentServiceCopy, metav1.UpdateOptions{})
+		_, err = clientSet.CoreV1().Services(currentService.Namespace).Update(context.TODO(), currentServiceCopy, metav1.UpdateOptions{})
 		if err != nil {
 			log.Error("error updating Service Spec", "label", ep.getLabel(), "name", currentServiceCopy.Name, "err", err)
 			return err
@@ -131,15 +132,15 @@ func (ep *endpointsProvider) updateServiceAnnotation(endpoint string, _ string, 
 	return nil
 }
 
-func (ep *endpointsProvider) getLabel() string {
-	return ep.label
+func (ep *EndpointsProvider) getLabel() string {
+	return ep.Label
 }
 
-func (ep *endpointsProvider) getProtocol() string {
+func (ep *EndpointsProvider) getProtocol() string {
 	return ""
 }
 
-func (sm *Manager) watchEndpoint(ctx context.Context, id string, service *v1.Service, provider epProvider) error {
+func (sm *Manager) watchEndpoint(ctx context.Context, id string, service *v1.Service, provider EpProvider) error {
 	log.Info("watching", "provider", provider.getLabel(), "service_name", service.Name, "namespace", service.Namespace)
 	// Use a restartable watcher, as this should help in the event of etcd or timeout issues
 	leaderContext, cancel := context.WithCancel(ctx)
@@ -182,7 +183,7 @@ func (sm *Manager) watchEndpoint(ctx context.Context, id string, service *v1.Ser
 
 	ch := rw.ResultChan()
 
-	epProcessor := NewEndpointProcessor(sm, provider)
+	epProcessor := NewEndpointProcessor(sm.config, provider)
 
 	var lastKnownGoodEndpoint string
 	for event := range ch {

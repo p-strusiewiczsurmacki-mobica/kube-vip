@@ -4,23 +4,27 @@ import (
 	"context"
 	"fmt"
 	"net"
+	"strings"
 
 	log "log/slog"
 
+	"github.com/kube-vip/kube-vip/pkg/iptables"
+	"github.com/kube-vip/kube-vip/pkg/kubevip"
+	"github.com/kube-vip/kube-vip/pkg/vip"
 	v1 "k8s.io/api/core/v1"
 	discoveryv1 "k8s.io/api/discovery/v1"
 	"k8s.io/apimachinery/pkg/watch"
 )
 
 type Processor struct {
-	sm       *Manager
-	provider epProvider
+	config   *kubevip.Config
+	provider EpProvider
 	worker   EndpointWorker
 }
 
-func NewEndpointProcessor(sm *Manager, provider epProvider) *Processor {
+func NewEndpointProcessor(config *kubevip.Config, provider EpProvider) *Processor {
 	return &Processor{
-		sm:       sm,
+		config:   config,
 		provider: provider,
 	}
 }
@@ -33,7 +37,7 @@ func (p *Processor) AddModify(ctx context.Context, event watch.Event, cancel con
 		return false, fmt.Errorf("[%s] error loading k8s object: %w", p.provider.getLabel(), err)
 	}
 
-	p.worker = NewEndpointWorker(p.sm, p.provider) // TODO: this could be created on kube-vip's start
+	p.worker = NewEndpointWorker(p.config, p.provider) // TODO: this could be created on kube-vip's start
 
 	endpoints, err := p.worker.GetEndpoints(service, id)
 	if err != nil {
@@ -49,14 +53,14 @@ func (p *Processor) AddModify(ctx context.Context, event watch.Event, cancel con
 	// Check that we have local endpoints
 	if len(endpoints) != 0 {
 		// Ignore IPv4
-		if service.Annotations[egressIPv6] == "true" && net.ParseIP(endpoints[0]).To4() != nil {
+		if service.Annotations[EgressIPv6] == "true" && net.ParseIP(endpoints[0]).To4() != nil {
 			return true, nil
 		}
 
 		p.updateLastKnownGoodEndpoint(lastKnownGoodEndpoint, endpoints, service, leaderElectionActive, cancel)
 
 		// start leader election if it's enabled and not already started
-		if !*leaderElectionActive && p.sm.config.EnableServicesElection {
+		if !*leaderElectionActive && p.config.EnableServicesElection {
 			go startLeaderElection(ctx, p.sm, leaderElectionActive, service)
 		}
 
@@ -66,7 +70,7 @@ func (p *Processor) AddModify(ctx context.Context, event watch.Event, cancel con
 		}
 
 		// There are local endpoints available on the node
-		if !p.sm.config.EnableServicesElection && !p.sm.config.EnableLeaderElection && !isRouteConfigured {
+		if !p.config.EnableServicesElection && !p.config.EnableLeaderElection && !isRouteConfigured {
 			if err := p.worker.ProcessInstance(ctx, service, leaderElectionActive); err != nil {
 				return false, fmt.Errorf("failed to process non-empty instance: %w", err)
 			}
@@ -110,7 +114,7 @@ func (p *Processor) updateLastKnownGoodEndpoint(lastKnownGoodEndpoint *string, e
 	// If the last endpoint no longer exists, we cancel our leader Election, and set another endpoint as last known good
 	if !stillExists {
 		p.worker.RemoveEgress(service, lastKnownGoodEndpoint)
-		if *leaderElectionActive && (p.sm.config.EnableServicesElection || p.sm.config.EnableLeaderElection) {
+		if *leaderElectionActive && (p.config.EnableServicesElection || p.config.EnableLeaderElection) {
 			log.Warn("existing endpoint has been removed, restarting leaderElection", "provider", p.provider.getLabel(), "endpoint", lastKnownGoodEndpoint)
 			// Stop the existing leaderElection
 			cancel()
@@ -124,11 +128,11 @@ func (p *Processor) updateLastKnownGoodEndpoint(lastKnownGoodEndpoint *string, e
 
 func (p *Processor) updateAnnotations(service *v1.Service, lastKnownGoodEndpoint *string) {
 	// Set the service accordingly
-	if service.Annotations[egress] == "true" {
-		activeEndpointAnnotation := activeEndpoint
+	if service.Annotations[Egress] == "true" {
+		activeEndpointAnnotation := ActiveEndpoint
 
-		if p.sm.config.EnableEndpointSlices && p.provider.getProtocol() == string(discoveryv1.AddressTypeIPv6) {
-			activeEndpointAnnotation = activeEndpointIPv6
+		if p.config.EnableEndpointSlices && p.provider.getProtocol() == string(discoveryv1.AddressTypeIPv6) {
+			activeEndpointAnnotation = ActiveEndpointIPv6
 		}
 		service.Annotations[activeEndpointAnnotation] = *lastKnownGoodEndpoint
 	}
@@ -150,4 +154,84 @@ func startLeaderElection(ctx context.Context, sm *Manager, leaderElectionActive 
 			break
 		}
 	}
+}
+
+func TeardownEgress(config *kubevip.Config, podIP, vipIP, namespace string, annotations map[string]string) error {
+	// Look up the destination ports from the annotations on the service
+	destinationPorts := annotations[EgressDestinationPorts]
+	deniedNetworks := annotations[EgressDeniedNetworks]
+	allowedNetworks := annotations[EgressAllowedNetworks]
+
+	protocol := iptables.ProtocolIPv4
+	if vip.IsIPv6(podIP) {
+		protocol = iptables.ProtocolIPv6
+	}
+
+	i, err := vip.CreateIptablesClient(config.EgressWithNftables, namespace, protocol)
+	if err != nil {
+		return fmt.Errorf("error Creating iptables client [%s]", err)
+	}
+
+	if deniedNetworks != "" {
+		networks := strings.Split(deniedNetworks, ",")
+		for x := range networks {
+			err = i.DeleteMangleReturnForNetwork(vip.MangleChainName, networks[x])
+			if err != nil {
+				return fmt.Errorf("error deleting rules in mangle chain [%s], error [%s]", vip.MangleChainName, err)
+			}
+		}
+	}
+
+	if allowedNetworks != "" {
+		networks := strings.Split(allowedNetworks, ",")
+		for x := range networks {
+			err = i.DeleteMangleMarkingForNetwork(podIP, vip.MangleChainName, networks[x])
+			if err != nil {
+				return fmt.Errorf("error deleting rules in mangle chain [%s], error [%s]", vip.MangleChainName, err)
+			}
+		}
+	} else {
+		// Remove the marking of egress packets
+		err = i.DeleteMangleMarking(podIP, vip.MangleChainName)
+		if err != nil {
+			return fmt.Errorf("error changing iptables rules for egress [%s]", err)
+		}
+	}
+
+	// Clear up SNAT rules
+	if destinationPorts != "" {
+		fixedPorts := strings.Split(destinationPorts, ",")
+
+		for _, fixedPort := range fixedPorts {
+			var proto, port string
+
+			data := strings.Split(fixedPort, ":")
+			if len(data) == 0 {
+				continue
+			} else if len(data) == 1 {
+				proto = "tcp"
+				port = data[0]
+			} else {
+				proto = data[0]
+				port = data[1]
+			}
+
+			err = i.DeleteSourceNatForDestinationPort(podIP, vipIP, port, proto)
+			if err != nil {
+				return fmt.Errorf("error changing iptables rules for egress [%s]", err)
+			}
+
+		}
+	} else {
+		err = i.DeleteSourceNat(podIP, vipIP)
+		if err != nil {
+			return fmt.Errorf("error changing iptables rules for egress [%s]", err)
+		}
+	}
+
+	err = vip.DeleteExistingSessions(podIP, false, destinationPorts, "")
+	if err != nil {
+		return fmt.Errorf("error changing iptables rules for egress [%s]", err)
+	}
+	return nil
 }

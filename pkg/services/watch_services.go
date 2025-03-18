@@ -1,4 +1,4 @@
-package manager
+package services
 
 import (
 	"context"
@@ -46,14 +46,14 @@ func init() {
 }
 
 // This function handles the watching of a services endpoints and updates a load balancers endpoint configurations accordingly
-func (sm *Manager) servicesWatcher(ctx context.Context, serviceFunc func(context.Context, *v1.Service) error) error {
+func (c *Manager) servicesWatcher(ctx context.Context, serviceFunc func(context.Context, *v1.Service) error) error {
 	// first start port mirroring if enabled
-	if err := sm.startTrafficMirroringIfEnabled(); err != nil {
+	if err := c.startTrafficMirroringIfEnabled(); err != nil {
 		return err
 	}
 	defer func() {
 		// clean up traffic mirror related config
-		err := sm.stopTrafficMirroringIfEnabled()
+		err := c.stopTrafficMirroringIfEnabled()
 		if err != nil {
 			log.Error("Stopping traffic mirroring", "err", err)
 		}
@@ -359,7 +359,7 @@ func (sm *Manager) servicesWatcher(ctx context.Context, serviceFunc func(context
 	return nil
 }
 
-func (sm *Manager) lbClassFilterLegacy(svc *v1.Service) bool {
+func (c *Manager) lbClassFilterLegacy(svc *v1.Service) bool {
 	if svc == nil {
 		log.Info("(svcs) service is nil, ignoring")
 		return true
@@ -378,7 +378,7 @@ func (sm *Manager) lbClassFilterLegacy(svc *v1.Service) bool {
 	return false
 }
 
-func (sm *Manager) lbClassFilter(svc *v1.Service) bool {
+func (c *Manager) lbClassFilter(svc *v1.Service) bool {
 	if svc == nil {
 		log.Info("(svcs) service is nil, ignoring")
 		return true
