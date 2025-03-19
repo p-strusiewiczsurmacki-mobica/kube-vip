@@ -21,6 +21,7 @@ import (
 	"github.com/kube-vip/kube-vip/pkg/k8s"
 	"github.com/kube-vip/kube-vip/pkg/kubevip"
 	"github.com/kube-vip/kube-vip/pkg/networkinterface"
+	"github.com/kube-vip/kube-vip/pkg/services"
 	"github.com/kube-vip/kube-vip/pkg/trafficmirror"
 	"github.com/kube-vip/kube-vip/pkg/upnp"
 	"github.com/kube-vip/kube-vip/pkg/utils"
@@ -43,7 +44,7 @@ type Manager struct {
 	// service bool
 
 	// Keeps track of all running instances
-	serviceInstances []*cluster.Instance
+	serviceInstances []*services.Instance
 
 	// UPNP functionality
 	upnp bool

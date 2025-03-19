@@ -123,7 +123,7 @@ func (sm *Manager) servicesWatcher(ctx context.Context, serviceFunc func(context
 				break
 			}
 
-			svcAddresses := cluster.FetchServiceAddresses(svc)
+			svcAddresses := services.FetchServiceAddresses(svc)
 
 			// We only care about LoadBalancer services that have been allocated an address
 			if len(svcAddresses) <= 0 {
@@ -159,7 +159,9 @@ func (sm *Manager) servicesWatcher(ctx context.Context, serviceFunc func(context
 				// This service has been modified, but it was also active.
 				if svcCtx != nil && svcCtx.isActive {
 					if i != nil {
-						if !reflect.DeepEqual(originalService, svcAddresses) {
+						originalService := services.FetchServiceAddresses(i.ServiceSnapshot)
+						newService := services.FetchServiceAddresses(svc)
+						if !reflect.DeepEqual(originalService, newService) {
 
 							// Calls the cancel function of the context
 							if svcCtx != nil {
@@ -215,11 +217,11 @@ func (sm *Manager) servicesWatcher(ctx context.Context, serviceFunc func(context
 							go func() {
 								if svc.Spec.ExternalTrafficPolicy == v1.ServiceExternalTrafficPolicyTypeLocal {
 									// Add Endpoint or EndpointSlices watcher
-									var provider epProvider
+									var provider providers.Provider
 									if !sm.config.EnableEndpointSlices {
-										provider = &endpointsProvider{label: "endpoints"}
+										provider = providers.NewEndpoints()
 									} else {
-										provider = &endpointslicesProvider{label: "endpointslices"}
+										provider = providers.NewEndpointslices()
 									}
 									if err = sm.watchEndpoint(svcCtx, sm.config.NodeName, svc, provider); err != nil {
 										log.Error(err.Error())
@@ -239,11 +241,11 @@ func (sm *Manager) servicesWatcher(ctx context.Context, serviceFunc func(context
 						go func() {
 							if svc.Spec.ExternalTrafficPolicy == v1.ServiceExternalTrafficPolicyTypeCluster {
 								// Add Endpoint watcher
-								var provider epProvider
+								var provider providers.Provider
 								if !sm.config.EnableEndpointSlices {
-									provider = &endpointsProvider{label: "endpoints"}
+									provider = providers.NewEndpoints()
 								} else {
-									provider = &endpointslicesProvider{label: "endpointslices"}
+									provider = providers.NewEndpointslices()
 								}
 								if err = sm.watchEndpoint(svcCtx, sm.config.NodeName, svc, provider); err != nil {
 									log.Error(err.Error())

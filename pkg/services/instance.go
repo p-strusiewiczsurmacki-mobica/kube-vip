@@ -1,10 +1,19 @@
+<<<<<<<< HEAD:pkg/cluster/instance.go
 package cluster
+========
+package services
+>>>>>>>> 9aff693 (Moved endpoint-related code from pkg/manager to pkg/endpoints):pkg/services/instance.go
 
 import (
+	"context"
 	"fmt"
 	"net"
 	"strconv"
 	"strings"
+<<<<<<<< HEAD:pkg/cluster/instance.go
+========
+	"time"
+>>>>>>>> 9aff693 (Moved endpoint-related code from pkg/manager to pkg/endpoints):pkg/services/instance.go
 
 	log "log/slog"
 
@@ -32,6 +41,7 @@ const (
 // Instance defines an instance of everything needed to manage vips
 type Instance struct {
 	// Virtual IP / Load Balancer configuration
+<<<<<<<< HEAD:pkg/cluster/instance.go
 	VIPConfigs []*kubevip.Config
 
 	// cluster instances
@@ -47,6 +57,24 @@ type Instance struct {
 
 	// External Gateway IP the service is forwarded from
 	UPNPGatewayIPs []string
+========
+	VipConfigs []*kubevip.Config
+
+	// cluster instances
+	Clusters []*cluster.Cluster
+
+	// Service uses DHCP
+	IsDHCP              bool
+	DhcpInterface       string
+	DhcpInterfaceHwaddr string
+	DhcpInterfaceIP     string
+	dhcpHostname        string
+	DhcpClient          *vip.DHCPClient
+	HasEndpoints        bool
+
+	// External Gateway IP the service is forwarded from
+	UpnpGatewayIPs []string
+>>>>>>>> 9aff693 (Moved endpoint-related code from pkg/manager to pkg/endpoints):pkg/services/instance.go
 
 	// Kubernetes service mapping
 	ServiceSnapshot *v1.Service
@@ -57,7 +85,11 @@ type Port struct {
 	Type string
 }
 
+<<<<<<<< HEAD:pkg/cluster/instance.go
 func NewInstance(svc *v1.Service, config *kubevip.Config, intfMgr *networkinterface.Manager, arpMgr *arp.Manager) (*Instance, error) {
+========
+func NewInstance(svc *v1.Service, config *kubevip.Config) (*Instance, error) {
+>>>>>>>> 9aff693 (Moved endpoint-related code from pkg/manager to pkg/endpoints):pkg/services/instance.go
 	instanceAddresses := FetchServiceAddresses(svc)
 	//instanceUID := string(svc.UID)
 
@@ -68,7 +100,11 @@ func NewInstance(svc *v1.Service, config *kubevip.Config, intfMgr *networkinterf
 	for _, address := range instanceAddresses {
 		// Detect if we're using a specific interface for services
 		var svcInterface string
+<<<<<<<< HEAD:pkg/cluster/instance.go
 		svcInterface = svc.Annotations[ServiceInterface] // If the service has a specific interface defined, then use it
+========
+		svcInterface = svc.Annotations[kubevip.ServiceInterface] // If the service has a specific interface defined, then use it
+>>>>>>>> 9aff693 (Moved endpoint-related code from pkg/manager to pkg/endpoints):pkg/services/instance.go
 		if svcInterface == kubevip.Auto {
 			link, err = autoFindInterface(address)
 			if err != nil {
@@ -196,9 +232,15 @@ func NewInstance(svc *v1.Service, config *kubevip.Config, intfMgr *networkinterf
 	// }
 
 	if svc.Annotations != nil {
+<<<<<<<< HEAD:pkg/cluster/instance.go
 		instance.DHCPInterfaceHwaddr = svc.Annotations[HWAddrKey]
 		instance.DHCPInterfaceIP = svc.Annotations[RequestedIP]
 		instance.DHCPHostname = svc.Annotations[LoadbalancerHostname]
+========
+		instance.DhcpInterfaceHwaddr = svc.Annotations[kubevip.HwAddrKey]
+		instance.DhcpInterfaceIP = svc.Annotations[kubevip.RequestedIP]
+		instance.dhcpHostname = svc.Annotations[kubevip.LoadbalancerHostname]
+>>>>>>>> 9aff693 (Moved endpoint-related code from pkg/manager to pkg/endpoints):pkg/services/instance.go
 	}
 
 	configPorts := make([]kubevip.Port, 0)
@@ -219,7 +261,11 @@ func NewInstance(svc *v1.Service, config *kubevip.Config, intfMgr *networkinterf
 		vip.LoadBalancers = append(vip.LoadBalancers, newLB)
 	}
 	// Create Add configuration to the new service
+<<<<<<<< HEAD:pkg/cluster/instance.go
 	instance.VIPConfigs = newVips
+========
+	instance.VipConfigs = newVips
+>>>>>>>> 9aff693 (Moved endpoint-related code from pkg/manager to pkg/endpoints):pkg/services/instance.go
 
 	// If this was purposely created with the address 0.0.0.0,
 	// we will create a macvlan on the main interface and a DHCP client
@@ -230,6 +276,7 @@ func NewInstance(svc *v1.Service, config *kubevip.Config, intfMgr *networkinterf
 			return nil, err
 		}
 		select {
+<<<<<<<< HEAD:pkg/cluster/instance.go
 		case err := <-instance.DHCPClient.ErrorChannel():
 			return nil, fmt.Errorf("error starting DHCP for %s/%s: error: %s",
 				instance.ServiceSnapshot.Namespace, instance.ServiceSnapshot.Name, err)
@@ -242,6 +289,20 @@ func NewInstance(svc *v1.Service, config *kubevip.Config, intfMgr *networkinterf
 
 	for _, vipConfig := range instance.VIPConfigs {
 		c, err := InitCluster(vipConfig, false, intfMgr, arpMgr)
+========
+		case err := <-instance.DhcpClient.ErrorChannel():
+			return nil, fmt.Errorf("error starting DHCP for %s/%s: error: %s",
+				instance.ServiceSnapshot.Namespace, instance.ServiceSnapshot.Name, err)
+		case ip := <-instance.DhcpClient.IPChannel():
+			instance.VipConfigs[0].Interface = instance.DhcpInterface
+			instance.VipConfigs[0].VIP = ip
+			instance.DhcpInterfaceIP = ip
+		}
+	}
+
+	for _, vipConfig := range instance.VipConfigs {
+		c, err := cluster.InitCluster(vipConfig, false)
+>>>>>>>> 9aff693 (Moved endpoint-related code from pkg/manager to pkg/endpoints):pkg/services/instance.go
 		if err != nil {
 			log.Error("Failed to add Service %s/%s", svc.Namespace, svc.Name)
 			return nil, err
@@ -317,10 +378,17 @@ func getAutoInterfaceName(link netlink.Link, defaultInterface string) string {
 }
 
 func (i *Instance) startDHCP() error {
+<<<<<<<< HEAD:pkg/cluster/instance.go
 	if len(i.VIPConfigs) != 1 {
 		return fmt.Errorf("DHCP requires exactly 1 VIP config, got: %v", len(i.VIPConfigs))
 	}
 	parent, err := netlink.LinkByName(i.VIPConfigs[0].Interface)
+========
+	if len(i.VipConfigs) != 1 {
+		return fmt.Errorf("DHCP requires exactly 1 VIP config, got: %v", len(i.VipConfigs))
+	}
+	parent, err := netlink.LinkByName(i.VipConfigs[0].Interface)
+>>>>>>>> 9aff693 (Moved endpoint-related code from pkg/manager to pkg/endpoints):pkg/services/instance.go
 	if err != nil {
 		return fmt.Errorf("error finding VIP Interface, for building DHCP Link : %v", err)
 	}
@@ -333,8 +401,13 @@ func (i *Instance) startDHCP() error {
 	if err != nil {
 		log.Info("creating new macvlan interface for DHCP", "interface", interfaceName)
 
+<<<<<<<< HEAD:pkg/cluster/instance.go
 		hwaddr, err := net.ParseMAC(i.DHCPInterfaceHwaddr)
 		if i.DHCPInterfaceHwaddr != "" && err != nil {
+========
+		hwaddr, err := net.ParseMAC(i.DhcpInterfaceHwaddr)
+		if i.DhcpInterfaceHwaddr != "" && err != nil {
+>>>>>>>> 9aff693 (Moved endpoint-related code from pkg/manager to pkg/endpoints):pkg/services/instance.go
 			return err
 		} else if hwaddr == nil {
 			hwaddr, err = net.ParseMAC(vip.GenerateMac())
@@ -372,11 +445,19 @@ func (i *Instance) startDHCP() error {
 	}
 
 	var initRebootFlag bool
+<<<<<<<< HEAD:pkg/cluster/instance.go
 	if i.DHCPInterfaceIP != "" {
 		initRebootFlag = true
 	}
 
 	client := vip.NewDHCPClient(iface, initRebootFlag, i.DHCPInterfaceIP)
+========
+	if i.DhcpInterfaceIP != "" {
+		initRebootFlag = true
+	}
+
+	client := vip.NewDHCPClient(iface, initRebootFlag, i.DhcpInterfaceIP)
+>>>>>>>> 9aff693 (Moved endpoint-related code from pkg/manager to pkg/endpoints):pkg/services/instance.go
 
 	// Add hostname to dhcp client if annotated
 	if i.DHCPHostname != "" {
@@ -389,14 +470,22 @@ func (i *Instance) startDHCP() error {
 	// Set that DHCP is enabled
 	i.IsDHCP = true
 	// Set the name of the interface so that it can be removed on Service deletion
+<<<<<<<< HEAD:pkg/cluster/instance.go
 	i.DHCPInterface = interfaceName
 	i.DHCPInterfaceHwaddr = iface.HardwareAddr.String()
 	// Add the client so that we can call it to stop function
 	i.DHCPClient = client
+========
+	i.DhcpInterface = interfaceName
+	i.DhcpInterfaceHwaddr = iface.HardwareAddr.String()
+	// Add the client so that we can call it to stop function
+	i.DhcpClient = client
+>>>>>>>> 9aff693 (Moved endpoint-related code from pkg/manager to pkg/endpoints):pkg/services/instance.go
 
 	return nil
 }
 
+<<<<<<<< HEAD:pkg/cluster/instance.go
 // FetchIngressAddresses tries to get the addresses from status.loadBalancerIP
 func FetchLoadBalancerIngressAddresses(s *v1.Service) []string {
 	// If the service has no status, return empty
@@ -416,12 +505,18 @@ func FetchLoadBalancerIngressAddresses(s *v1.Service) []string {
 	return lbStatusAddresses
 }
 
+========
+>>>>>>>> 9aff693 (Moved endpoint-related code from pkg/manager to pkg/endpoints):pkg/services/instance.go
 // FetchServiceAddresses tries to get the addresses from annotations
 // kube-vip.io/loadbalancerIPs, then from spec.loadbalancerIP
 func FetchServiceAddresses(s *v1.Service) []string {
 	annotationAvailable := false
 	if s.Annotations != nil {
+<<<<<<<< HEAD:pkg/cluster/instance.go
 		if v, annotationAvailable := s.Annotations[LoadbalancerIPAnnotation]; annotationAvailable {
+========
+		if v, annotationAvailable := s.Annotations[kubevip.LoadbalancerIPAnnotation]; annotationAvailable {
+>>>>>>>> 9aff693 (Moved endpoint-related code from pkg/manager to pkg/endpoints):pkg/services/instance.go
 			ips := strings.Split(v, ",")
 			var trimmedIPs []string
 			for _, ip := range ips {
@@ -458,3 +553,40 @@ func FetchServiceAddresses(s *v1.Service) []string {
 
 	return []string{}
 }
+<<<<<<<< HEAD:pkg/cluster/instance.go
+========
+
+func FindServiceInstance(svc *v1.Service, instances []*Instance) *Instance {
+	log.Debug("finding service", "UID", svc.UID)
+	for i := range instances {
+		log.Debug("saved service", "instance", i, "UID", instances[i].ServiceSnapshot.UID)
+		if instances[i].ServiceSnapshot.UID == svc.UID {
+			return instances[i]
+		}
+	}
+	return nil
+}
+
+func FindServiceInstanceWithTimeout(ctx context.Context, svc *v1.Service, instances []*Instance) (*Instance, error) {
+	log.Debug("finding service with timeout", "UID", svc.UID)
+
+	ctxTimeout, ctxTimeoutCancel := context.WithTimeout(ctx, time.Minute)
+	defer ctxTimeoutCancel()
+
+	for {
+		instance := FindServiceInstance(svc, instances)
+		if instance != nil {
+			return instance, nil
+		}
+
+		t := time.NewTimer(time.Millisecond * 100)
+		select {
+		case <-ctxTimeout.Done():
+			t.Stop()
+			return nil, fmt.Errorf("failed to wait for the service instance: %w", ctx.Err())
+		case <-t.C:
+			log.Debug("waiting for the service to be discovered", "UID", svc.UID)
+		}
+	}
+}
+>>>>>>>> 9aff693 (Moved endpoint-related code from pkg/manager to pkg/endpoints):pkg/services/instance.go

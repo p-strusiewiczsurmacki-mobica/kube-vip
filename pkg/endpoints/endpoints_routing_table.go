@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"net"
 	"syscall"
 
 	log "log/slog"
@@ -13,20 +12,20 @@ import (
 )
 
 type RoutingTable struct {
-	Generic
+	generic
 }
 
-func NewRoutingTable(sm *Manager, provider epProvider) EndpointWorker {
+func newRoutingTable(generic generic) endpointWorker {
 	return &RoutingTable{
-		Generic: Generic{
-			sm:       sm,
-			provider: provider,
-		},
+		generic: generic,
 	}
 }
 
-func (rt *RoutingTable) ProcessInstance(svcCtx *serviceContext, service *v1.Service, leaderElectionActive *bool) error {
-	instance := rt.sm.findServiceInstance(service)
+func (rt *RoutingTable) processInstance(svcCtx *serviceContext, service *v1.Service, leaderElectionActive *bool) error {
+	instance, err := services.FindServiceInstanceWithTimeout(ctx, service, *rt.instances)
+	if err != nil {
+		log.Error("error finding instance", "service", service.UID, "provider", rt.provider.GetLabel(), "err", err)
+	}
 	if instance != nil {
 		for _, cluster := range instance.Clusters {
 			for i := range cluster.Network {
@@ -42,7 +41,7 @@ func (rt *RoutingTable) ProcessInstance(svcCtx *serviceContext, service *v1.Serv
 							}
 							if isUpdated {
 								log.Info("updated route", "provider",
-									rt.provider.getLabel(), "ip", cluster.Network[i].IP(), "service name", service.Name, "namespace",
+									rt.provider.GetLabel(), "ip", cluster.Network[i].IP(), "service name", service.Name, "namespace",
 									service.Namespace, "interface", cluster.Network[i].Interface(), "tableID", rt.sm.config.RoutingTableID)
 							} else {
 								log.Info("route already present", "provider",
@@ -55,11 +54,16 @@ func (rt *RoutingTable) ProcessInstance(svcCtx *serviceContext, service *v1.Serv
 						}
 					} else {
 						log.Info("added route", "provider",
-							rt.provider.getLabel(), "ip", cluster.Network[i].IP(), "service name", service.Name, "namespace",
+							rt.provider.GetLabel(), "ip", cluster.Network[i].IP(), "service name", service.Name, "namespace",
 							service.Namespace, "interface", cluster.Network[i].Interface(), "tableID", rt.sm.config.RoutingTableID)
 						svcCtx.configuredNetworks.Store(cluster.Network[i].IP(), cluster.Network[i])
 						*leaderElectionActive = true
 					}
+				} else {
+					log.Info("added route", "provider",
+						rt.provider.GetLabel(), "ip", cluster.Network[i].IP(), "service name", service.Name, "namespace", service.Namespace, "interface", cluster.Network[i].Interface(), "tableID", rt.config.RoutingTableID)
+					rt.configuredLocalRoutes.Store(string(service.UID), true)
+					*leaderElectionActive = true
 				}
 			}
 		}
@@ -69,8 +73,8 @@ func (rt *RoutingTable) ProcessInstance(svcCtx *serviceContext, service *v1.Serv
 }
 
 func (rt *RoutingTable) Clear(svcCtx *serviceContext, lastKnownGoodEndpoint *string, service *v1.Service, cancel context.CancelFunc, leaderElectionActive *bool) {
-	if !rt.sm.config.EnableServicesElection && !rt.sm.config.EnableLeaderElection {
-		if errs := rt.sm.clearRoutes(service); len(errs) == 0 {
+	if !rt.config.EnableServicesElection && !rt.config.EnableLeaderElection {
+		if errs := ClearRoutes(service, rt.instances); len(errs) == 0 {
 			svcCtx.configuredNetworks.Clear()
 		} else {
 			for _, err := range errs {
@@ -82,24 +86,24 @@ func (rt *RoutingTable) Clear(svcCtx *serviceContext, lastKnownGoodEndpoint *str
 	rt.clearEgress(lastKnownGoodEndpoint, service, cancel, leaderElectionActive)
 }
 
-func (rt *RoutingTable) GetEndpoints(service *v1.Service, id string) ([]string, error) {
+func (rt *RoutingTable) getEndpoints(service *v1.Service, id string) ([]string, error) {
 	return rt.getAllEndpoints(service, id)
 }
 
-func (rt *RoutingTable) RemoveEgress(service *v1.Service, lastKnownGoodEndpoint *string) {
-	if err := rt.sm.TeardownEgress(*lastKnownGoodEndpoint, service.Spec.LoadBalancerIP,
-		service.Namespace, service.Annotations); err != nil {
+func (rt *RoutingTable) removeEgress(service *v1.Service, lastKnownGoodEndpoint *string) {
+	if err := services.TeardownEgress(*lastKnownGoodEndpoint, service.Spec.LoadBalancerIP,
+		service.Namespace, service.Annotations, rt.config.EgressWithNftables); err != nil {
 		log.Warn("removing redundant egress rules", "err", err)
 	}
 }
 
-func (rt *RoutingTable) Delete(service *v1.Service, id string) error {
+func (rt *RoutingTable) delete(service *v1.Service, id string) error {
 	// When no-leader-elecition mode
-	if !rt.sm.config.EnableServicesElection && !rt.sm.config.EnableLeaderElection {
+	if !rt.config.EnableServicesElection && !rt.config.EnableLeaderElection {
 		// find all existing local endpoints
-		endpoints, err := rt.GetEndpoints(service, id)
+		endpoints, err := rt.getEndpoints(service, id)
 		if err != nil {
-			return fmt.Errorf("[%s] error getting endpoints: %w", rt.provider.getLabel(), err)
+			return fmt.Errorf("[%s] error getting endpoints: %w", rt.provider.GetLabel(), err)
 		}
 
 		// If there were local endpoints deleted
@@ -112,24 +116,33 @@ func (rt *RoutingTable) Delete(service *v1.Service, id string) error {
 }
 
 func (rt *RoutingTable) deleteAction(service *v1.Service) {
-	rt.sm.clearRoutes(service)
+	ClearRoutes(service, rt.instances)
 }
 
-func (sm *Manager) clearRoutes(service *v1.Service) []error {
+func (rt *RoutingTable) setInstanceEndpointsStatus(service *v1.Service, state bool) error {
+	instance := services.FindServiceInstance(service, *rt.instances)
+	if instance == nil {
+		return fmt.Errorf("failed to find instance for service %s/%s", service.Namespace, service.Name)
+	}
+	instance.HasEndpoints = state
+	return nil
+}
+
+func ClearRoutes(service *v1.Service, instances *[]*services.Instance) []error {
 	errs := []error{}
-	if instance := sm.findServiceInstance(service); instance != nil {
+	if instance := services.FindServiceInstance(service, *instances); instance != nil {
 		for _, cluster := range instance.Clusters {
 			for i := range cluster.Network {
 				route := cluster.Network[i].PrepareRoute()
 				// check if route we are about to delete is not referenced by more than one service
-				if sm.countRouteReferences(route) <= 1 {
+				if countRouteReferences(route, instances) <= 1 {
 					err := cluster.Network[i].DeleteRoute()
 					if err != nil && !errors.Is(err, syscall.ESRCH) {
 						log.Error("failed to delete route", "ip", cluster.Network[i].IP(), "err", err)
 						errs = append(errs, err)
 					}
 					log.Debug("deleted route", "ip",
-						cluster.Network[i].IP(), "service name", service.Name, "namespace", service.Namespace, "interface", cluster.Network[i].Interface(), "tableID", sm.config.RoutingTableID)
+						cluster.Network[i].IP(), "service name", service.Name, "namespace", service.Namespace, "interface", cluster.Network[i].Interface())
 				}
 			}
 		}
@@ -137,22 +150,17 @@ func (sm *Manager) clearRoutes(service *v1.Service) []error {
 	return errs
 }
 
-func (rt *RoutingTable) SetInstanceEndpointsStatus(service *v1.Service, endpoints []string) error {
-	instance := rt.sm.findServiceInstance(service)
-	if instance == nil {
-		return fmt.Errorf("failed to find instance for service %s/%s", service.Namespace, service.Name)
-	}
-	for _, c := range instance.Clusters {
-		for n := range c.Network {
-			// if there are no endpoints set HasEndpoints false just in case
-			if len(endpoints) < 1 {
-				c.Network[n].SetHasEndpoints(false)
-			}
-			// check if endpoint are available and are of same IP family as service
-			if len(endpoints) > 0 && ((net.ParseIP(c.Network[n].IP()).To4() == nil) == (net.ParseIP(endpoints[0]).To4() == nil)) {
-				c.Network[n].SetHasEndpoints(true)
+func countRouteReferences(route *netlink.Route, instances *[]*services.Instance) int {
+	cnt := 0
+	for _, instance := range *instances {
+		for _, cluster := range instance.Clusters {
+			for n := range cluster.Network {
+				r := cluster.Network[n].PrepareRoute()
+				if r.Dst.String() == route.Dst.String() {
+					cnt++
+				}
 			}
 		}
 	}
-	return nil
+	return cnt
 }
