@@ -63,7 +63,7 @@ func NewIPVSLB(address string, port uint16, forwardingMethod string, backendHeal
 		log.Error("ensure IPVS kernel modules are loaded")
 		log.Error("Error retrieving IPVS info", "err", err)
 		if errors.Is(err, os.ErrPermission) {
-			log.Error("no permission to get IPVS info - please ensure that the kube-vip is running with proper capabilities/privileged mode")
+			log.Error("no permission to get IPVS info - please ensure that kube-vip is running with proper capabilities/privileged mode")
 		}
 		panic("")
 	}
@@ -84,7 +84,7 @@ func NewIPVSLB(address string, port uint16, forwardingMethod string, backendHeal
 			err = sysctl.WriteProcSys(conntrackFile, "1")
 			if err != nil {
 				if errors.Is(err, os.ErrPermission) {
-					log.Error("no permission to write to the file - please ensure that the kube-vip is running with proper capabilities/privileged mode to write to sysfs",
+					log.Error("no permission to write to the file - please ensure that kube-vip is running with proper capabilities/privileged mode to write to sysfs",
 						"file", conntrackFile, "err", err)
 				} else {
 					log.Error("ensuring net.ipv4.vs.conntrack enabled", "err", err)
