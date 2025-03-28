@@ -73,7 +73,7 @@ func NewIPVSLB(address string, port uint16, forwardingMethod string, backendHeal
 
 	if strings.ToLower(forwardingMethod) == "masquerade" {
 		if family == ipvs.INET6 {
-			EnableProcSys("/proc/sys/net/ipv6/ip_forward", "net.ipv6.ip_forward")
+			EnableProcSys("/proc/sys/net/ipv6/conf/all/forwarding", "net.ipv6.conf.all.forwarding")
 		} else {
 			EnableProcSys("/proc/sys/net/ipv4/vs/conntrack", "net.ipv4.vs.conntrack")
 			EnableProcSys("/proc/sys/net/ipv4/ip_forward", "net.ipv4.ip_forward")
