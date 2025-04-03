@@ -1,4 +1,4 @@
-package manager
+package services
 
 import (
 	"context"
@@ -13,7 +13,7 @@ import (
 	"k8s.io/apimachinery/pkg/watch"
 )
 
-func (sm *Manager) watchEndpoint(ctx context.Context, id string, service *v1.Service, provider providers.Provider) error {
+func (p *Processor) watchEndpoint(ctx context.Context, id string, service *v1.Service, provider providers.Provider) error {
 	log.Info("watching", "provider", provider.GetLabel(), "service_name", service.Name, "namespace", service.Namespace)
 	// Use a restartable watcher, as this should help in the event of etcd or timeout issues
 	leaderContext, cancel := context.WithCancel(ctx)
@@ -21,7 +21,7 @@ func (sm *Manager) watchEndpoint(ctx context.Context, id string, service *v1.Ser
 
 	var leaderElectionActive bool
 
-	rw, err := provider.CreateRetryWatcher(leaderContext, sm.rwClientSet, service)
+	rw, err := provider.CreateRetryWatcher(leaderContext, p.rwClientSet, service)
 	if err != nil {
 		cancel()
 		return fmt.Errorf("[%s] error watching endpoints: %w", provider.GetLabel(), err)
@@ -37,7 +37,7 @@ func (sm *Manager) watchEndpoint(ctx context.Context, id string, service *v1.Ser
 			// Cancel the context, which will in turn cancel the leadership
 			cancel()
 			return
-		case <-sm.shutdownChan:
+		case <-p.shutdownChan:
 			log.Debug("shutdown called", "provider", provider.GetLabel())
 			// Stop the retry watcher
 			rw.Stop()
@@ -56,7 +56,7 @@ func (sm *Manager) watchEndpoint(ctx context.Context, id string, service *v1.Ser
 
 	ch := rw.ResultChan()
 
-	epProcessor := endpoints.NewEndpointProcessor(sm.config, provider, sm.bgpServer, &sm.serviceInstances, &configuredLocalRoutes)
+	epProcessor := endpoints.NewEndpointProcessor(p.config, provider, p.bgpServer, &p.ServiceInstances, &p.configuredLocalRoutes)
 
 	var lastKnownGoodEndpoint string
 	for event := range ch {
@@ -64,7 +64,7 @@ func (sm *Manager) watchEndpoint(ctx context.Context, id string, service *v1.Ser
 		switch event.Type {
 
 		case watch.Added, watch.Modified:
-			restart, err := epProcessor.AddOrModify(ctx, event, cancel, &lastKnownGoodEndpoint, service, id, &leaderElectionActive, sm.StartServicesLeaderElection)
+			restart, err := epProcessor.AddOrModify(ctx, event, cancel, &lastKnownGoodEndpoint, service, id, &leaderElectionActive, p.StartServicesLeaderElection)
 			if restart {
 				continue
 			} else if err != nil {

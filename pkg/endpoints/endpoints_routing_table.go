@@ -8,7 +8,8 @@ import (
 
 	log "log/slog"
 
-	"github.com/kube-vip/kube-vip/pkg/services"
+	"github.com/kube-vip/kube-vip/pkg/egress"
+	"github.com/kube-vip/kube-vip/pkg/instance"
 	"github.com/vishvananda/netlink"
 	v1 "k8s.io/api/core/v1"
 )
@@ -24,7 +25,7 @@ func newRoutingTable(generic generic) endpointWorker {
 }
 
 func (rt *RoutingTable) processInstance(ctx context.Context, service *v1.Service, leaderElectionActive *bool) error {
-	instance, err := services.FindServiceInstanceWithTimeout(ctx, service, *rt.instances)
+	instance, err := instance.FindServiceInstanceWithTimeout(ctx, service, *rt.instances)
 	if err != nil {
 		log.Error("error finding instance", "service", service.UID, "provider", rt.provider.GetLabel(), "err", err)
 	}
@@ -79,7 +80,7 @@ func (rt *RoutingTable) getEndpoints(service *v1.Service, id string) ([]string, 
 }
 
 func (rt *RoutingTable) removeEgress(service *v1.Service, lastKnownGoodEndpoint *string) {
-	if err := services.TeardownEgress(*lastKnownGoodEndpoint, service.Spec.LoadBalancerIP,
+	if err := egress.Teardown(*lastKnownGoodEndpoint, service.Spec.LoadBalancerIP,
 		service.Namespace, service.Annotations, rt.config.EgressWithNftables); err != nil {
 		log.Warn("removing redundant egress rules", "err", err)
 	}
@@ -107,23 +108,14 @@ func (rt *RoutingTable) deleteAction(service *v1.Service) {
 	ClearRoutes(service, rt.instances)
 }
 
-func (rt *RoutingTable) setInstanceEndpointsStatus(service *v1.Service, state bool) error {
-	instance := services.FindServiceInstance(service, *rt.instances)
-	if instance == nil {
-		return fmt.Errorf("failed to find instance for service %s/%s", service.Namespace, service.Name)
-	}
-	instance.HasEndpoints = state
-	return nil
-}
-
-func ClearRoutes(service *v1.Service, instances *[]*services.Instance) []error {
+func ClearRoutes(service *v1.Service, instances *[]*instance.Instance) []error {
 	errs := []error{}
-	if instance := services.FindServiceInstance(service, *instances); instance != nil {
+	if instance := instance.FindServiceInstance(service, *instances); instance != nil {
 		for _, cluster := range instance.Clusters {
 			for i := range cluster.Network {
 				route := cluster.Network[i].PrepareRoute()
 				// check if route we are about to delete is not referenced by more than one service
-				if countRouteReferences(route, instances) <= 1 {
+				if CountRouteReferences(route, instances) <= 1 {
 					err := cluster.Network[i].DeleteRoute()
 					if err != nil && !errors.Is(err, syscall.ESRCH) {
 						log.Error("failed to delete route", "ip", cluster.Network[i].IP(), "err", err)
@@ -138,14 +130,16 @@ func ClearRoutes(service *v1.Service, instances *[]*services.Instance) []error {
 	return errs
 }
 
-func countRouteReferences(route *netlink.Route, instances *[]*services.Instance) int {
+func CountRouteReferences(route *netlink.Route, instances *[]*instance.Instance) int {
 	cnt := 0
 	for _, instance := range *instances {
-		for _, cluster := range instance.Clusters {
-			for n := range cluster.Network {
-				r := cluster.Network[n].PrepareRoute()
-				if r.Dst.String() == route.Dst.String() {
-					cnt++
+		if instance.HasEndpoints {
+			for _, cluster := range instance.Clusters {
+				for n := range cluster.Network {
+					r := cluster.Network[n].PrepareRoute()
+					if r.Dst.String() == route.Dst.String() {
+						cnt++
+					}
 				}
 			}
 		}

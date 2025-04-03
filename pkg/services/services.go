@@ -1,4 +1,4 @@
-package manager
+package services
 
 import (
 	"context"
@@ -17,19 +17,20 @@ import (
 	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/client-go/util/retry"
 
+	"github.com/kube-vip/kube-vip/pkg/egress"
 	"github.com/kube-vip/kube-vip/pkg/endpoints/providers"
+	"github.com/kube-vip/kube-vip/pkg/instance"
 	"github.com/kube-vip/kube-vip/pkg/kubevip"
-	"github.com/kube-vip/kube-vip/pkg/services"
 	"github.com/kube-vip/kube-vip/pkg/upnp"
 	"github.com/kube-vip/kube-vip/pkg/vip"
 )
 
-func (sm *Manager) syncServices(ctx context.Context, svc *v1.Service) error {
+func (p *Processor) SyncServices(ctx context.Context, svc *v1.Service) error {
 	log.Debug("[STARTING] Service Sync")
 
 	// Iterate through the synchronising services
 	foundInstance := false
-	newServiceAddresses := services.FetchServiceAddresses(svc)
+	newServiceAddresses := instance.FetchServiceAddresses(svc)
 	newServiceUID := svc.UID
 
 	ingressIPs := []string{}
@@ -40,20 +41,20 @@ func (sm *Manager) syncServices(ctx context.Context, svc *v1.Service) error {
 
 	shouldBreake := false
 
-	for x := range sm.serviceInstances {
+	for x := range p.ServiceInstances {
 		if shouldBreake {
 			break
 		}
 		for _, newServiceAddress := range newServiceAddresses {
-			log.Debug("service", "IsDHCP", sm.serviceInstances[x].IsDHCP, "newServiceAddress", newServiceAddress)
-			if sm.serviceInstances[x].ServiceSnapshot.UID == newServiceUID {
+			log.Debug("service", "IsDHCP", p.ServiceInstances[x].IsDHCP, "newServiceAddress", newServiceAddress)
+			if p.ServiceInstances[x].ServiceSnapshot.UID == newServiceUID {
 				// If the found instance's DHCP configuration doesn't match the new service, delete it.
-				if (sm.serviceInstances[x].IsDHCP && newServiceAddress != "0.0.0.0") ||
-					(!sm.serviceInstances[x].IsDHCP && newServiceAddress == "0.0.0.0") ||
-					(!sm.serviceInstances[x].IsDHCP && len(svc.Status.LoadBalancer.Ingress) > 0 && !slices.Contains(ingressIPs, newServiceAddress)) ||
+				if (p.ServiceInstances[x].IsDHCP && newServiceAddress != "0.0.0.0") ||
+					(!p.ServiceInstances[x].IsDHCP && newServiceAddress == "0.0.0.0") ||
+					(!p.ServiceInstances[x].IsDHCP && len(svc.Status.LoadBalancer.Ingress) > 0 && !slices.Contains(ingressIPs, newServiceAddress)) ||
 					(len(svc.Status.LoadBalancer.Ingress) > 0 && !comparePortsAndPortStatuses(svc)) ||
-					(sm.serviceInstances[x].IsDHCP && len(svc.Status.LoadBalancer.Ingress) > 0 && !slices.Contains(ingressIPs, sm.serviceInstances[x].DhcpInterfaceIP)) {
-					if err := sm.deleteService(newServiceUID); err != nil {
+					(p.ServiceInstances[x].IsDHCP && len(svc.Status.LoadBalancer.Ingress) > 0 && !slices.Contains(ingressIPs, p.ServiceInstances[x].DhcpInterfaceIP)) {
+					if err := p.deleteService(newServiceUID); err != nil {
 						return err
 					}
 					shouldBreake = true
@@ -66,7 +67,7 @@ func (sm *Manager) syncServices(ctx context.Context, svc *v1.Service) error {
 
 	// This instance wasn't found, we need to add it to the manager
 	if !foundInstance && len(newServiceAddresses) > 0 {
-		if err := sm.addService(ctx, svc); err != nil {
+		if err := p.addService(ctx, svc); err != nil {
 			return err
 		}
 	}
@@ -87,19 +88,19 @@ func comparePortsAndPortStatuses(svc *v1.Service) bool {
 	return true
 }
 
-func (sm *Manager) addService(ctx context.Context, svc *v1.Service) error {
+func (p *Processor) addService(ctx context.Context, svc *v1.Service) error {
 	startTime := time.Now()
 
-	newService, err := services.NewInstance(svc, sm.config)
+	newService, err := instance.NewInstance(svc, p.config)
 	if err != nil {
 		return err
 	}
 
 	for x := range newService.VipConfigs {
-		newService.Clusters[x].StartLoadBalancerService(newService.VipConfigs[x], sm.bgpServer)
+		newService.Clusters[x].StartLoadBalancerService(newService.VipConfigs[x], p.bgpServer)
 	}
 
-	sm.upnpMap(ctx, newService)
+	p.upnpMap(ctx, newService)
 
 	if newService.IsDHCP && len(newService.VipConfigs) == 1 {
 		go func() {
@@ -107,8 +108,8 @@ func (sm *Manager) addService(ctx context.Context, svc *v1.Service) error {
 				log.Debug("IP changed", "ip", ip)
 				newService.VipConfigs[0].VIP = ip
 				newService.DhcpInterfaceIP = ip
-				if !sm.config.DisableServiceUpdates {
-					if err := sm.updateStatus(newService); err != nil {
+				if !p.config.DisableServiceUpdates {
+					if err := p.updateStatus(newService); err != nil {
 						log.Warn("updating svc", "err", err)
 					}
 				}
@@ -117,16 +118,16 @@ func (sm *Manager) addService(ctx context.Context, svc *v1.Service) error {
 		}()
 	}
 
-	sm.serviceInstances = append(sm.serviceInstances, newService)
+	p.ServiceInstances = append(p.ServiceInstances, newService)
 
-	if !sm.config.DisableServiceUpdates {
+	if !p.config.DisableServiceUpdates {
 		log.Debug("service update", "namespace", newService.ServiceSnapshot.Namespace, "name", newService.ServiceSnapshot.Name)
-		if err := sm.updateStatus(newService); err != nil {
+		if err := p.updateStatus(newService); err != nil {
 			log.Error("updating status", "namespace", newService.ServiceSnapshot.Namespace, "name", newService.ServiceSnapshot.Name, "err", err)
 		}
 	}
 
-	serviceIPs := services.FetchServiceAddresses(svc)
+	serviceIPs := instance.FetchServiceAddresses(svc)
 	// Check if we need to flush any conntrack connections (due to some dangling conntrack connections)
 	if svc.Annotations[kubevip.FlushContrack] == "true" {
 
@@ -147,7 +148,7 @@ func (sm *Manager) addService(ctx context.Context, svc *v1.Service) error {
 	if svc.Annotations[kubevip.Egress] == "true" && len(serviceIPs) > 0 {
 		log.Debug("enabling egress", "service", svc.Name)
 		// We will need to modify the iptables rules
-		err = sm.iptablesCheck()
+		err = p.iptablesCheck()
 		if err != nil {
 			log.Error("configuring egress", "service", svc.Name, "err", err)
 		}
@@ -159,11 +160,11 @@ func (sm *Manager) addService(ctx context.Context, svc *v1.Service) error {
 			// Does the service have an active IPv6 endpoint
 			if svc.Annotations[kubevip.ActiveEndpointIPv6] != "" {
 				for _, serviceIP := range serviceIPs {
-					if sm.config.EnableEndpointSlices && vip.IsIPv6(serviceIP) {
+					if p.config.EnableEndpointSlices && vip.IsIPv6(serviceIP) {
 
 						podIP = svc.Annotations[kubevip.ActiveEndpointIPv6]
 
-						err = sm.configureEgress(serviceIP, podIP, svc.Namespace, svc.Annotations)
+						err = p.configureEgress(serviceIP, podIP, svc.Namespace, svc.Annotations)
 						if err != nil {
 							errList = append(errList, err)
 							log.Error("configuring egress", "service", svc.Name, "err", err)
@@ -174,10 +175,10 @@ func (sm *Manager) addService(ctx context.Context, svc *v1.Service) error {
 		} else if svc.Annotations[kubevip.ActiveEndpoint] != "" { // Not expected to be IPv6, so should be an IPv4 address
 			for _, serviceIP := range serviceIPs {
 				podIPs := svc.Annotations[kubevip.ActiveEndpoint]
-				if sm.config.EnableEndpointSlices && vip.IsIPv6(serviceIP) {
+				if p.config.EnableEndpointSlices && vip.IsIPv6(serviceIP) {
 					podIPs = svc.Annotations[kubevip.ActiveEndpointIPv6]
 				}
-				err = sm.configureEgress(serviceIP, podIPs, svc.Namespace, svc.Annotations)
+				err = p.configureEgress(serviceIP, podIPs, svc.Namespace, svc.Annotations)
 				if err != nil {
 					errList = append(errList, err)
 					log.Error("configuring egress", "service", svc.Name, "err", err)
@@ -186,12 +187,12 @@ func (sm *Manager) addService(ctx context.Context, svc *v1.Service) error {
 		}
 		if len(errList) == 0 {
 			var provider providers.Provider
-			if !sm.config.EnableEndpointSlices {
+			if !p.config.EnableEndpointSlices {
 				provider = providers.NewEndpoints()
 			} else {
 				provider = providers.NewEndpointslices()
 			}
-			err = provider.UpdateServiceAnnotation(svc.Annotations[kubevip.ActiveEndpoint], svc.Annotations[kubevip.ActiveEndpointIPv6], svc, sm.clientSet)
+			err = provider.UpdateServiceAnnotation(svc.Annotations[kubevip.ActiveEndpoint], svc.Annotations[kubevip.ActiveEndpointIPv6], svc, p.clientSet)
 			if err != nil {
 				log.Error("configuring egress", "service", svc.Name, "err", err)
 			}
@@ -204,23 +205,23 @@ func (sm *Manager) addService(ctx context.Context, svc *v1.Service) error {
 	return nil
 }
 
-func (sm *Manager) deleteService(uid types.UID) error {
+func (p *Processor) deleteService(uid types.UID) error {
 	// protect multiple calls
-	sm.mutex.Lock()
-	defer sm.mutex.Unlock()
+	p.mutex.Lock()
+	defer p.mutex.Unlock()
 
-	var updatedInstances []*services.Instance
-	var serviceInstance *services.Instance
+	var updatedInstances []*instance.Instance
+	var serviceInstance *instance.Instance
 	found := false
-	for x := range sm.serviceInstances {
-		log.Debug("service lookup", "target UID", uid, "found UID ", sm.serviceInstances[x].ServiceSnapshot.UID)
+	for x := range p.ServiceInstances {
+		log.Debug("service lookup", "target UID", uid, "found UID ", p.ServiceInstances[x].ServiceSnapshot.UID)
 		// Add the running services to the new array
-		if sm.serviceInstances[x].ServiceSnapshot.UID != uid {
-			updatedInstances = append(updatedInstances, sm.serviceInstances[x])
+		if p.ServiceInstances[x].ServiceSnapshot.UID != uid {
+			updatedInstances = append(updatedInstances, p.ServiceInstances[x])
 		} else {
 			// Flip the found when we match
 			found = true
-			serviceInstance = sm.serviceInstances[x]
+			serviceInstance = p.ServiceInstances[x]
 		}
 	}
 	// If we've been through all services and not found the correct one then error
@@ -234,11 +235,11 @@ func (sm *Manager) deleteService(uid types.UID) error {
 	shared := false
 	vipSet := make(map[string]interface{})
 	for x := range updatedInstances {
-		for _, vip := range services.FetchServiceAddresses(updatedInstances[x].ServiceSnapshot) { //updatedInstances[x].ServiceSnapshot.Spec.LoadBalancerIP {
+		for _, vip := range instance.FetchServiceAddresses(updatedInstances[x].ServiceSnapshot) { //updatedInstances[x].ServiceSnapshot.Spec.LoadBalancerIP {
 			vipSet[vip] = nil
 		}
 	}
-	for _, vip := range services.FetchServiceAddresses(serviceInstance.ServiceSnapshot) {
+	for _, vip := range instance.FetchServiceAddresses(serviceInstance.ServiceSnapshot) {
 		if _, found := vipSet[vip]; found {
 			shared = true
 		}
@@ -263,7 +264,7 @@ func (sm *Manager) deleteService(uid types.UID) error {
 		for i := range serviceInstance.VipConfigs {
 			if serviceInstance.VipConfigs[i].EnableBGP {
 				cidrVip := fmt.Sprintf("%s/%s", serviceInstance.VipConfigs[i].VIP, serviceInstance.VipConfigs[i].VIPCIDR)
-				err := sm.bgpServer.DelHost(cidrVip)
+				err := p.bgpServer.DelHost(cidrVip)
 				if err != nil {
 					return fmt.Errorf("[BGP] error deleting BGP host: %v", err)
 				}
@@ -275,7 +276,7 @@ func (sm *Manager) deleteService(uid types.UID) error {
 		if serviceInstance.ServiceSnapshot.Annotations[kubevip.Egress] == "true" {
 			if serviceInstance.ServiceSnapshot.Annotations[kubevip.ActiveEndpoint] != "" {
 				log.Info("egress re-write enabled", "service", serviceInstance.ServiceSnapshot.Name)
-				err := services.TeardownEgress(serviceInstance.ServiceSnapshot.Annotations[kubevip.ActiveEndpoint], serviceInstance.ServiceSnapshot.Spec.LoadBalancerIP, serviceInstance.ServiceSnapshot.Namespace, serviceInstance.ServiceSnapshot.Annotations, sm.config.EgressWithNftables)
+				err := egress.Teardown(serviceInstance.ServiceSnapshot.Annotations[kubevip.ActiveEndpoint], serviceInstance.ServiceSnapshot.Spec.LoadBalancerIP, serviceInstance.ServiceSnapshot.Namespace, serviceInstance.ServiceSnapshot.Annotations, p.config.EgressWithNftables)
 				if err != nil {
 					log.Error("egress teardown", "err", err)
 				}
@@ -284,22 +285,23 @@ func (sm *Manager) deleteService(uid types.UID) error {
 	}
 
 	// Update the service array
-	sm.serviceInstances = updatedInstances
+	p.ServiceInstances = updatedInstances
 
-	log.Info("Removed instance from manager", "uid", uid, "remaining advertised services", len(sm.serviceInstances))
+	log.Info("Removed instance from manager", "uid", uid, "remaining advertised services", len(p.ServiceInstances))
 
 	return nil
 }
 
 // Set up UPNP forwards for a service
 // We first try to use the more modern Pinhole API introduced in UPNPv2 and fall back to UPNPv2 Port Forwarding if no forward was successful
-func (sm *Manager) upnpMap(ctx context.Context, s *services.Instance) {
+func (p *Processor) upnpMap(ctx context.Context, s *instance.Instance) {
 	if !isUPNPEnabled(s.ServiceSnapshot) {
 		// Skip services missing the annotation
 		return
 	}
-	if !sm.upnp {
+	if !p.config.EnableUPNP {
 		log.Warn("[UPNP] Found kube-vip.io/forwardUPNP on service while UPNP forwarding is disabled in the kube-vip config. Not forwarding", "service", s.ServiceSnapshot.Name)
+		return
 	}
 	// If upnp is enabled then update the gateway/router with the address
 	// TODO - check if this implementation for dualstack is correct
@@ -309,7 +311,7 @@ func (sm *Manager) upnpMap(ctx context.Context, s *services.Instance) {
 	// Reset Gateway IPs to remove stale addresses
 	s.UpnpGatewayIPs = make([]string, 0)
 
-	for _, vip := range services.FetchServiceAddresses(s.ServiceSnapshot) {
+	for _, vip := range instance.FetchServiceAddresses(s.ServiceSnapshot) {
 		for _, port := range s.ServiceSnapshot.Spec.Ports {
 			for _, gw := range gateways {
 				log.Info("[UPNP] Adding map", "vip", vip, "port", port.Port, "service", s.ServiceSnapshot.Name, "gateway", gw.WANIPv6FirewallControlClient.Location)
@@ -352,7 +354,7 @@ func (sm *Manager) upnpMap(ctx context.Context, s *services.Instance) {
 	s.UpnpGatewayIPs = slices.Compact(s.UpnpGatewayIPs)
 }
 
-func (sm *Manager) updateStatus(i *services.Instance) error {
+func (p *Processor) updateStatus(i *instance.Instance) error {
 	// let's retry status update every 10ms for 30s
 	retryConfig := wait.Backoff{
 		Steps:    3000,
@@ -364,7 +366,7 @@ func (sm *Manager) updateStatus(i *services.Instance) error {
 	err := retry.OnError(retryConfig, func(error) bool { return true }, func() error {
 		// Retrieve the latest version of Deployment before attempting update
 		// RetryOnConflict uses exponential backoff to avoid exhausting the apiserver
-		currentService, err := sm.clientSet.CoreV1().Services(i.ServiceSnapshot.Namespace).Get(context.TODO(), i.ServiceSnapshot.Name, metav1.GetOptions{})
+		currentService, err := p.clientSet.CoreV1().Services(i.ServiceSnapshot.Namespace).Get(context.TODO(), i.ServiceSnapshot.Name, metav1.GetOptions{})
 		if err != nil {
 			return err
 		}
@@ -375,9 +377,9 @@ func (sm *Manager) updateStatus(i *services.Instance) error {
 		}
 
 		// If we're using ARP then we can only broadcast the VIP from one place, add an annotation to the service
-		if sm.config.EnableARP {
+		if p.config.EnableARP {
 			// Add the current host
-			currentServiceCopy.Annotations[kubevip.VipHost] = sm.config.NodeName
+			currentServiceCopy.Annotations[kubevip.VipHost] = p.config.NodeName
 		}
 		if i.DhcpInterfaceHwaddr != "" || i.DhcpInterfaceIP != "" {
 			currentServiceCopy.Annotations[kubevip.HwAddrKey] = i.DhcpInterfaceHwaddr
@@ -390,7 +392,7 @@ func (sm *Manager) updateStatus(i *services.Instance) error {
 		}
 
 		if !cmp.Equal(currentService, currentServiceCopy) {
-			currentService, err = sm.clientSet.CoreV1().Services(currentServiceCopy.Namespace).Update(context.TODO(), currentServiceCopy, metav1.UpdateOptions{})
+			currentService, err = p.clientSet.CoreV1().Services(currentServiceCopy.Namespace).Update(context.TODO(), currentServiceCopy, metav1.UpdateOptions{})
 			if err != nil {
 				log.Error("updating Spec", "service", i.ServiceSnapshot.Name, "err", err)
 				return err
@@ -409,7 +411,7 @@ func (sm *Manager) updateStatus(i *services.Instance) error {
 
 		for _, c := range i.VipConfigs {
 			if !vip.IsIP(c.VIP) {
-				ips, err := vip.LookupHost(c.VIP, sm.config.DNSMode)
+				ips, err := vip.LookupHost(c.VIP, p.config.DNSMode)
 				if err != nil {
 					return err
 				}
@@ -439,7 +441,7 @@ func (sm *Manager) updateStatus(i *services.Instance) error {
 		}
 		if !cmp.Equal(currentService.Status.LoadBalancer.Ingress, ingresses) {
 			currentService.Status.LoadBalancer.Ingress = ingresses
-			_, err = sm.clientSet.CoreV1().Services(currentService.Namespace).UpdateStatus(context.TODO(), currentService, metav1.UpdateOptions{})
+			_, err = p.clientSet.CoreV1().Services(currentService.Namespace).UpdateStatus(context.TODO(), currentService, metav1.UpdateOptions{})
 			if err != nil {
 				log.Error("updating Service", "namespace", i.ServiceSnapshot.Namespace, "name", i.ServiceSnapshot.Name, "err", err)
 				return err
@@ -453,4 +455,20 @@ func (sm *Manager) updateStatus(i *services.Instance) error {
 
 func isUPNPEnabled(s *v1.Service) bool {
 	return metav1.HasAnnotation(s.ObjectMeta, kubevip.UpnpEnabled) && s.Annotations[kubevip.UpnpEnabled] == "true"
+}
+
+// Refresh UPNP Port Forwards for all Service Instances registered in the processor
+func (p *Processor) RefreshUPNPForwards() {
+	log.Info("Starting UPNP Port Refresher")
+	for {
+		time.Sleep(300 * time.Second)
+
+		log.Info("[UPNP] Refreshing Instances", "number of instances", len(p.ServiceInstances))
+		for i := range p.ServiceInstances {
+			p.upnpMap(context.TODO(), p.ServiceInstances[i])
+			if err := p.updateStatus(p.ServiceInstances[i]); err != nil {
+				log.Warn("[UPNP] Error updating service", "ip", p.ServiceInstances[i].ServiceSnapshot.Name, "err", err)
+			}
+		}
+	}
 }

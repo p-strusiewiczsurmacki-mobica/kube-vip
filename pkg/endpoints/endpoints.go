@@ -10,8 +10,9 @@ import (
 
 	"github.com/kube-vip/kube-vip/pkg/bgp"
 	"github.com/kube-vip/kube-vip/pkg/endpoints/providers"
+	"github.com/kube-vip/kube-vip/pkg/instance"
 	"github.com/kube-vip/kube-vip/pkg/kubevip"
-	"github.com/kube-vip/kube-vip/pkg/services"
+
 	v1 "k8s.io/api/core/v1"
 	discoveryv1 "k8s.io/api/discovery/v1"
 	"k8s.io/apimachinery/pkg/types"
@@ -23,12 +24,12 @@ type Processor struct {
 	provider              providers.Provider
 	bgpServer             *bgp.Server
 	worker                endpointWorker
-	instances             *[]*services.Instance
+	instances             *[]*instance.Instance
 	configuredLocalRoutes *sync.Map
 }
 
 func NewEndpointProcessor(config *kubevip.Config, provider providers.Provider, bgpServer *bgp.Server,
-	instances *[]*services.Instance, configuredLocalRoutes *sync.Map) *Processor {
+	instances *[]*instance.Instance, configuredLocalRoutes *sync.Map) *Processor {
 	return &Processor{
 		config:                config,
 		provider:              provider,
@@ -77,7 +78,7 @@ func (p *Processor) AddOrModify(ctx context.Context, event watch.Event, cancel c
 			go startLeaderElection(ctx, leaderElectionActive, service, serviceFunc)
 		}
 
-		isRouteConfigured, err := isRouteConfigured(service.UID, p.configuredLocalRoutes)
+		isRouteConfigured, err := IsRouteConfigured(service.UID, p.configuredLocalRoutes)
 		if err != nil {
 			return false, fmt.Errorf("[%s] error while checking if route is configured: %w", p.provider.GetLabel(), err)
 		}
@@ -169,7 +170,7 @@ func startLeaderElection(ctx context.Context, leaderElectionActive *bool, servic
 	}
 }
 
-func isRouteConfigured(serviceUID types.UID, configuredLocalRoutes *sync.Map) (bool, error) {
+func IsRouteConfigured(serviceUID types.UID, configuredLocalRoutes *sync.Map) (bool, error) {
 	isConfigured := false
 	value, ok := configuredLocalRoutes.Load(string(serviceUID))
 	if ok {

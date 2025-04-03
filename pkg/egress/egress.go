@@ -1,4 +1,4 @@
-package services
+package egress
 
 import (
 	"fmt"
@@ -9,7 +9,7 @@ import (
 	"github.com/kube-vip/kube-vip/pkg/vip"
 )
 
-func TeardownEgress(podIP, vipIP, namespace string, annotations map[string]string, useNftables bool) error {
+func Teardown(podIP, vipIP, namespace string, annotations map[string]string, useNftables bool) error {
 	// Look up the destination ports from the annotations on the service
 	destinationPorts := annotations[kubevip.EgressDestinationPorts]
 	deniedNetworks := annotations[kubevip.EgressDeniedNetworks]

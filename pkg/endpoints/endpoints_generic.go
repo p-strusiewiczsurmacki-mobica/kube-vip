@@ -7,9 +7,10 @@ import (
 	"sync"
 
 	"github.com/kube-vip/kube-vip/pkg/bgp"
+	"github.com/kube-vip/kube-vip/pkg/egress"
 	"github.com/kube-vip/kube-vip/pkg/endpoints/providers"
+	"github.com/kube-vip/kube-vip/pkg/instance"
 	"github.com/kube-vip/kube-vip/pkg/kubevip"
-	"github.com/kube-vip/kube-vip/pkg/services"
 	v1 "k8s.io/api/core/v1"
 )
 
@@ -22,7 +23,7 @@ type endpointWorker interface {
 	setInstanceEndpointsStatus(service *v1.Service, state bool) error
 }
 
-func newEndpointWorker(config *kubevip.Config, provider providers.Provider, bgpServer *bgp.Server, instances *[]*services.Instance, configuredLocalRoutes *sync.Map) endpointWorker {
+func newEndpointWorker(config *kubevip.Config, provider providers.Provider, bgpServer *bgp.Server, instances *[]*instance.Instance, configuredLocalRoutes *sync.Map) endpointWorker {
 	generic := newGeneric(config, provider, instances, configuredLocalRoutes)
 
 	if config.EnableRoutingTable {
@@ -38,11 +39,11 @@ func newEndpointWorker(config *kubevip.Config, provider providers.Provider, bgpS
 type generic struct {
 	config                *kubevip.Config
 	provider              providers.Provider
-	instances             *[]*services.Instance
+	instances             *[]*instance.Instance
 	configuredLocalRoutes *sync.Map
 }
 
-func newGeneric(config *kubevip.Config, provider providers.Provider, instances *[]*services.Instance, configuredLocalRoutes *sync.Map) generic {
+func newGeneric(config *kubevip.Config, provider providers.Provider, instances *[]*instance.Instance, configuredLocalRoutes *sync.Map) generic {
 	return generic{
 		config:                config,
 		provider:              provider,
@@ -62,7 +63,7 @@ func (g *generic) clear(lastKnownGoodEndpoint *string, service *v1.Service, canc
 func (g *generic) clearEgress(lastKnownGoodEndpoint *string, service *v1.Service, cancel context.CancelFunc, leaderElectionActive *bool) {
 	if *lastKnownGoodEndpoint != "" {
 		log.Warn("existing  endpoint has been removed, no remaining endpoints for leaderElection", "provider", g.provider.GetLabel(), "endpoint", lastKnownGoodEndpoint)
-		if err := services.TeardownEgress(*lastKnownGoodEndpoint, service.Spec.LoadBalancerIP, service.Namespace, service.Annotations, g.config.EgressWithNftables); err != nil {
+		if err := egress.Teardown(*lastKnownGoodEndpoint, service.Spec.LoadBalancerIP, service.Namespace, service.Annotations, g.config.EgressWithNftables); err != nil {
 			log.Error("error removing redundant egress rules", "err", err)
 		}
 
