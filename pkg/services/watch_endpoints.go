@@ -1,4 +1,4 @@
-package manager
+package services
 
 import (
 	"context"
@@ -13,7 +13,7 @@ import (
 	"k8s.io/apimachinery/pkg/watch"
 )
 
-func (sm *Manager) watchEndpoint(ctx context.Context, id string, service *v1.Service, provider providers.Provider) error {
+func (sm *Processor) watchEndpoint(ctx context.Context, id string, service *v1.Service, provider providers.Provider) error {
 	log.Info("watching", "provider", provider.GetLabel(), "service_name", service.Name, "namespace", service.Namespace)
 	// Use a restartable watcher, as this should help in the event of etcd or timeout issues
 	leaderContext, cancel := context.WithCancel(ctx)

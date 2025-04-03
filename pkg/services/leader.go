@@ -1,0 +1,89 @@
+package services
+
+import (
+	"context"
+	"fmt"
+	"sync"
+	"time"
+
+	log "log/slog"
+
+	v1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/tools/leaderelection"
+	"k8s.io/client-go/tools/leaderelection/resourcelock"
+)
+
+// The startServicesWatchForLeaderElection function will start a services watcher, the
+func (sm *Processor) StartServicesLeaderElection(ctx context.Context, service *v1.Service) error {
+	serviceLease := fmt.Sprintf("kubevip-%s", service.Name)
+	log.Info("new leader election", "service", service.Name, "namespace", service.Namespace, "lock_name", serviceLease, "host_id", sm.config.NodeName)
+	// we use the Lease lock type since edits to Leases are less common
+	// and fewer objects in the cluster watch "all Leases".
+	lock := &resourcelock.LeaseLock{
+		LeaseMeta: metav1.ObjectMeta{
+			Name:      serviceLease,
+			Namespace: service.Namespace,
+		},
+		Client: sm.clientSet.CoordinationV1(),
+		LockConfig: resourcelock.ResourceLockConfig{
+			Identity: sm.config.NodeName,
+		},
+	}
+	childCtx, childCancel := context.WithCancel(ctx)
+	defer childCancel()
+
+	if _, ok := sm.svcLocks[serviceLease]; !ok {
+		sm.svcLocks[serviceLease] = new(sync.Mutex)
+	}
+
+	sm.svcLocks[serviceLease].Lock()
+	defer sm.svcLocks[serviceLease].Unlock()
+
+	sm.activeService[string(service.UID)] = true
+	// start the leader election code loop
+	leaderelection.RunOrDie(childCtx, leaderelection.LeaderElectionConfig{
+		Lock: lock,
+		// IMPORTANT: you MUST ensure that any code you have that
+		// is protected by the lease must terminate **before**
+		// you call cancel. Otherwise, you could have a background
+		// loop still running and another process could
+		// get elected before your background loop finished, violating
+		// the stated goal of the lease.
+		ReleaseOnCancel: true,
+		LeaseDuration:   time.Duration(sm.config.LeaseDuration) * time.Second,
+		RenewDeadline:   time.Duration(sm.config.RenewDeadline) * time.Second,
+		RetryPeriod:     time.Duration(sm.config.RetryPeriod) * time.Second,
+		Callbacks: leaderelection.LeaderCallbacks{
+			OnStartedLeading: func(ctx context.Context) {
+				// Mark this service as active (as we've started leading)
+				// we run this in background as it's blocking
+				if err := sm.syncServices(ctx, service); err != nil {
+					log.Error("service sync", "err", err)
+					childCancel()
+				}
+			},
+			OnStoppedLeading: func() {
+				// we can do cleanup here
+				log.Info("leadership lost", "service", service.Name, "leader", sm.config.NodeName)
+				if sm.activeService[string(service.UID)] {
+					if err := sm.deleteService(service.UID); err != nil {
+						log.Error("service deletion", "err", err)
+					}
+				}
+				// Mark this service is inactive
+				sm.activeService[string(service.UID)] = false
+			},
+			OnNewLeader: func(identity string) {
+				// we're notified when new leader elected
+				if identity == sm.config.NodeName {
+					// I just got the lock
+					return
+				}
+				log.Info("new leader", "leader", identity)
+			},
+		},
+	})
+	log.Info("stopping leader election", "service", service.Name)
+	return nil
+}

@@ -1,4 +1,4 @@
-package manager
+package services
 
 import (
 	"context"
@@ -17,19 +17,20 @@ import (
 	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/client-go/util/retry"
 
+	"github.com/kube-vip/kube-vip/pkg/egress"
 	"github.com/kube-vip/kube-vip/pkg/endpoints/providers"
+	"github.com/kube-vip/kube-vip/pkg/instance"
 	"github.com/kube-vip/kube-vip/pkg/kubevip"
-	"github.com/kube-vip/kube-vip/pkg/services"
 	"github.com/kube-vip/kube-vip/pkg/upnp"
 	"github.com/kube-vip/kube-vip/pkg/vip"
 )
 
-func (sm *Manager) syncServices(ctx context.Context, svc *v1.Service) error {
+func (sm *Processor) syncServices(ctx context.Context, svc *v1.Service) error {
 	log.Debug("[STARTING] Service Sync")
 
 	// Iterate through the synchronising services
 	foundInstance := false
-	newServiceAddresses := services.FetchServiceAddresses(svc)
+	newServiceAddresses := instance.FetchServiceAddresses(svc)
 	newServiceUID := svc.UID
 
 	ingressIPs := []string{}
@@ -87,10 +88,10 @@ func comparePortsAndPortStatuses(svc *v1.Service) bool {
 	return true
 }
 
-func (sm *Manager) addService(ctx context.Context, svc *v1.Service) error {
+func (sm *Processor) addService(ctx context.Context, svc *v1.Service) error {
 	startTime := time.Now()
 
-	newService, err := services.NewInstance(svc, sm.config)
+	newService, err := instance.NewInstance(svc, sm.config)
 	if err != nil {
 		return err
 	}
@@ -126,7 +127,7 @@ func (sm *Manager) addService(ctx context.Context, svc *v1.Service) error {
 		}
 	}
 
-	serviceIPs := services.FetchServiceAddresses(svc)
+	serviceIPs := instance.FetchServiceAddresses(svc)
 	// Check if we need to flush any conntrack connections (due to some dangling conntrack connections)
 	if svc.Annotations[kubevip.FlushContrack] == "true" {
 
@@ -204,13 +205,13 @@ func (sm *Manager) addService(ctx context.Context, svc *v1.Service) error {
 	return nil
 }
 
-func (sm *Manager) deleteService(uid types.UID) error {
+func (sm *Processor) deleteService(uid types.UID) error {
 	// protect multiple calls
 	sm.mutex.Lock()
 	defer sm.mutex.Unlock()
 
-	var updatedInstances []*services.Instance
-	var serviceInstance *services.Instance
+	var updatedInstances []*instance.Instance
+	var serviceInstance *instance.Instance
 	found := false
 	for x := range sm.serviceInstances {
 		log.Debug("service lookup", "target UID", uid, "found UID ", sm.serviceInstances[x].ServiceSnapshot.UID)
@@ -234,11 +235,11 @@ func (sm *Manager) deleteService(uid types.UID) error {
 	shared := false
 	vipSet := make(map[string]interface{})
 	for x := range updatedInstances {
-		for _, vip := range services.FetchServiceAddresses(updatedInstances[x].ServiceSnapshot) { //updatedInstances[x].ServiceSnapshot.Spec.LoadBalancerIP {
+		for _, vip := range instance.FetchServiceAddresses(updatedInstances[x].ServiceSnapshot) { //updatedInstances[x].ServiceSnapshot.Spec.LoadBalancerIP {
 			vipSet[vip] = nil
 		}
 	}
-	for _, vip := range services.FetchServiceAddresses(serviceInstance.ServiceSnapshot) {
+	for _, vip := range instance.FetchServiceAddresses(serviceInstance.ServiceSnapshot) {
 		if _, found := vipSet[vip]; found {
 			shared = true
 		}
@@ -275,7 +276,7 @@ func (sm *Manager) deleteService(uid types.UID) error {
 		if serviceInstance.ServiceSnapshot.Annotations[kubevip.Egress] == "true" {
 			if serviceInstance.ServiceSnapshot.Annotations[kubevip.ActiveEndpoint] != "" {
 				log.Info("egress re-write enabled", "service", serviceInstance.ServiceSnapshot.Name)
-				err := services.TeardownEgress(serviceInstance.ServiceSnapshot.Annotations[kubevip.ActiveEndpoint], serviceInstance.ServiceSnapshot.Spec.LoadBalancerIP, serviceInstance.ServiceSnapshot.Namespace, serviceInstance.ServiceSnapshot.Annotations, sm.config.EgressWithNftables)
+				err := egress.Teardown(serviceInstance.ServiceSnapshot.Annotations[kubevip.ActiveEndpoint], serviceInstance.ServiceSnapshot.Spec.LoadBalancerIP, serviceInstance.ServiceSnapshot.Namespace, serviceInstance.ServiceSnapshot.Annotations, sm.config.EgressWithNftables)
 				if err != nil {
 					log.Error("egress teardown", "err", err)
 				}
@@ -293,7 +294,7 @@ func (sm *Manager) deleteService(uid types.UID) error {
 
 // Set up UPNP forwards for a service
 // We first try to use the more modern Pinhole API introduced in UPNPv2 and fall back to UPNPv2 Port Forwarding if no forward was successful
-func (sm *Manager) upnpMap(ctx context.Context, s *services.Instance) {
+func (sm *Processor) upnpMap(ctx context.Context, s *instance.Instance) {
 	if !isUPNPEnabled(s.ServiceSnapshot) {
 		// Skip services missing the annotation
 		return
@@ -309,7 +310,7 @@ func (sm *Manager) upnpMap(ctx context.Context, s *services.Instance) {
 	// Reset Gateway IPs to remove stale addresses
 	s.UpnpGatewayIPs = make([]string, 0)
 
-	for _, vip := range services.FetchServiceAddresses(s.ServiceSnapshot) {
+	for _, vip := range instance.FetchServiceAddresses(s.ServiceSnapshot) {
 		for _, port := range s.ServiceSnapshot.Spec.Ports {
 			for _, gw := range gateways {
 				log.Info("[UPNP] Adding map", "vip", vip, "port", port.Port, "service", s.ServiceSnapshot.Name, "gateway", gw.WANIPv6FirewallControlClient.Location)
@@ -352,7 +353,7 @@ func (sm *Manager) upnpMap(ctx context.Context, s *services.Instance) {
 	s.UpnpGatewayIPs = slices.Compact(s.UpnpGatewayIPs)
 }
 
-func (sm *Manager) updateStatus(i *services.Instance) error {
+func (sm *Processor) updateStatus(i *instance.Instance) error {
 	// let's retry status update every 10ms for 30s
 	retryConfig := wait.Backoff{
 		Steps:    3000,
