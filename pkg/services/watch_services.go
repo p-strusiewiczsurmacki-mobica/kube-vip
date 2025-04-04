@@ -75,7 +75,7 @@ func (p *Processor) ServicesWatcher(ctx context.Context, serviceFunc func(contex
 		// We need to inspect the event and get ResourceVersion out of it
 		switch event.Type {
 		case watch.Added, watch.Modified:
-			restart, err := p.AddOrModify(ctx, event)
+			restart, err := p.AddOrModify(ctx, event, serviceFunc)
 			if err != nil {
 				return fmt.Errorf("add/modify service error: %w", err)
 			}

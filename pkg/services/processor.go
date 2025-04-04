@@ -63,7 +63,7 @@ type Processor struct {
 	CountServiceWatchEvent *prometheus.CounterVec
 }
 
-func NewServicesProcessor(config *kubevip.Config, bgpServer *bgp.Server, serviceFunc func(context.Context, *v1.Service) error,
+func NewServicesProcessor(config *kubevip.Config, bgpServer *bgp.Server,
 	clientSet *kubernetes.Clientset, rwClientSet *kubernetes.Clientset, shutdownChan chan struct{}) *Processor {
 	lbClassFilterFunc := lbClassFilter
 	if config.LoadBalancerClassLegacyHandling {
@@ -78,7 +78,6 @@ func NewServicesProcessor(config *kubevip.Config, bgpServer *bgp.Server, service
 		watchedService:                  make(map[string]bool),
 		ServiceInstances:                []*instance.Instance{},
 		bgpServer:                       bgpServer,
-		serviceFunc:                     serviceFunc,
 		clientSet:                       clientSet,
 		rwClientSet:                     rwClientSet,
 		shutdownChan:                    shutdownChan,
@@ -92,7 +91,7 @@ func NewServicesProcessor(config *kubevip.Config, bgpServer *bgp.Server, service
 	}
 }
 
-func (p *Processor) AddOrModify(ctx context.Context, event watch.Event) (bool, error) {
+func (p *Processor) AddOrModify(ctx context.Context, event watch.Event, serviceFunc func(context.Context, *v1.Service) error) (bool, error) {
 
 	// log.Debugf("Endpoints for service [%s] have been Created or modified", s.service.ServiceName)
 	svc, ok := event.Object.(*v1.Service)
@@ -207,7 +206,7 @@ func (p *Processor) AddOrModify(ctx context.Context, event watch.Event) (bool, e
 
 					if (p.config.EnableRoutingTable || p.config.EnableBGP) && (!p.config.EnableLeaderElection && !p.config.EnableServicesElection) {
 						go func() {
-							err := p.serviceFunc(p.activeServiceLoadBalancer[string(svc.UID)], svc)
+							err := serviceFunc(p.activeServiceLoadBalancer[string(svc.UID)], svc)
 							if err != nil {
 								log.Error(err.Error())
 							}
@@ -233,7 +232,7 @@ func (p *Processor) AddOrModify(ctx context.Context, event watch.Event) (bool, e
 				}()
 
 				go func() {
-					err := p.serviceFunc(p.activeServiceLoadBalancer[string(svc.UID)], svc)
+					err := serviceFunc(p.activeServiceLoadBalancer[string(svc.UID)], svc)
 					if err != nil {
 						log.Error(err.Error())
 					}
@@ -248,7 +247,7 @@ func (p *Processor) AddOrModify(ctx context.Context, event watch.Event) (bool, e
 							return
 						default:
 							log.Info("(svcs) restartable service watcher starting", "uid", svc.UID)
-							err := p.serviceFunc(p.activeServiceLoadBalancer[string(svc.UID)], svc)
+							err := serviceFunc(p.activeServiceLoadBalancer[string(svc.UID)], svc)
 
 							if err != nil {
 								log.Error(err.Error())
@@ -260,7 +259,7 @@ func (p *Processor) AddOrModify(ctx context.Context, event watch.Event) (bool, e
 			}
 		} else {
 			// Increment the waitGroup before the service Func is called (Done is completed in there)
-			err := p.serviceFunc(p.activeServiceLoadBalancer[string(svc.UID)], svc)
+			err := serviceFunc(p.activeServiceLoadBalancer[string(svc.UID)], svc)
 			if err != nil {
 				log.Error(err.Error())
 			}

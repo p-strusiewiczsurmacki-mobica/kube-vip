@@ -151,29 +151,36 @@ func New(configMap string, config *kubevip.Config) (*Manager, error) {
 	// 	}
 	// }
 
+	var bgpServer *bgp.Server
+
+	// listen for interrupts or the Linux SIGTERM signal and cancel
+	// our context, which the leader election code will observe and
+	// step down
+	signalChan := make(chan os.Signal, 1)
+	// Add Notification for Userland interrupt
+	signal.Notify(signalChan, syscall.SIGINT)
+
+	// Add Notification for SIGTERM (sent from Kubernetes)
+	signal.Notify(signalChan, syscall.SIGTERM)
+
+	// All watchers and other goroutines should have an additional goroutine that blocks on this, to shut things down
+	shutdownChan := make(chan struct{})
+
+	svcProcessor := services.NewServicesProcessor(config, bgpServer, clientset, rwClientSet, shutdownChan)
+
 	return &Manager{
-		clientSet:   clientset,
-		rwClientSet: rwClientSet,
-		configMap:   configMap,
-		config:      config,
+		clientSet:    clientset,
+		rwClientSet:  rwClientSet,
+		configMap:    configMap,
+		config:       config,
+		signalChan:   signalChan,
+		shutdownChan: shutdownChan,
+		svcProcessor: svcProcessor,
 	}, nil
 }
 
 // Start will begin the Manager, which will start services and watch the configmap
 func (sm *Manager) Start() error {
-	// listen for interrupts or the Linux SIGTERM signal and cancel
-	// our context, which the leader election code will observe and
-	// step down
-	sm.signalChan = make(chan os.Signal, 1)
-	// Add Notification for Userland interrupt
-	signal.Notify(sm.signalChan, syscall.SIGINT)
-
-	// Add Notification for SIGTERM (sent from Kubernetes)
-	signal.Notify(sm.signalChan, syscall.SIGTERM)
-
-	// All watchers and other goroutines should have an additional goroutine that blocks on this, to shut things down
-	sm.shutdownChan = make(chan struct{})
-
 	// HealthCheck
 	if sm.config.HealthCheckPort != 0 {
 		if sm.config.HealthCheckPort < 1024 {
