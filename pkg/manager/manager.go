@@ -9,20 +9,17 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
-	"sync"
 	"syscall"
 	"time"
 
 	log "log/slog"
 
 	"github.com/kube-vip/kube-vip/pkg/bgp"
-	"github.com/kube-vip/kube-vip/pkg/instance"
 	"github.com/kube-vip/kube-vip/pkg/k8s"
 	"github.com/kube-vip/kube-vip/pkg/kubevip"
-	"github.com/kube-vip/kube-vip/pkg/trafficmirror"
+	"github.com/kube-vip/kube-vip/pkg/services"
 	"github.com/kube-vip/kube-vip/pkg/upnp"
 	"github.com/kube-vip/kube-vip/pkg/utils"
-	"github.com/prometheus/client_golang/prometheus"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 )
@@ -39,11 +36,6 @@ type Manager struct {
 	// Manager services
 	// service bool
 
-	// Keeps track of all running instances
-	serviceInstances []*instance.Instance
-
-	// UPNP functionality
-	upnp bool
 	// BGP Manager, this is a singleton that manages all BGP advertisements
 	bgpServer *bgp.Server
 
@@ -53,16 +45,7 @@ type Manager struct {
 	// This channel is used to signal a shutdown
 	shutdownChan chan struct{}
 
-	// This is a prometheus counter used to count the number of events received
-	// from the service watcher
-	countServiceWatchEvent *prometheus.CounterVec
-
-	// This is a prometheus gauge indicating the state of the sessions.
-	// 1 means "ESTABLISHED", 0 means "NOT ESTABLISHED"
-	bgpSessionInfoGauge *prometheus.GaugeVec
-
-	// This mutex is to protect calls from various goroutines
-	mutex sync.Mutex
+	svcProcessor *services.Processor
 }
 
 // New will create a new managing object
@@ -173,18 +156,6 @@ func New(configMap string, config *kubevip.Config) (*Manager, error) {
 		rwClientSet: rwClientSet,
 		configMap:   configMap,
 		config:      config,
-		countServiceWatchEvent: prometheus.NewCounterVec(prometheus.CounterOpts{
-			Namespace: "kube_vip",
-			Subsystem: "manager",
-			Name:      "all_services_events",
-			Help:      "Count all events fired by the service watcher categorised by event type",
-		}, []string{"type"}),
-		bgpSessionInfoGauge: prometheus.NewGaugeVec(prometheus.GaugeOpts{
-			Namespace: "kube_vip",
-			Subsystem: "manager",
-			Name:      "bgp_session_info",
-			Help:      "Display state of session by setting metric for label value with current state to 1",
-		}, []string{"state", "peer"}),
 	}, nil
 }
 
@@ -241,12 +212,12 @@ func (sm *Manager) Start() error {
 		upnpEnabled, _ := strconv.ParseBool(os.Getenv("enableUPNP"))
 
 		if upnpEnabled {
-			sm.upnp = true
+			sm.svcProcessor.UPNP = true
 			clients := upnp.GetConnectionClients(context.TODO())
 			if len(clients) == 0 {
 				log.Error("Error Enabling UPNP. No Clients found")
 				// Set the struct to false so nothing should use it in future
-				sm.upnp = false
+				sm.svcProcessor.UPNP = false
 			} else {
 				for _, c := range clients {
 					ip, err := c.GetExternalIPAddress()
@@ -259,7 +230,7 @@ func (sm *Manager) Start() error {
 			}
 		}
 		// TODO: It would be nice to run the UPNP refresh only on the leader.
-		go sm.refreshUPNPForwards()
+		go sm.svcProcessor.RefreshUPNPForwards()
 	}
 
 	// If ARP is enabled then we start a LeaderElection that will use ARP to advertise VIPs
@@ -303,54 +274,4 @@ func (sm *Manager) parseAnnotations() error {
 		return err
 	}
 	return nil
-}
-
-func (sm *Manager) serviceInterface() string {
-	svcIf := sm.config.Interface
-	if sm.config.ServicesInterface != "" {
-		svcIf = sm.config.ServicesInterface
-	}
-	return svcIf
-}
-
-func (sm *Manager) startTrafficMirroringIfEnabled() error {
-	if sm.config.MirrorDestInterface != "" {
-		svcIf := sm.serviceInterface()
-		log.Info("mirroring traffic", "src", svcIf, "dest", sm.config.MirrorDestInterface)
-		if err := trafficmirror.MirrorTrafficFromNIC(svcIf, sm.config.MirrorDestInterface); err != nil {
-			return err
-		}
-	} else {
-		log.Debug("skip starting traffic mirroring since it's not enabled.")
-	}
-	return nil
-}
-
-func (sm *Manager) stopTrafficMirroringIfEnabled() error {
-	if sm.config.MirrorDestInterface != "" {
-		svcIf := sm.serviceInterface()
-		log.Info("clean up qdisc config", "interface", svcIf)
-		if err := trafficmirror.CleanupQDSICFromNIC(svcIf); err != nil {
-			return err
-		}
-	} else {
-		log.Debug("skip stopping traffic mirroring since it's not enabled.")
-	}
-	return nil
-}
-
-// Refresh UPNP Port Forwards for all Service Instances registered in the SM
-func (sm *Manager) refreshUPNPForwards() {
-	log.Info("Starting UPNP Port Refresher")
-	for {
-		time.Sleep(300 * time.Second)
-
-		log.Info("[UPNP] Refreshing Instances", "number of instances", len(sm.serviceInstances))
-		for i := range sm.serviceInstances {
-			sm.upnpMap(context.TODO(), sm.serviceInstances[i])
-			if err := sm.updateStatus(sm.serviceInstances[i]); err != nil {
-				log.Warn("[UPNP] Error updating service", "ip", sm.serviceInstances[i].ServiceSnapshot.Name, "err", err)
-			}
-		}
-	}
 }

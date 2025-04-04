@@ -74,7 +74,7 @@ func (p *Processor) AddOrModify(ctx context.Context, event watch.Event, cancel c
 			go startLeaderElection(ctx, leaderElectionActive, service, serviceFunc)
 		}
 
-		isRouteConfigured, err := isRouteConfigured(service.UID, p.configuredLocalRoutes)
+		isRouteConfigured, err := IsRouteConfigured(service.UID, p.configuredLocalRoutes)
 		if err != nil {
 			return false, fmt.Errorf("[%s] error while checking if route is configured: %w", p.provider.GetLabel(), err)
 		}
@@ -166,7 +166,7 @@ func startLeaderElection(ctx context.Context, leaderElectionActive *bool, servic
 	}
 }
 
-func isRouteConfigured(serviceUID types.UID, configuredLocalRoutes *sync.Map) (bool, error) {
+func IsRouteConfigured(serviceUID types.UID, configuredLocalRoutes *sync.Map) (bool, error) {
 	isConfigured := false
 	value, ok := configuredLocalRoutes.Load(string(serviceUID))
 	if ok {

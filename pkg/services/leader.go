@@ -14,10 +14,39 @@ import (
 	"k8s.io/client-go/tools/leaderelection/resourcelock"
 )
 
+var (
+	svcLocks map[string]*sync.Mutex
+)
+
+func init() {
+	svcLocks = make(map[string]*sync.Mutex)
+}
+
+// The StartServicesWatchForLeaderElection function will start a services watcher, the
+func (p *Processor) StartServicesWatchForLeaderElection(ctx context.Context) error {
+	err := p.ServicesWatcher(ctx, p.StartServicesLeaderElection)
+	if err != nil {
+		return err
+	}
+
+	for _, instance := range p.ServiceInstances {
+		for _, cluster := range instance.Clusters {
+			for i := range cluster.Network {
+				_ = cluster.Network[i].DeleteRoute()
+			}
+			cluster.Stop()
+		}
+	}
+
+	log.Info("Shutting down kube-Vip")
+
+	return nil
+}
+
 // The startServicesWatchForLeaderElection function will start a services watcher, the
-func (sm *Processor) StartServicesLeaderElection(ctx context.Context, service *v1.Service) error {
+func (p *Processor) StartServicesLeaderElection(ctx context.Context, service *v1.Service) error {
 	serviceLease := fmt.Sprintf("kubevip-%s", service.Name)
-	log.Info("new leader election", "service", service.Name, "namespace", service.Namespace, "lock_name", serviceLease, "host_id", sm.config.NodeName)
+	log.Info("new leader election", "service", service.Name, "namespace", service.Namespace, "lock_name", serviceLease, "host_id", p.config.NodeName)
 	// we use the Lease lock type since edits to Leases are less common
 	// and fewer objects in the cluster watch "all Leases".
 	lock := &resourcelock.LeaseLock{
@@ -25,22 +54,22 @@ func (sm *Processor) StartServicesLeaderElection(ctx context.Context, service *v
 			Name:      serviceLease,
 			Namespace: service.Namespace,
 		},
-		Client: sm.clientSet.CoordinationV1(),
+		Client: p.clientSet.CoordinationV1(),
 		LockConfig: resourcelock.ResourceLockConfig{
-			Identity: sm.config.NodeName,
+			Identity: p.config.NodeName,
 		},
 	}
 	childCtx, childCancel := context.WithCancel(ctx)
 	defer childCancel()
 
-	if _, ok := sm.svcLocks[serviceLease]; !ok {
-		sm.svcLocks[serviceLease] = new(sync.Mutex)
+	if _, ok := svcLocks[serviceLease]; !ok {
+		svcLocks[serviceLease] = new(sync.Mutex)
 	}
 
-	sm.svcLocks[serviceLease].Lock()
-	defer sm.svcLocks[serviceLease].Unlock()
+	svcLocks[serviceLease].Lock()
+	defer svcLocks[serviceLease].Unlock()
 
-	sm.activeService[string(service.UID)] = true
+	p.activeService[string(service.UID)] = true
 	// start the leader election code loop
 	leaderelection.RunOrDie(childCtx, leaderelection.LeaderElectionConfig{
 		Lock: lock,
@@ -51,32 +80,32 @@ func (sm *Processor) StartServicesLeaderElection(ctx context.Context, service *v
 		// get elected before your background loop finished, violating
 		// the stated goal of the lease.
 		ReleaseOnCancel: true,
-		LeaseDuration:   time.Duration(sm.config.LeaseDuration) * time.Second,
-		RenewDeadline:   time.Duration(sm.config.RenewDeadline) * time.Second,
-		RetryPeriod:     time.Duration(sm.config.RetryPeriod) * time.Second,
+		LeaseDuration:   time.Duration(p.config.LeaseDuration) * time.Second,
+		RenewDeadline:   time.Duration(p.config.RenewDeadline) * time.Second,
+		RetryPeriod:     time.Duration(p.config.RetryPeriod) * time.Second,
 		Callbacks: leaderelection.LeaderCallbacks{
 			OnStartedLeading: func(ctx context.Context) {
 				// Mark this service as active (as we've started leading)
 				// we run this in background as it's blocking
-				if err := sm.syncServices(ctx, service); err != nil {
+				if err := p.SyncServices(ctx, service); err != nil {
 					log.Error("service sync", "err", err)
 					childCancel()
 				}
 			},
 			OnStoppedLeading: func() {
 				// we can do cleanup here
-				log.Info("leadership lost", "service", service.Name, "leader", sm.config.NodeName)
-				if sm.activeService[string(service.UID)] {
-					if err := sm.deleteService(service.UID); err != nil {
+				log.Info("leadership lost", "service", service.Name, "leader", p.config.NodeName)
+				if p.activeService[string(service.UID)] {
+					if err := p.deleteService(service.UID); err != nil {
 						log.Error("service deletion", "err", err)
 					}
 				}
 				// Mark this service is inactive
-				sm.activeService[string(service.UID)] = false
+				p.activeService[string(service.UID)] = false
 			},
 			OnNewLeader: func(identity string) {
 				// we're notified when new leader elected
-				if identity == sm.config.NodeName {
+				if identity == p.config.NodeName {
 					// I just got the lock
 					return
 				}

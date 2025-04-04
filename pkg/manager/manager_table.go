@@ -92,7 +92,7 @@ func (sm *Manager) startTableMode(id string) error {
 		// a lock based upon that service is created that they will all leaderElection on
 		if sm.config.EnableServicesElection {
 			log.Info("beginning watching services, leaderelection will happen for every service")
-			err = sm.startServicesWatchForLeaderElection(ctx)
+			err = sm.svcProcessor.StartServicesWatchForLeaderElection(ctx)
 			if err != nil {
 				return err
 			}
@@ -126,7 +126,7 @@ func (sm *Manager) startTableMode(id string) error {
 				RetryPeriod:     time.Duration(sm.config.RetryPeriod) * time.Second,
 				Callbacks: leaderelection.LeaderCallbacks{
 					OnStartedLeading: func(ctx context.Context) {
-						err = sm.servicesWatcher(ctx, sm.syncServices)
+						err = sm.svcProcessor.ServicesWatcher(ctx, sm.svcProcessor.SyncServices)
 						if err != nil {
 							log.Error(err.Error())
 							panic("")
@@ -135,11 +135,7 @@ func (sm *Manager) startTableMode(id string) error {
 					OnStoppedLeading: func() {
 						// we can do cleanup here
 						log.Info("leader lost", "id", id)
-						for _, instance := range sm.serviceInstances {
-							for _, cluster := range instance.Clusters {
-								cluster.Stop()
-							}
-						}
+						sm.svcProcessor.Stop()
 
 						log.Error("lost leadership, restarting kube-vip")
 						panic("")
@@ -156,7 +152,7 @@ func (sm *Manager) startTableMode(id string) error {
 			})
 		} else {
 			log.Info("beginning watching services without leader election")
-			err = sm.servicesWatcher(ctx, sm.syncServices)
+			err = sm.svcProcessor.ServicesWatcher(ctx, sm.svcProcessor.SyncServices)
 			if err != nil {
 				log.Error("Cannot watch services", "err", err)
 			}
@@ -177,7 +173,7 @@ func (sm *Manager) cleanRoutes() error {
 		if sm.config.EnableControlPlane {
 			found = (routes[i].Dst.IP.String() == sm.config.Address)
 		} else {
-			for _, instance := range sm.serviceInstances {
+			for _, instance := range sm.svcProcessor.ServiceInstances {
 				for _, cluster := range instance.Clusters {
 					for n := range cluster.Network {
 						r := cluster.Network[n].PrepareRoute()

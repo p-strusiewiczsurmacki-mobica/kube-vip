@@ -8,14 +8,12 @@ import (
 	"sync"
 
 	"github.com/kube-vip/kube-vip/pkg/bgp"
-	"github.com/kube-vip/kube-vip/pkg/egress"
 	"github.com/kube-vip/kube-vip/pkg/endpoints/providers"
 	"github.com/kube-vip/kube-vip/pkg/instance"
 	"github.com/kube-vip/kube-vip/pkg/kubevip"
 	"github.com/kube-vip/kube-vip/pkg/vip"
-	"github.com/vishvananda/netlink"
+	"github.com/prometheus/client_golang/prometheus"
 	v1 "k8s.io/api/core/v1"
-	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/watch"
 	"k8s.io/client-go/kubernetes"
 )
@@ -39,7 +37,7 @@ type Processor struct {
 	watchedService map[string]bool
 
 	// Keeps track of all running instances
-	serviceInstances []*instance.Instance
+	ServiceInstances []*instance.Instance
 
 	mutex sync.Mutex
 
@@ -57,10 +55,16 @@ type Processor struct {
 	shutdownChan chan struct{}
 
 	svcLocks map[string]*sync.Mutex
+
+	UPNP bool
+
+	// This is a prometheus counter used to count the number of events received
+	// from the service watcher
+	CountServiceWatchEvent *prometheus.CounterVec
 }
 
-func NewServicesProcessor(config *kubevip.Config, serviceInstances []*instance.Instance, bgpServer *bgp.Server,
-	serviceFunc func(context.Context, *v1.Service) error, clientSet *kubernetes.Clientset, rwClientSet *kubernetes.Clientset, shutdownChan chan struct{}) *Processor {
+func NewServicesProcessor(config *kubevip.Config, bgpServer *bgp.Server, serviceFunc func(context.Context, *v1.Service) error,
+	clientSet *kubernetes.Clientset, rwClientSet *kubernetes.Clientset, shutdownChan chan struct{}) *Processor {
 	lbClassFilterFunc := lbClassFilter
 	if config.LoadBalancerClassLegacyHandling {
 		lbClassFilterFunc = lbClassFilterLegacy
@@ -72,13 +76,19 @@ func NewServicesProcessor(config *kubevip.Config, serviceInstances []*instance.I
 		activeServiceLoadBalancerCancel: make(map[string]func()),
 		activeService:                   make(map[string]bool),
 		watchedService:                  make(map[string]bool),
-		serviceInstances:                serviceInstances,
+		ServiceInstances:                []*instance.Instance{},
 		bgpServer:                       bgpServer,
 		serviceFunc:                     serviceFunc,
 		clientSet:                       clientSet,
 		rwClientSet:                     rwClientSet,
 		shutdownChan:                    shutdownChan,
 		svcLocks:                        make(map[string]*sync.Mutex),
+		CountServiceWatchEvent: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Namespace: "kube_vip",
+			Subsystem: "manager",
+			Name:      "all_services_events",
+			Help:      "Count all events fired by the service watcher categorised by event type",
+		}, []string{"type"}),
 	}
 }
 
@@ -130,7 +140,7 @@ func (p *Processor) AddOrModify(ctx context.Context, event watch.Event) (bool, e
 		// This service has been modified, but it was also active..
 		if p.activeService[string(svc.UID)] {
 
-			i := instance.FindServiceInstance(svc, p.serviceInstances)
+			i := instance.FindServiceInstance(svc, p.ServiceInstances)
 			if i != nil {
 				originalService := instance.FetchServiceAddresses(i.ServiceSnapshot)
 				newService := instance.FetchServiceAddresses(svc)
@@ -269,127 +279,10 @@ func (p *Processor) filterLBClass(svc *v1.Service) bool {
 	return p.lbClassFilter(svc, p.config)
 }
 
-func lbClassFilterLegacy(svc *v1.Service, config *kubevip.Config) bool {
-	if svc == nil {
-		log.Info("(svcs) service is nil, ignoring")
-		return true
-	}
-	if svc.Spec.LoadBalancerClass != nil {
-		// if this isn't nil then it has been configured, check if it the kube-vip loadBalancer class
-		if *svc.Spec.LoadBalancerClass != config.LoadBalancerClassName {
-			log.Info("(svcs) specified the wrong loadBalancer class", "service name", svc.Name, "lbClass", *svc.Spec.LoadBalancerClass)
-			return true
-		}
-	} else if config.LoadBalancerClassOnly {
-		// if kube-vip is configured to only recognize services with kube-vip's lb class, then ignore the services without any lb class
-		log.Info("(svcs) kube-vip configured to only recognize services with kube-vip's lb class but the service didn't specify any loadBalancer class, ignoring", "service name", svc.Name)
-		return true
-	}
-	return false
-}
-
-func lbClassFilter(svc *v1.Service, config *kubevip.Config) bool {
-	if svc == nil {
-		log.Info("(svcs) service is nil, ignoring")
-		return true
-	}
-	if svc.Spec.LoadBalancerClass == nil && config.LoadBalancerClassName != "" {
-		log.Info("(svcs) no loadBalancer class, ignoring", "service name", svc.Name, "expected lbClass", config.LoadBalancerClassName)
-		return true
-	}
-	if svc.Spec.LoadBalancerClass == nil && config.LoadBalancerClassName == "" {
-		return false
-	}
-	if *svc.Spec.LoadBalancerClass != config.LoadBalancerClassName {
-		log.Info("(svcs) specified wrong loadBalancer class, ignoring", "service name", svc.Name, "wrong lbClass", *svc.Spec.LoadBalancerClass, "expected lbClass", config.LoadBalancerClassName)
-		return true
-	}
-	return false
-}
-
-func (p *Processor) deleteService(uid types.UID) error {
-	// protect multiple calls
-	p.mutex.Lock()
-	defer p.mutex.Unlock()
-
-	var updatedInstances []*instance.Instance
-	var serviceInstance *instance.Instance
-	found := false
-	for x := range p.serviceInstances {
-		log.Debug("service lookup", "target UID", uid, "found UID ", p.serviceInstances[x].ServiceSnapshot.UID)
-		// Add the running services to the new array
-		if p.serviceInstances[x].ServiceSnapshot.UID != uid {
-			updatedInstances = append(updatedInstances, p.serviceInstances[x])
-		} else {
-			// Flip the found when we match
-			found = true
-			serviceInstance = p.serviceInstances[x]
+func (p *Processor) Stop() {
+	for _, instance := range p.ServiceInstances {
+		for _, cluster := range instance.Clusters {
+			cluster.Stop()
 		}
 	}
-	// If we've been through all services and not found the correct one then error
-	if !found {
-		// TODO: - fix UX
-		// return fmt.Errorf("unable to find/stop service [%s]", uid)
-		return nil
-	}
-
-	// Determine if this this VIP is shared with other loadbalancers
-	shared := false
-	vipSet := make(map[string]interface{})
-	for x := range updatedInstances {
-		for _, vip := range instance.FetchServiceAddresses(updatedInstances[x].ServiceSnapshot) { //updatedInstances[x].ServiceSnapshot.Spec.LoadBalancerIP {
-			vipSet[vip] = nil
-		}
-	}
-	for _, vip := range instance.FetchServiceAddresses(serviceInstance.ServiceSnapshot) {
-		if _, found := vipSet[vip]; found {
-			shared = true
-		}
-	}
-	if !shared {
-		for x := range serviceInstance.Clusters {
-			serviceInstance.Clusters[x].Stop()
-		}
-		if serviceInstance.IsDHCP {
-			serviceInstance.DhcpClient.Stop()
-			macvlan, err := netlink.LinkByName(serviceInstance.DhcpInterface)
-			if err != nil {
-				return fmt.Errorf("error finding VIP Interface: %v", err)
-			}
-
-			err = netlink.LinkDel(macvlan)
-			if err != nil {
-				return fmt.Errorf("error deleting DHCP Link : %v", err)
-			}
-		}
-		// TODO: Implement dual-stack loadbalancer support if BGP is enabled
-		for i := range serviceInstance.VipConfigs {
-			if serviceInstance.VipConfigs[i].EnableBGP {
-				cidrVip := fmt.Sprintf("%s/%s", serviceInstance.VipConfigs[i].VIP, serviceInstance.VipConfigs[i].VIPCIDR)
-				err := p.bgpServer.DelHost(cidrVip)
-				if err != nil {
-					return fmt.Errorf("[BGP] error deleting BGP host: %v", err)
-				}
-				log.Debug("[BGP] delete", "host", cidrVip)
-			}
-		}
-
-		// We will need to tear down the egress
-		if serviceInstance.ServiceSnapshot.Annotations[kubevip.Egress] == "true" {
-			if serviceInstance.ServiceSnapshot.Annotations[kubevip.ActiveEndpoint] != "" {
-				log.Info("egress re-write enabled", "service", serviceInstance.ServiceSnapshot.Name)
-				err := egress.Teardown(serviceInstance.ServiceSnapshot.Annotations[kubevip.ActiveEndpoint], serviceInstance.ServiceSnapshot.Spec.LoadBalancerIP, serviceInstance.ServiceSnapshot.Namespace, serviceInstance.ServiceSnapshot.Annotations, p.config.EgressWithNftables)
-				if err != nil {
-					log.Error("egress teardown", "err", err)
-				}
-			}
-		}
-	}
-
-	// Update the service array
-	p.serviceInstances = updatedInstances
-
-	log.Info("Removed instance from manager", "uid", uid, "remaining advertised services", len(p.serviceInstances))
-
-	return nil
 }

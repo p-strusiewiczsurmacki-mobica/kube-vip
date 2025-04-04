@@ -1,4 +1,4 @@
-package manager
+package services
 
 import (
 	"bufio"
@@ -22,7 +22,7 @@ const (
 	defaultServiceCIDR = "10.96.0.0/12"
 )
 
-func (sm *Manager) iptablesCheck() error {
+func (sm *Processor) iptablesCheck() error {
 	file, err := os.Open("/proc/modules")
 	if err != nil {
 		return err
@@ -108,7 +108,7 @@ func checkCIDR(ip, cidr string) (string, error) {
 	return "", nil
 }
 
-func (sm *Manager) configureEgress(vipIP, podIP, namespace string, annotations map[string]string) error {
+func (sm *Processor) configureEgress(vipIP, podIP, namespace string, annotations map[string]string) error {
 	var podCidr, serviceCidr string
 	var autoServiceCIDR, autoPodCIDR string
 	var discoverErr error
@@ -280,7 +280,7 @@ func (sm *Manager) configureEgress(vipIP, podIP, namespace string, annotations m
 	return nil
 }
 
-func (sm *Manager) AutoDiscoverCIDRs() (serviceCIDR, podCIDR string, err error) {
+func (sm *Processor) AutoDiscoverCIDRs() (serviceCIDR, podCIDR string, err error) {
 	log.Debug("Trying to automatically discover Service and Pod CIDRs")
 	options := v1.ListOptions{
 		LabelSelector: "component=kube-controller-manager",
