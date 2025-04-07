@@ -9,7 +9,7 @@ import (
 	log "log/slog"
 
 	"github.com/kube-vip/kube-vip/pkg/cluster"
-	"github.com/kube-vip/kube-vip/pkg/endpoints"
+	"github.com/kube-vip/kube-vip/pkg/endpoints/workers"
 	"github.com/kube-vip/kube-vip/pkg/iptables"
 	"github.com/kube-vip/kube-vip/pkg/vip"
 	"github.com/vishvananda/netlink"
@@ -165,7 +165,7 @@ func (sm *Manager) cleanRoutes() error {
 		if sm.config.EnableControlPlane {
 			found = (routes[i].Dst.IP.String() == sm.config.Address)
 		} else {
-			found = endpoints.CountRouteReferences(&routes[i], &sm.svcProcessor.ServiceInstances) > 0
+			found = workers.CountRouteReferences(&routes[i], &sm.svcProcessor.ServiceInstances) > 0
 		}
 
 		if !found {

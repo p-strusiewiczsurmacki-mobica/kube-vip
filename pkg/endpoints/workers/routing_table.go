@@ -1,4 +1,4 @@
-package endpoints
+package workers
 
 import (
 	"context"
@@ -18,13 +18,13 @@ type RoutingTable struct {
 	generic
 }
 
-func newRoutingTable(generic generic) endpointWorker {
+func newRoutingTable(generic generic) Endpoint {
 	return &RoutingTable{
 		generic: generic,
 	}
 }
 
-func (rt *RoutingTable) processInstance(ctx context.Context, service *v1.Service, leaderElectionActive *bool) error {
+func (rt *RoutingTable) ProcessInstance(ctx context.Context, service *v1.Service, leaderElectionActive *bool) error {
 	instance, err := instance.FindServiceInstanceWithTimeout(ctx, service, *rt.instances)
 	if err != nil {
 		log.Error("error finding instance", "service", service.UID, "provider", rt.provider.GetLabel(), "err", err)
@@ -60,7 +60,7 @@ func (rt *RoutingTable) processInstance(ctx context.Context, service *v1.Service
 	return nil
 }
 
-func (rt *RoutingTable) clear(lastKnownGoodEndpoint *string, service *v1.Service, cancel context.CancelFunc, leaderElectionActive *bool) {
+func (rt *RoutingTable) Clear(lastKnownGoodEndpoint *string, service *v1.Service, cancel context.CancelFunc, leaderElectionActive *bool) {
 	if !rt.config.EnableServicesElection && !rt.config.EnableLeaderElection {
 		// If routing table mode is enabled - routes should be deleted
 		if errs := ClearRoutes(service, rt.instances); len(errs) == 0 {
@@ -75,22 +75,22 @@ func (rt *RoutingTable) clear(lastKnownGoodEndpoint *string, service *v1.Service
 	rt.clearEgress(lastKnownGoodEndpoint, service, cancel, leaderElectionActive)
 }
 
-func (rt *RoutingTable) getEndpoints(service *v1.Service, id string) ([]string, error) {
+func (rt *RoutingTable) GetEndpoints(service *v1.Service, id string) ([]string, error) {
 	return rt.getAllEndpoints(service, id)
 }
 
-func (rt *RoutingTable) removeEgress(service *v1.Service, lastKnownGoodEndpoint *string) {
+func (rt *RoutingTable) RemoveEgress(service *v1.Service, lastKnownGoodEndpoint *string) {
 	if err := egress.Teardown(*lastKnownGoodEndpoint, service.Spec.LoadBalancerIP,
 		service.Namespace, service.Annotations, rt.config.EgressWithNftables); err != nil {
 		log.Warn("removing redundant egress rules", "err", err)
 	}
 }
 
-func (rt *RoutingTable) delete(service *v1.Service, id string) error {
+func (rt *RoutingTable) Delete(service *v1.Service, id string) error {
 	// When no-leader-elecition mode
 	if !rt.config.EnableServicesElection && !rt.config.EnableLeaderElection {
 		// find all existing local endpoints
-		endpoints, err := rt.getEndpoints(service, id)
+		endpoints, err := rt.GetEndpoints(service, id)
 		if err != nil {
 			return fmt.Errorf("[%s] error getting endpoints: %w", rt.provider.GetLabel(), err)
 		}

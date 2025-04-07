@@ -1,4 +1,4 @@
-package endpoints
+package workers
 
 import (
 	"context"
@@ -15,14 +15,14 @@ type BGP struct {
 	bgpServer *bgp.Server
 }
 
-func newBGP(generic generic, bgpServer *bgp.Server) endpointWorker {
+func newBGP(generic generic, bgpServer *bgp.Server) Endpoint {
 	return &BGP{
 		generic:   generic,
 		bgpServer: bgpServer,
 	}
 }
 
-func (b *BGP) processInstance(ctx context.Context, service *v1.Service, leaderElectionActive *bool) error {
+func (b *BGP) ProcessInstance(ctx context.Context, service *v1.Service, leaderElectionActive *bool) error {
 	instance, err := instance.FindServiceInstanceWithTimeout(ctx, service, *b.instances)
 	if err != nil {
 		log.Error("error finding instance", "service", service.UID, "provider", b.provider.GetLabel(), "err", err)
@@ -47,7 +47,7 @@ func (b *BGP) processInstance(ctx context.Context, service *v1.Service, leaderEl
 	return nil
 }
 
-func (b *BGP) clear(lastKnownGoodEndpoint *string, service *v1.Service, cancel context.CancelFunc, leaderElectionActive *bool) {
+func (b *BGP) Clear(lastKnownGoodEndpoint *string, service *v1.Service, cancel context.CancelFunc, leaderElectionActive *bool) {
 	if !b.config.EnableServicesElection && !b.config.EnableLeaderElection {
 		// If BGP mode is enabled - routes should be deleted
 		if instance := instance.FindServiceInstance(service, *b.instances); instance != nil {
@@ -72,15 +72,15 @@ func (b *BGP) clear(lastKnownGoodEndpoint *string, service *v1.Service, cancel c
 	b.clearEgress(lastKnownGoodEndpoint, service, cancel, leaderElectionActive)
 }
 
-func (b *BGP) getEndpoints(service *v1.Service, id string) ([]string, error) {
+func (b *BGP) GetEndpoints(service *v1.Service, id string) ([]string, error) {
 	return b.getAllEndpoints(service, id)
 }
 
-func (b *BGP) delete(service *v1.Service, id string) error {
+func (b *BGP) Delete(service *v1.Service, id string) error {
 	// When no-leader-elecition mode
 	if !b.config.EnableServicesElection && !b.config.EnableLeaderElection {
 		// find all existing local endpoints
-		endpoints, err := b.getEndpoints(service, id)
+		endpoints, err := b.GetEndpoints(service, id)
 		if err != nil {
 			return fmt.Errorf("[%s] error getting endpoints: %w", b.provider.GetLabel(), err)
 		}
@@ -115,6 +115,6 @@ func (b *BGP) ClearBGPHosts(service *v1.Service) {
 	}
 }
 
-func (b *BGP) setInstanceEndpointsStatus(_ *v1.Service, _ bool) error {
+func (b *BGP) SetInstanceEndpointsStatus(_ *v1.Service, _ bool) error {
 	return nil
 }

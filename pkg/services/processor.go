@@ -10,6 +10,7 @@ import (
 	"github.com/kube-vip/kube-vip/pkg/bgp"
 	"github.com/kube-vip/kube-vip/pkg/endpoints"
 	"github.com/kube-vip/kube-vip/pkg/endpoints/providers"
+	"github.com/kube-vip/kube-vip/pkg/endpoints/workers"
 	"github.com/kube-vip/kube-vip/pkg/instance"
 	"github.com/kube-vip/kube-vip/pkg/kubevip"
 	"github.com/kube-vip/kube-vip/pkg/vip"
@@ -292,7 +293,7 @@ func (p *Processor) Delete(event watch.Event) (bool, error) {
 		// If no leader election is enabled, delete routes here
 		if !p.config.EnableLeaderElection && !p.config.EnableServicesElection &&
 			p.config.EnableRoutingTable && isRouteConfigured {
-			if errs := endpoints.ClearRoutes(svc, &p.ServiceInstances); len(errs) == 0 {
+			if errs := workers.ClearRoutes(svc, &p.ServiceInstances); len(errs) == 0 {
 				p.configuredLocalRoutes.Store(string(svc.UID), false)
 			}
 		}
@@ -321,7 +322,7 @@ func (p *Processor) Delete(event watch.Event) (bool, error) {
 				}
 			}
 		} else {
-			endpoints.ClearRoutes(svc, &p.ServiceInstances)
+			workers.ClearRoutes(svc, &p.ServiceInstances)
 		}
 	}
 

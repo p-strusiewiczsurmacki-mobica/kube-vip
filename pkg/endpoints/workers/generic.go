@@ -1,4 +1,4 @@
-package endpoints
+package workers
 
 import (
 	"context"
@@ -14,16 +14,16 @@ import (
 	v1 "k8s.io/api/core/v1"
 )
 
-type endpointWorker interface {
-	processInstance(ctx context.Context, service *v1.Service, leaderElectionActive *bool) error
-	clear(lastKnownGoodEndpoint *string, service *v1.Service, cancel context.CancelFunc, leaderElectionActive *bool)
-	getEndpoints(service *v1.Service, id string) ([]string, error)
-	removeEgress(service *v1.Service, lastKnownGoodEndpoint *string)
-	delete(service *v1.Service, id string) error
-	setInstanceEndpointsStatus(service *v1.Service, state bool) error
+type Endpoint interface {
+	ProcessInstance(ctx context.Context, service *v1.Service, leaderElectionActive *bool) error
+	Clear(lastKnownGoodEndpoint *string, service *v1.Service, cancel context.CancelFunc, leaderElectionActive *bool)
+	GetEndpoints(service *v1.Service, id string) ([]string, error)
+	RemoveEgress(service *v1.Service, lastKnownGoodEndpoint *string)
+	Delete(service *v1.Service, id string) error
+	SetInstanceEndpointsStatus(service *v1.Service, state bool) error
 }
 
-func newEndpointWorker(config *kubevip.Config, provider providers.Provider, bgpServer *bgp.Server, instances *[]*instance.Instance, configuredLocalRoutes *sync.Map) endpointWorker {
+func New(config *kubevip.Config, provider providers.Provider, bgpServer *bgp.Server, instances *[]*instance.Instance, configuredLocalRoutes *sync.Map) Endpoint {
 	generic := newGeneric(config, provider, instances, configuredLocalRoutes)
 
 	if config.EnableRoutingTable {
@@ -52,11 +52,11 @@ func newGeneric(config *kubevip.Config, provider providers.Provider, instances *
 	}
 }
 
-func (g *generic) processInstance(_ context.Context, _ *v1.Service, _ *bool) error {
+func (g *generic) ProcessInstance(_ context.Context, _ *v1.Service, _ *bool) error {
 	return nil
 }
 
-func (g *generic) clear(lastKnownGoodEndpoint *string, service *v1.Service, cancel context.CancelFunc, leaderElectionActive *bool) {
+func (g *generic) Clear(lastKnownGoodEndpoint *string, service *v1.Service, cancel context.CancelFunc, leaderElectionActive *bool) {
 	g.clearEgress(lastKnownGoodEndpoint, service, cancel, leaderElectionActive)
 }
 
@@ -75,7 +75,7 @@ func (g *generic) clearEgress(lastKnownGoodEndpoint *string, service *v1.Service
 	}
 }
 
-func (g *generic) getEndpoints(_ *v1.Service, id string) ([]string, error) {
+func (g *generic) GetEndpoints(_ *v1.Service, id string) ([]string, error) {
 	return g.getLocalEndpoints(id)
 }
 
@@ -108,13 +108,13 @@ func (g *generic) getAllEndpoints(service *v1.Service, id string) ([]string, err
 	return endpoints, nil
 }
 
-func (g *generic) removeEgress(_ *v1.Service, _ *string) {
+func (g *generic) RemoveEgress(_ *v1.Service, _ *string) {
 }
 
-func (g *generic) delete(_ *v1.Service, _ string) error {
+func (g *generic) Delete(_ *v1.Service, _ string) error {
 	return nil
 }
 
-func (g *generic) setInstanceEndpointsStatus(_ *v1.Service, _ bool) error {
+func (g *generic) SetInstanceEndpointsStatus(_ *v1.Service, _ bool) error {
 	return nil
 }
