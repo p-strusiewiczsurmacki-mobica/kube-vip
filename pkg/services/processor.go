@@ -160,7 +160,6 @@ func (p *Processor) AddOrModify(ctx context.Context, event watch.Event, serviceF
 					p.configuredLocalRoutes.Store(string(svc.UID), false)
 				}
 				// in theory this should never fail
-
 			}
 
 		}

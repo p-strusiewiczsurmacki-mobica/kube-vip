@@ -49,11 +49,7 @@ func (p *Processor) SyncServices(ctx context.Context, svc *v1.Service) error {
 			log.Debug("service", "IsDHCP", p.ServiceInstances[x].IsDHCP, "newServiceAddress", newServiceAddress)
 			if p.ServiceInstances[x].ServiceSnapshot.UID == newServiceUID {
 				// If the found instance's DHCP configuration doesn't match the new service, delete it.
-				if (p.ServiceInstances[x].IsDHCP && newServiceAddress != "0.0.0.0") ||
-					(!p.ServiceInstances[x].IsDHCP && newServiceAddress == "0.0.0.0") ||
-					(!p.ServiceInstances[x].IsDHCP && len(svc.Status.LoadBalancer.Ingress) > 0 && !slices.Contains(ingressIPs, newServiceAddress)) ||
-					(len(svc.Status.LoadBalancer.Ingress) > 0 && !comparePortsAndPortStatuses(svc)) ||
-					(p.ServiceInstances[x].IsDHCP && len(svc.Status.LoadBalancer.Ingress) > 0 && !slices.Contains(ingressIPs, p.ServiceInstances[x].DhcpInterfaceIP)) {
+				if shouldDelete(p.ServiceInstances[x], svc, newServiceAddress, ingressIPs) {
 					if err := p.deleteService(newServiceUID); err != nil {
 						return err
 					}
@@ -73,6 +69,14 @@ func (p *Processor) SyncServices(ctx context.Context, svc *v1.Service) error {
 	}
 
 	return nil
+}
+
+func shouldDelete(inst *instance.Instance, svc *v1.Service, newServiceAddress string, ingressIPs []string) bool {
+	return (inst.IsDHCP && newServiceAddress != "0.0.0.0") ||
+		(!inst.IsDHCP && newServiceAddress == "0.0.0.0") ||
+		(!inst.IsDHCP && len(svc.Status.LoadBalancer.Ingress) > 0 && !slices.Contains(ingressIPs, newServiceAddress)) ||
+		(len(svc.Status.LoadBalancer.Ingress) > 0 && !comparePortsAndPortStatuses(svc)) ||
+		(inst.IsDHCP && len(svc.Status.LoadBalancer.Ingress) > 0 && !slices.Contains(ingressIPs, inst.DhcpInterfaceIP))
 }
 
 func comparePortsAndPortStatuses(svc *v1.Service) bool {
