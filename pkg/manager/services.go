@@ -88,7 +88,7 @@ func comparePortsAndPortStatuses(svc *v1.Service) bool {
 func (sm *Manager) addService(ctx context.Context, svc *v1.Service) error {
 	startTime := time.Now()
 
-	newService, err := NewInstance(svc, sm.config, &sm.intfMgr)
+	newService, err := NewInstance(svc, sm.config, sm.intfMgr)
 	if err != nil {
 		return err
 	}

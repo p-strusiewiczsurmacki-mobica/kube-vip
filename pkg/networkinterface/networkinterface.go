@@ -15,6 +15,12 @@ type Link struct {
 	Intf netlink.Link
 }
 
+func NewManager() *Manager {
+	return &Manager{
+		interfaces: make(map[string]*Link),
+	}
+}
+
 func (m *Manager) Get(intf netlink.Link) *Link {
 	if l, ok := m.interfaces[intf.Attrs().Name]; ok {
 		return l

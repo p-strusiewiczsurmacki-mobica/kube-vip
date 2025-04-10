@@ -42,7 +42,7 @@ func (sm *Manager) startARP(id string) error {
 	}()
 
 	if sm.config.EnableControlPlane {
-		cpCluster, err = cluster.InitCluster(sm.config, false, &sm.intfMgr)
+		cpCluster, err = cluster.InitCluster(sm.config, false, sm.intfMgr)
 		if err != nil {
 			return err
 		}

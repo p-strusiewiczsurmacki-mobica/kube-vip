@@ -66,7 +66,7 @@ func (sm *Manager) startTableMode(id string) error {
 	}()
 
 	if sm.config.EnableControlPlane {
-		cpCluster, err = cluster.InitCluster(sm.config, false, &sm.intfMgr)
+		cpCluster, err = cluster.InitCluster(sm.config, false, sm.intfMgr)
 		if err != nil {
 			return fmt.Errorf("cluster initialization error: %w", err)
 		}

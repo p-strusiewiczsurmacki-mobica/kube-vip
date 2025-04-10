@@ -66,7 +66,7 @@ type Manager struct {
 	mutex sync.Mutex
 
 	// This tracks used network interfaces and guards them with mutex for doncurrent changes.
-	intfMgr networkinterface.Manager
+	intfMgr *networkinterface.Manager
 }
 
 // New will create a new managing object
@@ -189,6 +189,7 @@ func New(configMap string, config *kubevip.Config) (*Manager, error) {
 			Name:      "bgp_session_info",
 			Help:      "Display state of session by setting metric for label value with current state to 1",
 		}, []string{"state", "peer"}),
+		intfMgr: networkinterface.NewManager(),
 	}, nil
 }
 
