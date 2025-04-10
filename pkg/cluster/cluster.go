@@ -6,6 +6,7 @@ import (
 	log "log/slog"
 
 	"github.com/kube-vip/kube-vip/pkg/kubevip"
+	"github.com/kube-vip/kube-vip/pkg/networkinterface"
 	"github.com/kube-vip/kube-vip/pkg/vip"
 )
 
@@ -18,13 +19,13 @@ type Cluster struct {
 }
 
 // InitCluster - Will attempt to initialise all of the required settings for the cluster
-func InitCluster(c *kubevip.Config, disableVIP bool) (*Cluster, error) {
+func InitCluster(c *kubevip.Config, disableVIP bool, intfMgr *networkinterface.Manager) (*Cluster, error) {
 	var networks []vip.Network
 	var err error
 
 	if !disableVIP {
 		// Start the Virtual IP Networking configuration
-		networks, err = startNetworking(c)
+		networks, err = startNetworking(c, intfMgr)
 		if err != nil {
 			return nil, err
 		}
@@ -39,7 +40,7 @@ func InitCluster(c *kubevip.Config, disableVIP bool) (*Cluster, error) {
 	return newCluster, nil
 }
 
-func startNetworking(c *kubevip.Config) ([]vip.Network, error) {
+func startNetworking(c *kubevip.Config, intfMgr *networkinterface.Manager) ([]vip.Network, error) {
 	address := c.VIP
 
 	if c.Address != "" {
@@ -51,7 +52,7 @@ func startNetworking(c *kubevip.Config) ([]vip.Network, error) {
 	networks := []vip.Network{}
 	for _, addr := range addresses {
 		network, err := vip.NewConfig(addr, c.Interface, c.LoInterfaceGlobalScope, c.VIPSubnet, c.DDNS, c.RoutingTableID,
-			c.RoutingTableType, c.RoutingProtocol, c.DNSMode, c.LoadBalancerForwardingMethod, c.IptablesBackend, c.EnableLoadBalancer)
+			c.RoutingTableType, c.RoutingProtocol, c.DNSMode, c.LoadBalancerForwardingMethod, c.IptablesBackend, c.EnableLoadBalancer, intfMgr)
 		if err != nil {
 			return nil, err
 		}

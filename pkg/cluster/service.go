@@ -213,17 +213,14 @@ func (cluster *Cluster) vipService(ctxArp, ctxDNS context.Context, c *kubevip.Co
 						log.Info("deleted route", "route", network.PrepareRoute().String())
 					}
 
-					isSet, err := network.IsSet()
+					log.Info("vipService")
+					deleted, err := network.DeleteIP()
 					if err != nil {
-						log.Error("failed to check IP address", "error", err)
+						log.Error("error deleting IP", "err", err)
+						panic("")
 					}
-					if isSet {
-						err = network.DeleteIP()
-						if err != nil {
-							log.Error("error deleting IP", "err", err)
-							panic("")
-						}
-						log.Info("deleted address", "ip", network.IP())
+					if deleted {
+						log.Info("deleted address", "IP", network.IP(), "interface", network.Interface())
 					}
 				}
 			}
@@ -271,10 +268,15 @@ func (cluster *Cluster) StartLoadBalancerService(c *kubevip.Config, bgp *bgp.Ser
 			log.Error("failed to set mask", "subnet", c.VIPSubnet, "err", err)
 			panic("")
 		}
-		err := network.DeleteIP()
+		log.Info("StartLoadBalancerService()")
+		deleted, err := network.DeleteIP()
 		if err != nil {
-			log.Warn("Attempted to clean existing VIP", "err", err)
+			log.Warn("attempted to clean existing VIP", "err", err)
 		}
+		if deleted {
+			log.Info("deleted address", "IP", network.IP(), "interface", network.Interface())
+		}
+
 		if c.EnableRoutingTable && (c.EnableLeaderElection || c.EnableServicesElection) {
 			err = network.AddRoute(false)
 			if err != nil {
@@ -320,8 +322,12 @@ func (cluster *Cluster) StartLoadBalancerService(c *kubevip.Config, bgp *bgp.Ser
 		}
 		for i := range cluster.Network {
 			log.Info("[VIP] Deleting VIP", "ip", cluster.Network[i].IP())
-			if err := cluster.Network[i].DeleteIP(); err != nil {
+			deleted, err := cluster.Network[i].DeleteIP()
+			if err != nil {
 				log.Warn(err.Error())
+			}
+			if deleted {
+				log.Info("deleted address", "IP", cluster.Network[i].IP(), "interface", cluster.Network[i].Interface())
 			}
 		}
 
@@ -379,23 +385,20 @@ func (cluster *Cluster) ensureIPAndSendGratuitous(network vip.Network, ndp *vip.
 	// Check if IP is dadfailed
 	if network.IsDADFAIL() {
 		log.Warn("IP address is in dadfailed state, removing config", "ip", ipString, "interface", iface)
-		err := network.DeleteIP()
+		deleted, err := network.DeleteIP()
 		if err != nil {
 			log.Warn(err.Error())
+		}
+		if deleted {
+			log.Info("deleted address", "IP", network.IP(), "interface", network.Interface())
 		}
 	}
 
 	// Ensure the address exists on the interface before attempting to ARP
-	set, err := network.IsSet()
-	if err != nil {
+	log.Info("ensureIPAndSendGratuitous()")
+	log.Warn("Re-applying the VIP configuration", "ip", ipString, "interface", iface)
+	if err := network.AddIP(false); err != nil {
 		log.Warn(err.Error())
-	}
-	if !set {
-		log.Warn("Re-applying the VIP configuration", "ip", ipString, "interface", iface)
-		err = network.AddIP(false)
-		if err != nil {
-			log.Warn(err.Error())
-		}
 	}
 
 	if vip.IsIPv6(ipString) {

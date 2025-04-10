@@ -147,7 +147,7 @@ func (sm *Manager) servicesWatcher(ctx context.Context, serviceFunc func(context
 				if shouldGarbageCollect {
 					for _, addr := range svcAddresses {
 						// log.Debugf("(svcs) Retreiving local addresses, to ensure that this modified address doesn't exist: %s", addr)
-						f, err := vip.GarbageCollect(sm.config.Interface, addr)
+						f, err := vip.GarbageCollect(sm.config.Interface, addr, &sm.intfMgr)
 						if err != nil {
 							log.Error("(svcs) cleaning existing address error", "err", err)
 						}

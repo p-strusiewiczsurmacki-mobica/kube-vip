@@ -18,6 +18,7 @@ import (
 	"github.com/kube-vip/kube-vip/pkg/bgp"
 	"github.com/kube-vip/kube-vip/pkg/k8s"
 	"github.com/kube-vip/kube-vip/pkg/kubevip"
+	"github.com/kube-vip/kube-vip/pkg/networkinterface"
 	"github.com/kube-vip/kube-vip/pkg/trafficmirror"
 	"github.com/kube-vip/kube-vip/pkg/upnp"
 	"github.com/kube-vip/kube-vip/pkg/utils"
@@ -63,6 +64,9 @@ type Manager struct {
 
 	// This mutex is to protect calls from various goroutines
 	mutex sync.Mutex
+
+	// This tracks used network interfaces and guards them with mutex for doncurrent changes.
+	intfMgr networkinterface.Manager
 }
 
 // New will create a new managing object

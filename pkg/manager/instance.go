@@ -12,6 +12,7 @@ import (
 
 	"github.com/kube-vip/kube-vip/pkg/cluster"
 	"github.com/kube-vip/kube-vip/pkg/kubevip"
+	"github.com/kube-vip/kube-vip/pkg/networkinterface"
 	"github.com/kube-vip/kube-vip/pkg/vip"
 )
 
@@ -44,7 +45,7 @@ type Port struct {
 	Type string
 }
 
-func NewInstance(svc *v1.Service, config *kubevip.Config) (*Instance, error) {
+func NewInstance(svc *v1.Service, config *kubevip.Config, intfMgr *networkinterface.Manager) (*Instance, error) {
 	instanceAddresses := fetchServiceAddresses(svc)
 	//instanceUID := string(svc.UID)
 
@@ -228,7 +229,7 @@ func NewInstance(svc *v1.Service, config *kubevip.Config) (*Instance, error) {
 	}
 
 	for _, vipConfig := range instance.vipConfigs {
-		c, err := cluster.InitCluster(vipConfig, false)
+		c, err := cluster.InitCluster(vipConfig, false, intfMgr)
 		if err != nil {
 			log.Error("Failed to add Service %s/%s", svc.Namespace, svc.Name)
 			return nil, err
