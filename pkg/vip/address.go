@@ -36,7 +36,6 @@ type Network interface {
 	DeleteIP() (bool, error)
 	DeleteRoute() error
 	UpdateRoutes() (bool, error)
-	isSet() (bool, error)
 	IP() string
 	CIDR() string
 	IPisLinkLocal() bool
