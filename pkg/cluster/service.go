@@ -59,7 +59,7 @@ func (cluster *Cluster) vipService(ctxArp, ctxDNS context.Context, c *kubevip.Co
 		}
 
 		if !c.EnableRoutingTable {
-			if err = network.AddIP(false); err != nil {
+			if _, err = network.AddIP(false); err != nil {
 				log.Error(err.Error())
 			}
 		}
@@ -176,7 +176,7 @@ func (cluster *Cluster) vipService(ctxArp, ctxDNS context.Context, c *kubevip.Co
 
 				for entry := range *backendMap {
 					if entry.Check() {
-						err = network.AddIP(true)
+						_, err = network.AddIP(true)
 						if err != nil {
 							log.Error("error adding address", "err", err)
 						}
@@ -283,7 +283,7 @@ func (cluster *Cluster) StartLoadBalancerService(c *kubevip.Config, bgp *bgp.Ser
 				log.Warn(err.Error())
 			}
 		} else if !c.EnableRoutingTable {
-			if err = network.AddIP(false); err != nil {
+			if _, err = network.AddIP(false); err != nil {
 				log.Warn(err.Error())
 			}
 		}
@@ -396,9 +396,10 @@ func (cluster *Cluster) ensureIPAndSendGratuitous(network vip.Network, ndp *vip.
 
 	// Ensure the address exists on the interface before attempting to ARP
 	log.Info("ensureIPAndSendGratuitous()")
-	log.Warn("Re-applying the VIP configuration", "ip", ipString, "interface", iface)
-	if err := network.AddIP(false); err != nil {
+	if added, err := network.AddIP(true); err != nil {
 		log.Warn(err.Error())
+	} else if added {
+		log.Warn("Re-applied the VIP configuration", "ip", ipString, "interface", iface)
 	}
 
 	if vip.IsIPv6(ipString) {

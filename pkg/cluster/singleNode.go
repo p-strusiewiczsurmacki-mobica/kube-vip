@@ -32,7 +32,7 @@ func (cluster *Cluster) StartSingleNode(c *kubevip.Config, disableVIP bool) erro
 				log.Info("deleted address", "IP", cluster.Network[i].IP(), "interface", cluster.Network[i].Interface())
 			}
 
-			err = cluster.Network[i].AddIP(false)
+			_, err = cluster.Network[i].AddIP(false)
 			if err != nil {
 				log.Warn(err.Error())
 			}

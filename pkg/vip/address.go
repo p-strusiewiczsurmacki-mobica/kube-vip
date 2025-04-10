@@ -31,7 +31,7 @@ const (
 
 // Network is an interface that enable managing operations for a given IP
 type Network interface {
-	AddIP(precheck bool) error
+	AddIP(precheck bool) (bool, error)
 	AddRoute(precheck bool) error
 	DeleteIP() (bool, error)
 	DeleteRoute() error
@@ -286,28 +286,30 @@ func (configurator *network) UpdateRoutes() (bool, error) {
 }
 
 // AddIP - Add an IP address to the interface
-func (configurator *network) AddIP(precheck bool) error {
+func (configurator *network) AddIP(precheck bool) (bool, error) {
 	configurator.link.Lock.Lock()
 	defer configurator.link.Lock.Unlock()
 	exists := false
 	var err error
 	if precheck {
-		if exists, err = configurator.addressExists(); err != nil {
-			return errors.Wrap(err, "could not check if address exists")
+		if exists, err = configurator.isSet(); err != nil {
+			return false, errors.Wrap(err, "could not check if address exists")
 		}
 	}
 
-	if !exists {
-		if err := netlink.AddrReplace(configurator.link.Intf, configurator.address); err != nil {
-			return errors.Wrap(err, "could not add ip")
-		}
-
-		if err := configurator.configureIPTables(); err != nil {
-			return errors.Wrap(err, "could not configure IPTables")
-		}
+	if exists {
+		return false, nil
 	}
 
-	return nil
+	if err := netlink.AddrReplace(configurator.link.Intf, configurator.address); err != nil {
+		return false, errors.Wrap(err, "could not add ip")
+	}
+
+	if err := configurator.configureIPTables(); err != nil {
+		return true, errors.Wrap(err, "could not configure IPTables")
+	}
+
+	return true, nil
 }
 
 func (configurator *network) configureIPTables() error {
@@ -325,21 +327,6 @@ func (configurator *network) configureIPTables() error {
 	}
 
 	return nil
-}
-
-func (configurator *network) addressExists() (bool, error) {
-	addrs, err := netlink.AddrList(configurator.link.Intf, netlink.FAMILY_ALL)
-	if err != nil {
-		return false, errors.Wrap(err, "could not list addresses")
-	}
-
-	for _, addr := range addrs {
-		if addr.Equal(*configurator.address) {
-			return true, nil
-		}
-	}
-
-	return false, nil
 }
 
 func (configurator *network) addIptablesRulesToLimitTrafficPorts() error {
