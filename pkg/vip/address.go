@@ -36,7 +36,7 @@ type Network interface {
 	DeleteIP() (bool, error)
 	DeleteRoute() error
 	UpdateRoutes() (bool, error)
-	IsSet() (bool, error)
+	isSet() (bool, error)
 	IP() string
 	CIDR() string
 	IPisLinkLocal() bool
@@ -476,7 +476,7 @@ func (configurator *network) DeleteIP() (bool, error) {
 	configurator.link.Lock.Lock()
 	defer configurator.link.Lock.Unlock()
 	log.Info("DeleteIP()")
-	result, err := configurator.IsSet()
+	result, err := configurator.isSet()
 	if err != nil {
 		return false, errors.Wrap(err, "ip check in DeleteIP failed")
 	}
@@ -595,8 +595,8 @@ func addressHasDADFAILEDFlag(address netlink.Addr) bool {
 	return address.Flags&unix.IFA_F_DADFAILED != 0
 }
 
-// IsSet - Check to see if VIP is set
-func (configurator *network) IsSet() (result bool, err error) {
+// isSet - Check to see if VIP is set
+func (configurator *network) isSet() (result bool, err error) {
 	var addresses []netlink.Addr
 
 	if configurator.address == nil {
