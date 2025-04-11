@@ -5,6 +5,7 @@ import (
 
 	log "log/slog"
 
+	"github.com/kube-vip/kube-vip/pkg/arp"
 	"github.com/kube-vip/kube-vip/pkg/kubevip"
 	"github.com/kube-vip/kube-vip/pkg/networkinterface"
 	"github.com/kube-vip/kube-vip/pkg/vip"
@@ -16,10 +17,11 @@ type Cluster struct {
 	completed chan bool
 	once      sync.Once
 	Network   []vip.Network
+	arpMgr    *arp.Manager
 }
 
 // InitCluster - Will attempt to initialise all of the required settings for the cluster
-func InitCluster(c *kubevip.Config, disableVIP bool, intfMgr *networkinterface.Manager) (*Cluster, error) {
+func InitCluster(c *kubevip.Config, disableVIP bool, intfMgr *networkinterface.Manager, arpMgr *arp.Manager) (*Cluster, error) {
 	var networks []vip.Network
 	var err error
 
@@ -33,6 +35,7 @@ func InitCluster(c *kubevip.Config, disableVIP bool, intfMgr *networkinterface.M
 	// Initialise the Cluster structure
 	newCluster := &Cluster{
 		Network: networks,
+		arpMgr:  arpMgr,
 	}
 
 	log.Debug("service security", "enabled", c.EnableServiceSecurity)

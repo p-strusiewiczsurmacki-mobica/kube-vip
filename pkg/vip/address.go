@@ -49,6 +49,9 @@ type Network interface {
 	DDNSHostName() string
 	DNSName() string
 	SetMask(mask string) error
+	SetHasEndpoints(value bool)
+	HasEndpoints() bool
+	ARPName() string
 }
 
 // network - This allows network configuration
@@ -72,10 +75,13 @@ type network struct {
 	routingProtocol  int
 
 	ipvsEnabled bool
+
+	hasEndpoints bool
 }
 
 // NewConfig will attempt to provide an interface to the kernel network configuration
-func NewConfig(address string, iface string, loGlobalScope bool, subnet string, isDDNS bool, tableID int, tableType int, routingProtocol int, dnsMode, forwardMethod, iptablesBackend string, ipvsEnabled bool, intfMgr *networkinterface.Manager) ([]Network, error) {
+func NewConfig(address string, iface string, loGlobalScope bool, subnet string, isDDNS bool, tableID int, tableType int,
+	routingProtocol int, dnsMode, forwardMethod, iptablesBackend string, ipvsEnabled bool, intfMgr *networkinterface.Manager) ([]Network, error) {
 	networks := []Network{}
 
 	link, err := netlink.LinkByName(iface)
@@ -765,6 +771,18 @@ func (configurator *network) SetMask(mask string) error {
 
 	configurator.address.Mask = toSet
 	return nil
+}
+
+func (configurator *network) SetHasEndpoints(value bool) {
+	configurator.hasEndpoints = value
+}
+
+func (configurator *network) HasEndpoints() bool {
+	return configurator.hasEndpoints
+}
+
+func (configurator *network) ARPName() string {
+	return fmt.Sprintf("%s-%s", configurator.IP(), configurator.Interface())
 }
 
 // SelectSubnet formats an IP address with the appropriate CIDR based on the input.

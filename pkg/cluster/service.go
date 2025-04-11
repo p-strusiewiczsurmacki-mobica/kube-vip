@@ -9,10 +9,10 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
-	"time"
 
 	log "log/slog"
 
+	"github.com/kube-vip/kube-vip/pkg/arp"
 	"github.com/kube-vip/kube-vip/pkg/backend"
 	"github.com/kube-vip/kube-vip/pkg/bgp"
 	"github.com/kube-vip/kube-vip/pkg/kubevip"
@@ -253,7 +253,7 @@ func getNodeIPs(ctx context.Context, nodename string, client *kubernetes.Clients
 }
 
 // StartLoadBalancerService will start a VIP instance and leave it for kube-proxy to handle
-func (cluster *Cluster) StartLoadBalancerService(c *kubevip.Config, bgp *bgp.Server) {
+func (cluster *Cluster) StartLoadBalancerService(c *kubevip.Config, bgp *bgp.Server, name string) {
 	// use a Go context so we can tell the arp loop code when we
 	// want to step down
 	//nolint
@@ -268,7 +268,7 @@ func (cluster *Cluster) StartLoadBalancerService(c *kubevip.Config, bgp *bgp.Ser
 			log.Error("failed to set mask", "subnet", c.VIPSubnet, "err", err)
 			panic("")
 		}
-		log.Info("StartLoadBalancerService()")
+		log.Info("StartLoadBalancerService()", "name", name, "ip", network.IP())
 		deleted, err := network.DeleteIP()
 		if err != nil {
 			log.Warn("attempted to clean existing VIP", "err", err)
@@ -307,7 +307,7 @@ func (cluster *Cluster) StartLoadBalancerService(c *kubevip.Config, bgp *bgp.Ser
 		// Stop the Arp context if it is running
 		cancelArp()
 
-		log.Info("[LOADBALANCER] Stopping load balancers")
+		log.Info("[LOADBALANCER] Stopping load balancers", "name", name)
 
 		if c.EnableRoutingTable {
 			for i := range cluster.Network {
@@ -359,66 +359,25 @@ func (cluster *Cluster) layer2Update(ctx context.Context, network vip.Network, c
 
 	log.Debug("layer 2 update", "ip", ipString, "interface", network.Interface(), "ms", c.ArpBroadcastRate)
 
-	for {
-		select {
-		case <-ctx.Done(): // if cancel() execute
-			log.Debug("ending layer 2 update", "ip", ipString, "interface", network.Interface(), "ms", c.ArpBroadcastRate)
-			return
-		default:
-			cluster.ensureIPAndSendGratuitous(network, ndp)
-		}
-		if c.ArpBroadcastRate < 500 {
-			log.Error("arp broadcast rate is too low", "rate (ms)", c.ArpBroadcastRate, "setting to (ms)", "3000")
-			c.ArpBroadcastRate = 3000
-		}
-		time.Sleep(time.Duration(c.ArpBroadcastRate) * time.Millisecond)
-	}
-}
+	arpInstance := arp.NewInstance(network, ndp)
+	cluster.arpMgr.Insert(arpInstance)
 
-// ensureIPAndSendGratuitous - adds IP to the interface if missing, and send
-// either a gratuitous ARP or gratuitous NDP. Re-adds the interface if it is IPv6
-// and in a dadfailed state.
-func (cluster *Cluster) ensureIPAndSendGratuitous(network vip.Network, ndp *vip.NdpResponder) {
-	iface := network.Interface()
-	ipString := network.IP()
+	<-ctx.Done() // if cancel() execute
+	log.Debug("ending layer 2 update", "ip", ipString, "interface", network.Interface(), "ms", c.ArpBroadcastRate)
+	cluster.arpMgr.Remove(arpInstance)
 
-	// Check if IP is dadfailed
-	if network.IsDADFAIL() {
-		log.Warn("IP address is in dadfailed state, removing config", "ip", ipString, "interface", iface)
-		deleted, err := network.DeleteIP()
-		if err != nil {
-			log.Warn(err.Error())
-		}
-		if deleted {
-			log.Info("deleted address", "IP", network.IP(), "interface", network.Interface())
-		}
-	}
-
-	// Ensure the address exists on the interface before attempting to ARP
-	log.Info("ensureIPAndSendGratuitous()")
-	if added, err := network.AddIP(true); err != nil {
-		log.Warn(err.Error())
-	} else if added {
-		log.Warn("Re-applied the VIP configuration", "ip", ipString, "interface", iface)
-	}
-
-	if vip.IsIPv6(ipString) {
-		// Gratuitous NDP, will broadcast new MAC <-> IPv6 address
-		if ndp == nil {
-			log.Error("NDP responder was not created")
-		} else {
-			err := ndp.SendGratuitous(ipString)
-			if err != nil {
-				log.Warn(err.Error())
-			}
-		}
-
-	} else {
-		// Gratuitous ARP, will broadcast to new MAC <-> IPv4 address
-		err := vip.ARPSendGratuitous(ipString, iface)
-		if err != nil {
-			log.Warn(err.Error())
-		}
-	}
-
+	// for {
+	// 	select {
+	// 	case <-ctx.Done(): // if cancel() execute
+	// 		log.Debug("ending layer 2 update", "ip", ipString, "interface", network.Interface(), "ms", c.ArpBroadcastRate)
+	// 		return
+	// 	default:
+	// 		cluster.ensureIPAndSendGratuitous(network, ndp)
+	// 	}
+	// 	if c.ArpBroadcastRate < 500 {
+	// 		log.Error("arp broadcast rate is too low", "rate (ms)", c.ArpBroadcastRate, "setting to (ms)", "3000")
+	// 		c.ArpBroadcastRate = 3000
+	// 	}
+	// 	time.Sleep(time.Duration(c.ArpBroadcastRate) * time.Millisecond)
+	// }
 }

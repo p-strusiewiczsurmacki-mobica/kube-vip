@@ -10,6 +10,7 @@ import (
 	"github.com/vishvananda/netlink"
 	v1 "k8s.io/api/core/v1"
 
+	"github.com/kube-vip/kube-vip/pkg/arp"
 	"github.com/kube-vip/kube-vip/pkg/cluster"
 	"github.com/kube-vip/kube-vip/pkg/kubevip"
 	"github.com/kube-vip/kube-vip/pkg/networkinterface"
@@ -31,7 +32,6 @@ type Instance struct {
 	dhcpInterfaceIP     string
 	dhcpHostname        string
 	dhcpClient          *vip.DHCPClient
-	HasEndpoints        bool
 
 	// External Gateway IP the service is forwarded from
 	upnpGatewayIPs []string
@@ -45,7 +45,7 @@ type Port struct {
 	Type string
 }
 
-func NewInstance(svc *v1.Service, config *kubevip.Config, intfMgr *networkinterface.Manager) (*Instance, error) {
+func NewInstance(svc *v1.Service, config *kubevip.Config, intfMgr *networkinterface.Manager, arpMgr *arp.Manager) (*Instance, error) {
 	instanceAddresses := fetchServiceAddresses(svc)
 	//instanceUID := string(svc.UID)
 
@@ -229,7 +229,7 @@ func NewInstance(svc *v1.Service, config *kubevip.Config, intfMgr *networkinterf
 	}
 
 	for _, vipConfig := range instance.vipConfigs {
-		c, err := cluster.InitCluster(vipConfig, false, intfMgr)
+		c, err := cluster.InitCluster(vipConfig, false, intfMgr, arpMgr)
 		if err != nil {
 			log.Error("Failed to add Service %s/%s", svc.Namespace, svc.Name)
 			return nil, err

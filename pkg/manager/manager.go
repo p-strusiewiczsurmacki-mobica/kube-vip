@@ -15,6 +15,7 @@ import (
 
 	log "log/slog"
 
+	"github.com/kube-vip/kube-vip/pkg/arp"
 	"github.com/kube-vip/kube-vip/pkg/bgp"
 	"github.com/kube-vip/kube-vip/pkg/k8s"
 	"github.com/kube-vip/kube-vip/pkg/kubevip"
@@ -67,6 +68,9 @@ type Manager struct {
 
 	// This tracks used network interfaces and guards them with mutex for doncurrent changes.
 	intfMgr *networkinterface.Manager
+
+	// This tracks VIPs and performs ARP/NDP advertisement.
+	arpMgr *arp.Manager
 }
 
 // New will create a new managing object
@@ -190,6 +194,7 @@ func New(configMap string, config *kubevip.Config) (*Manager, error) {
 			Help:      "Display state of session by setting metric for label value with current state to 1",
 		}, []string{"state", "peer"}),
 		intfMgr: networkinterface.NewManager(),
+		arpMgr:  arp.NewManager(config),
 	}, nil
 }
 
