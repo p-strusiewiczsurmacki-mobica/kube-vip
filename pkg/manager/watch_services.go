@@ -202,6 +202,13 @@ func (sm *Manager) servicesWatcher(ctx context.Context, serviceFunc func(context
 						// Start an endpoint watcher if we're not watching it already
 						if !watchedService[string(svc.UID)] {
 							// background the endpoint watcher
+							if (sm.config.EnableRoutingTable || sm.config.EnableBGP) && (!sm.config.EnableLeaderElection && !sm.config.EnableServicesElection) {
+								err = serviceFunc(activeServiceLoadBalancer[string(svc.UID)], svc)
+								if err != nil {
+									log.Error(err.Error())
+								}
+							}
+
 							go func() {
 								if svc.Spec.ExternalTrafficPolicy == v1.ServiceExternalTrafficPolicyTypeLocal {
 									// Add Endpoint or EndpointSlices watcher
@@ -217,18 +224,15 @@ func (sm *Manager) servicesWatcher(ctx context.Context, serviceFunc func(context
 								}
 							}()
 
-							if (sm.config.EnableRoutingTable || sm.config.EnableBGP) && (!sm.config.EnableLeaderElection && !sm.config.EnableServicesElection) {
-								go func() {
-									err = serviceFunc(activeServiceLoadBalancer[string(svc.UID)], svc)
-									if err != nil {
-										log.Error(err.Error())
-									}
-								}()
-							}
 							// We're now watching this service
 							watchedService[string(svc.UID)] = true
 						}
 					} else if (sm.config.EnableBGP || sm.config.EnableRoutingTable) && (!sm.config.EnableLeaderElection && !sm.config.EnableServicesElection) {
+						err = serviceFunc(activeServiceLoadBalancer[string(svc.UID)], svc)
+						if err != nil {
+							log.Error(err.Error())
+						}
+
 						go func() {
 							if svc.Spec.ExternalTrafficPolicy == v1.ServiceExternalTrafficPolicyTypeCluster {
 								// Add Endpoint watcher
@@ -243,13 +247,8 @@ func (sm *Manager) servicesWatcher(ctx context.Context, serviceFunc func(context
 								}
 							}
 						}()
-
-						go func() {
-							err = serviceFunc(activeServiceLoadBalancer[string(svc.UID)], svc)
-							if err != nil {
-								log.Error(err.Error())
-							}
-						}()
+						// We're now watching this service
+						watchedService[string(svc.UID)] = true
 					} else {
 
 						go func() {

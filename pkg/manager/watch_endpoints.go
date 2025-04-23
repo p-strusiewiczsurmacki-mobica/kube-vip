@@ -321,23 +321,25 @@ func (sm *Manager) watchEndpoint(ctx context.Context, id string, service *v1.Ser
 				if !sm.config.EnableServicesElection && !sm.config.EnableLeaderElection && !isRouteConfigured {
 					// If routing table mode is enabled - routes should be added per node
 					if sm.config.EnableRoutingTable {
-						instance, err := sm.findServiceInstanceWithTimeout(ctx, service)
-						if err != nil {
-							log.Error("error finding instance", "service", service.UID, "provider", provider.getLabel(), "err", err)
-						}
+						instance := sm.findServiceInstance(service)
 						if instance != nil {
 							for _, cluster := range instance.clusters {
 								for i := range cluster.Network {
 									err := cluster.Network[i].AddRoute(false)
 									if err != nil {
 										if errors.Is(err, syscall.EEXIST) {
-											// If route exists try to update it if necessary
+											// If route exists, but protocol is not set (e.g. the route was created by the older version
+											// of kube-vip) try to update it if necessary
 											isUpdated, err := cluster.Network[i].UpdateRoutes()
 											if err != nil {
 												return fmt.Errorf("[%s] error updating existing routes: %w", provider.getLabel(), err)
 											}
 											if isUpdated {
-												log.Debug("updated route", "provider", provider.getLabel(), "ip", cluster.Network[i].IP())
+												log.Info("updated route", "provider",
+													provider.getLabel(), "ip", cluster.Network[i].IP(), "service name", service.Name, "namespace", service.Namespace, "interface", cluster.Network[i].Interface(), "tableID", sm.config.RoutingTableID)
+											} else {
+												log.Info("route already present", "provider",
+													provider.getLabel(), "ip", cluster.Network[i].IP(), "service name", service.Name, "namespace", service.Namespace, "interface", cluster.Network[i].Interface(), "tableID", sm.config.RoutingTableID)
 											}
 										} else {
 											// If other error occurs, return error
@@ -356,11 +358,7 @@ func (sm *Manager) watchEndpoint(ctx context.Context, id string, service *v1.Ser
 
 					// If BGP mode is enabled - hosts should be added per node
 					if sm.config.EnableBGP {
-						instance, err := sm.findServiceInstanceWithTimeout(ctx, service)
-						if err != nil {
-							log.Error("error finding instance", "service", service.UID, "provider", provider.getLabel(), "err", err)
-						}
-						if instance != nil {
+						if instance := sm.findServiceInstance(service); instance != nil {
 							for _, cluster := range instance.clusters {
 								for i := range cluster.Network {
 									network := cluster.Network[i]
