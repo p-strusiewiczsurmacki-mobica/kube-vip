@@ -9,6 +9,7 @@ import (
 	log "log/slog"
 
 	"github.com/davecgh/go-spew/spew"
+	"github.com/kube-vip/kube-vip/pkg/cluster"
 	"github.com/kube-vip/kube-vip/pkg/vip"
 	"github.com/prometheus/client_golang/prometheus"
 	v1 "k8s.io/api/core/v1"
@@ -128,7 +129,7 @@ func (sm *Manager) servicesWatcher(ctx context.Context, serviceFunc func(context
 				break
 			}
 
-			svcAddresses := fetchServiceAddresses(svc)
+			svcAddresses := cluster.FetchServiceAddresses(svc)
 
 			// We only care about LoadBalancer services that have been allocated an address
 			if len(svcAddresses) <= 0 {
@@ -141,7 +142,7 @@ func (sm *Manager) servicesWatcher(ctx context.Context, serviceFunc func(context
 				originalService := []string{}
 				shouldGarbageCollect := true
 				if i != nil {
-					originalService = fetchServiceAddresses(i.serviceSnapshot)
+					originalService = cluster.FetchServiceAddresses(i.ServiceSnapshot)
 					shouldGarbageCollect = !reflect.DeepEqual(originalService, svcAddresses)
 				}
 				if shouldGarbageCollect {
@@ -188,7 +189,7 @@ func (sm *Manager) servicesWatcher(ctx context.Context, serviceFunc func(context
 			//
 
 			if !activeService[string(svc.UID)] {
-				log.Debug("(svcs) has been added/modified with addresses", "service name", svc.Name, "ip", fetchServiceAddresses(svc))
+				log.Debug("(svcs) has been added/modified with addresses", "service name", svc.Name, "ip", cluster.FetchServiceAddresses(svc))
 
 				activeServiceLoadBalancer[string(svc.UID)], activeServiceLoadBalancerCancel[string(svc.UID)] = context.WithCancel(ctx)
 

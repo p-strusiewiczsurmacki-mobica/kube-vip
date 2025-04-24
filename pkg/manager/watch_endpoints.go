@@ -215,6 +215,8 @@ func (sm *Manager) watchEndpoint(ctx context.Context, id string, service *v1.Ser
 				}
 			}
 
+			log.Info("ENDPOINTS", "list", endpoints)
+
 			if sm.config.EnableRoutingTable {
 				instance := sm.findServiceInstance(service)
 				if err != nil {
@@ -223,22 +225,15 @@ func (sm *Manager) watchEndpoint(ctx context.Context, id string, service *v1.Ser
 				if instance == nil {
 					log.Error("failed to find the instance", "service", service.UID, "provider", provider.getLabel())
 				} else {
-					for _, c := range instance.clusters {
+					for _, c := range instance.Clusters {
 						for n := range c.Network {
-							c.Network[n].SetHasEndpoints(false)
-							if len(endpoints) > 0 {
-								networkV4 := true
-								if net.ParseIP(c.Network[n].IP()).To4() == nil {
-									networkV4 = false
-								}
-								endpointv4 := true
-								if net.ParseIP(endpoints[0]).To4() == nil {
-									networkV4 = false
-								}
-
-								if networkV4 == endpointv4 {
-									c.Network[n].SetHasEndpoints(true)
-								}
+							// if there are no endpoints set HasEndpoints false just in case
+							if len(endpoints) < 1 {
+								c.Network[n].SetHasEndpoints(false)
+							}
+							// check if endpoint are available and are of same IP family as service
+							if len(endpoints) > 0 && ((net.ParseIP(c.Network[n].IP()).To4() == nil) == (net.ParseIP(endpoints[0]).To4() == nil)) {
+								c.Network[n].SetHasEndpoints(true)
 							}
 						}
 					}
@@ -323,33 +318,35 @@ func (sm *Manager) watchEndpoint(ctx context.Context, id string, service *v1.Ser
 					if sm.config.EnableRoutingTable {
 						instance := sm.findServiceInstance(service)
 						if instance != nil {
-							for _, cluster := range instance.clusters {
+							for _, cluster := range instance.Clusters {
 								for i := range cluster.Network {
-									err := cluster.Network[i].AddRoute(false)
-									if err != nil {
-										if errors.Is(err, syscall.EEXIST) {
-											// If route exists, but protocol is not set (e.g. the route was created by the older version
-											// of kube-vip) try to update it if necessary
-											isUpdated, err := cluster.Network[i].UpdateRoutes()
-											if err != nil {
-												return fmt.Errorf("[%s] error updating existing routes: %w", provider.getLabel(), err)
-											}
-											if isUpdated {
-												log.Info("updated route", "provider",
-													provider.getLabel(), "ip", cluster.Network[i].IP(), "service name", service.Name, "namespace", service.Namespace, "interface", cluster.Network[i].Interface(), "tableID", sm.config.RoutingTableID)
+									if cluster.Network[i].HasEndpoints() {
+										err := cluster.Network[i].AddRoute(false)
+										if err != nil {
+											if errors.Is(err, syscall.EEXIST) {
+												// If route exists, but protocol is not set (e.g. the route was created by the older version
+												// of kube-vip) try to update it if necessary
+												isUpdated, err := cluster.Network[i].UpdateRoutes()
+												if err != nil {
+													return fmt.Errorf("[%s] error updating existing routes: %w", provider.getLabel(), err)
+												}
+												if isUpdated {
+													log.Info("updated route", "provider",
+														provider.getLabel(), "ip", cluster.Network[i].IP(), "service name", service.Name, "namespace", service.Namespace, "interface", cluster.Network[i].Interface(), "tableID", sm.config.RoutingTableID)
+												} else {
+													log.Info("route already present", "provider",
+														provider.getLabel(), "ip", cluster.Network[i].IP(), "service name", service.Name, "namespace", service.Namespace, "interface", cluster.Network[i].Interface(), "tableID", sm.config.RoutingTableID)
+												}
 											} else {
-												log.Info("route already present", "provider",
-													provider.getLabel(), "ip", cluster.Network[i].IP(), "service name", service.Name, "namespace", service.Namespace, "interface", cluster.Network[i].Interface(), "tableID", sm.config.RoutingTableID)
+												// If other error occurs, return error
+												return fmt.Errorf("[%s] error adding route: %s", provider.getLabel(), err.Error())
 											}
 										} else {
-											// If other error occurs, return error
-											return fmt.Errorf("[%s] error adding route: %s", provider.getLabel(), err.Error())
+											log.Info("added route", "provider",
+												provider.getLabel(), "ip", cluster.Network[i].IP(), "service name", service.Name, "namespace", service.Namespace, "interface", cluster.Network[i].Interface(), "tableID", sm.config.RoutingTableID)
+											configuredLocalRoutes.Store(string(service.UID), true)
+											leaderElectionActive = true
 										}
-									} else {
-										log.Info("added route", "provider",
-											provider.getLabel(), "ip", cluster.Network[i].IP(), "service name", service.Name, "namespace", service.Namespace, "interface", cluster.Network[i].Interface(), "tableID", sm.config.RoutingTableID)
-										configuredLocalRoutes.Store(string(service.UID), true)
-										leaderElectionActive = true
 									}
 								}
 							}
@@ -359,7 +356,7 @@ func (sm *Manager) watchEndpoint(ctx context.Context, id string, service *v1.Ser
 					// If BGP mode is enabled - hosts should be added per node
 					if sm.config.EnableBGP {
 						if instance := sm.findServiceInstance(service); instance != nil {
-							for _, cluster := range instance.clusters {
+							for _, cluster := range instance.Clusters {
 								for i := range cluster.Network {
 									network := cluster.Network[i]
 									if err != nil {
@@ -397,7 +394,7 @@ func (sm *Manager) watchEndpoint(ctx context.Context, id string, service *v1.Ser
 					// If BGP mode is enabled - routes should be deleted
 					if sm.config.EnableBGP {
 						if instance := sm.findServiceInstance(service); instance != nil {
-							for _, cluster := range instance.clusters {
+							for _, cluster := range instance.Clusters {
 								for i := range cluster.Network {
 									network := cluster.Network[i]
 									err = sm.bgpServer.DelHost(network.CIDR())
@@ -486,7 +483,7 @@ func (sm *Manager) watchEndpoint(ctx context.Context, id string, service *v1.Ser
 func (sm *Manager) clearRoutes(service *v1.Service) []error {
 	errs := []error{}
 	if instance := sm.findServiceInstance(service); instance != nil {
-		for _, cluster := range instance.clusters {
+		for _, cluster := range instance.Clusters {
 			for i := range cluster.Network {
 				route := cluster.Network[i].PrepareRoute()
 				// check if route we are about to delete is not referenced by more than one service
@@ -507,7 +504,7 @@ func (sm *Manager) clearRoutes(service *v1.Service) []error {
 
 func (sm *Manager) clearBGPHosts(service *v1.Service) {
 	if instance := sm.findServiceInstance(service); instance != nil {
-		for _, cluster := range instance.clusters {
+		for _, cluster := range instance.Clusters {
 			for i := range cluster.Network {
 				network := cluster.Network[i]
 				err := sm.bgpServer.DelHost(network.CIDR())

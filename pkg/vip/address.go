@@ -769,6 +769,7 @@ func (configurator *network) SetMask(mask string) error {
 }
 
 func (configurator *network) SetHasEndpoints(value bool) {
+	log.Info("Setting HasEndpoints for", "ip", configurator.IP(), "value", value)
 	configurator.hasEndpoints = value
 }
 

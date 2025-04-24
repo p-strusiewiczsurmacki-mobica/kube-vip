@@ -136,7 +136,7 @@ func (sm *Manager) startTableMode(id string) error {
 						// we can do cleanup here
 						log.Info("leader lost", "id", id)
 						for _, instance := range sm.serviceInstances {
-							for _, cluster := range instance.clusters {
+							for _, cluster := range instance.Clusters {
 								cluster.Stop()
 							}
 						}
@@ -167,12 +167,14 @@ func (sm *Manager) startTableMode(id string) error {
 }
 
 func (sm *Manager) cleanRoutes() error {
+	log.Info("cleanRoutes")
 	routes, err := vip.ListRoutes(sm.config.RoutingTableID, sm.config.RoutingProtocol)
 	if err != nil {
 		return fmt.Errorf("error getting routes: %w", err)
 	}
 
 	for i := range routes {
+		log.Info("cleanRoutes", "route", routes[i].String())
 		found := false
 		if sm.config.EnableControlPlane {
 			found = (routes[i].Dst.IP.String() == sm.config.Address)
@@ -180,31 +182,20 @@ func (sm *Manager) cleanRoutes() error {
 			found = sm.countRouteReferences(&routes[i]) > 0
 		}
 
+		log.Info("cleanRoutes", "found", found)
+
 		if !found {
 			err = netlink.RouteDel(&(routes[i]))
 			if err != nil {
 				log.Error("[route] deletion", "route", routes[i], "err", err)
+			} else {
+				log.Debug("[route] deleted", "route", routes[i])
 			}
-			log.Debug("[route] deletion", "route", routes[i])
 		}
-
 	}
 	return nil
 }
 
 func (sm *Manager) countRouteReferences(route *netlink.Route) int {
-	cnt := 0
-	for _, instance := range sm.serviceInstances {
-		for _, cluster := range instance.clusters {
-			for n := range cluster.Network {
-				if cluster.Network[n].HasEndpoints() {
-					r := cluster.Network[n].PrepareRoute()
-					if r.Dst.String() == route.Dst.String() {
-						cnt++
-					}
-				}
-			}
-		}
-	}
-	return cnt
+	return cluster.CountRouteReferences(sm.serviceInstances, route)
 }
