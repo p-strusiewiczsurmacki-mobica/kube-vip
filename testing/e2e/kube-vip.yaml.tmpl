@@ -32,6 +32,8 @@ spec:
       valueFrom:
         fieldRef:
           fieldPath: spec.nodeName
+    - name: svc_enable
+      value: "true"
     image: "{{ .ImagePath }}"
     imagePullPolicy: Never
     securityContext:

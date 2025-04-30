@@ -22,6 +22,11 @@ import (
 	"sigs.k8s.io/kind/pkg/cluster"
 )
 
+const (
+	IPv4Family = "IPv4"
+	IPv6Family = "IPv6"
+)
+
 func EnsureKindNetwork() {
 	By("checking if the Docker \"kind\" network exists")
 	cmd := exec.Command("docker", "inspect", "kind")
@@ -58,14 +63,14 @@ func EnsureKindNetwork() {
 	Eventually(session).Should(gexec.Exit(0))
 }
 
-func GenerateIPv6VIP() string {
+func GenerateVIP(family string) string {
 	cidrs := getKindNetworkSubnetCIDRs()
 
 	for _, cidr := range cidrs {
 		ip, ipNet, parseErr := net.ParseCIDR(cidr)
 		Expect(parseErr).NotTo(HaveOccurred())
 
-		if ip.To4() == nil {
+		if ip.To4() == nil && family == IPv6Family {
 			lowerMask := binary.BigEndian.Uint64(ipNet.Mask[8:])
 			lowerStart := binary.BigEndian.Uint64(ipNet.IP[8:])
 			lowerEnd := (lowerStart & lowerMask) | (^lowerMask)
@@ -76,20 +81,7 @@ func GenerateIPv6VIP() string {
 			// Copy lower half into chosenVIP
 			binary.BigEndian.PutUint64(chosenVIP[8:], lowerEnd-5)
 			return net.IP(chosenVIP).String()
-		}
-	}
-	Fail("Could not find any IPv6 CIDRs in the Docker \"kind\" network")
-	return ""
-}
-
-func GenerateIPv4VIP() string {
-	cidrs := getKindNetworkSubnetCIDRs()
-
-	for _, cidr := range cidrs {
-		ip, ipNet, parseErr := net.ParseCIDR(cidr)
-		Expect(parseErr).NotTo(HaveOccurred())
-
-		if ip.To4() != nil {
+		} else if ip.To4() != nil && family == IPv4Family {
 			mask := binary.BigEndian.Uint32(ipNet.Mask)
 			start := binary.BigEndian.Uint32(ipNet.IP)
 			end := (start & mask) | (^mask)
@@ -99,12 +91,13 @@ func GenerateIPv4VIP() string {
 			return net.IP(chosenVIP).String()
 		}
 	}
-	Fail("Could not find any IPv4 CIDRs in the Docker \"kind\" network")
+
+	Fail("Could not find any " + family + " CIDRs in the Docker \"kind\" network")
 	return ""
 }
 
 func GenerateDualStackVIP() string {
-	return GenerateIPv4VIP() + "," + GenerateIPv6VIP()
+	return GenerateVIP(IPv4Family) + "," + GenerateVIP(IPv6Family)
 }
 
 func getKindNetworkSubnetCIDRs() []string {

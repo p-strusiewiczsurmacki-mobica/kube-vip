@@ -1,15 +1,13 @@
 //go:build e2e
 // +build e2e
 
-package e2e_test
+package e2e
 
 import (
 	"testing"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
-
-	"github.com/kube-vip/kube-vip/testing/e2e"
 )
 
 func TestE2E(t *testing.T) {
@@ -19,7 +17,7 @@ func TestE2E(t *testing.T) {
 
 var _ = SynchronizedBeforeSuite(
 	func() {
-		e2e.EnsureKindNetwork()
+		EnsureKindNetwork()
 	},
 	func() {},
 )
