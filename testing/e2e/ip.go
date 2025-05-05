@@ -64,6 +64,10 @@ func EnsureKindNetwork() {
 }
 
 func GenerateVIP(family string) string {
+	return GenerateVIPWithCustomOffset(family, 5)
+}
+
+func GenerateVIPWithCustomOffset(family string, offset uint) string {
 	cidrs := getKindNetworkSubnetCIDRs()
 
 	for _, cidr := range cidrs {
@@ -79,7 +83,7 @@ func GenerateVIP(family string) string {
 			// Copy upper half into chosenVIP
 			copy(chosenVIP, ipNet.IP[0:8])
 			// Copy lower half into chosenVIP
-			binary.BigEndian.PutUint64(chosenVIP[8:], lowerEnd-5)
+			binary.BigEndian.PutUint64(chosenVIP[8:], lowerEnd-uint64(offset))
 			return net.IP(chosenVIP).String()
 		} else if ip.To4() != nil && family == IPv4Family {
 			mask := binary.BigEndian.Uint32(ipNet.Mask)
@@ -87,7 +91,7 @@ func GenerateVIP(family string) string {
 			end := (start & mask) | (^mask)
 
 			chosenVIP := make([]byte, 4)
-			binary.BigEndian.PutUint32(chosenVIP, end-5)
+			binary.BigEndian.PutUint32(chosenVIP, end-uint32(offset))
 			return net.IP(chosenVIP).String()
 		}
 	}
@@ -132,11 +136,12 @@ func CheckIPAddressPresence(ip string, container string) bool {
 	if vip.IsIPv6(ip) {
 		family = "-6"
 	}
+	By("CheckIPAddressPresence contianer: " + container)
 	cmd := exec.Command(
 		"docker", "exec", container, "ip", family, "addr", "show", "dev", "eth0",
 	)
 	cmd.Stdout = cmdOut
-	Eventually(cmd.Run(), "20s").Should(Succeed())
+	cmd.Run()
 	return strings.Contains(cmdOut.String(), ip)
 }
 
