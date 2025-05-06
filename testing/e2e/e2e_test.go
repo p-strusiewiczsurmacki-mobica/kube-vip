@@ -91,7 +91,6 @@ var _ = Describe("kube-vip ARP/NDP broadcast neighbor", func() {
 			ipv4VIP       string
 			client        kubernetes.Interface
 			clusterName   string
-			deletion      bool
 		)
 
 		BeforeAll(func() {
@@ -171,11 +170,6 @@ var _ = Describe("kube-vip ARP/NDP broadcast neighbor", func() {
 			if os.Getenv("E2E_PRESERVE_CLUSTER") == "true" {
 				return
 			}
-
-			if !deletion {
-				return
-			}
-
 			provider := cluster.NewProvider(
 				cluster.ProviderWithLogger(logger),
 				cluster.ProviderWithDocker(),
@@ -207,9 +201,7 @@ var _ = Describe("kube-vip ARP/NDP broadcast neighbor", func() {
 				createTestService(svcName, namespace, dsName, lbAddress,
 					client, corev1.IPFamilyPolicySingleStack, []corev1.IPFamily{corev1.IPv4Protocol}, trafficPolicy)
 
-				deletion = false
 				checkIPAddress("plndr-svcs-lock", "kube-system", lbAddress, true, client)
-				deletion = true
 
 				assertConnection("http", lbAddress, "80", "", 1*time.Second, 30*time.Second)
 
@@ -269,7 +261,6 @@ var _ = Describe("kube-vip ARP/NDP broadcast neighbor", func() {
 			ipv4VIP       string
 			client        kubernetes.Interface
 			clusterName   string
-			deletion      bool
 		)
 
 		BeforeAll(func() {
@@ -350,10 +341,6 @@ var _ = Describe("kube-vip ARP/NDP broadcast neighbor", func() {
 				return
 			}
 
-			if !deletion {
-				return
-			}
-
 			provider := cluster.NewProvider(
 				cluster.ProviderWithLogger(logger),
 				cluster.ProviderWithDocker(),
@@ -386,7 +373,6 @@ var _ = Describe("kube-vip ARP/NDP broadcast neighbor", func() {
 					client, corev1.IPFamilyPolicySingleStack, []corev1.IPFamily{corev1.IPv4Protocol}, trafficPolicy)
 
 				checkIPAddress(fmt.Sprintf("kubevip-%s", svcName), namespace, lbAddress, true, client)
-				deletion = true
 
 				assertConnection("http", lbAddress, "80", "", 1*time.Second, 30*time.Second)
 
@@ -398,7 +384,7 @@ var _ = Describe("kube-vip ARP/NDP broadcast neighbor", func() {
 				isPresent := e2e.CheckIPAddressPresence(lbAddress, container)
 				Expect(isPresent).ToNot(BeNil())
 				Expect(*isPresent).To(BeFalse())
-				// checkIPAddress(fmt.Sprintf("kubevip-%s", svcName), namespace, lbAddress, false, client)
+
 				assertConnectionError("http", lbAddress, "80", "", 3*time.Second)
 			},
 			Entry("with external traffic policy - cluster", "test-svc-cluster", uint(4), corev1.ServiceExternalTrafficPolicyCluster),
@@ -455,7 +441,6 @@ var _ = Describe("kube-vip ARP/NDP broadcast neighbor", func() {
 			ipv6VIP       string
 			client        kubernetes.Interface
 			clusterName   string
-			deletion      bool
 		)
 
 		BeforeAll(func() {
@@ -536,10 +521,6 @@ var _ = Describe("kube-vip ARP/NDP broadcast neighbor", func() {
 				return
 			}
 
-			if !deletion {
-				return
-			}
-
 			provider := cluster.NewProvider(
 				cluster.ProviderWithLogger(logger),
 				cluster.ProviderWithDocker(),
@@ -569,33 +550,18 @@ var _ = Describe("kube-vip ARP/NDP broadcast neighbor", func() {
 			func(svcName string, offset uint, trafficPolicy corev1.ServiceExternalTrafficPolicy) {
 				lbAddress := e2e.GenerateVIPWithCustomOffset(e2e.IPv6Family, offset)
 
-				By("1")
-
 				createTestService(svcName, namespace, dsName, lbAddress,
 					client, corev1.IPFamilyPolicySingleStack, []corev1.IPFamily{corev1.IPv6Protocol}, trafficPolicy)
 
-				By("2")
-
 				checkIPAddress("plndr-svcs-lock", "kube-system", lbAddress, true, client)
-				// Eventually(e2e.CheckIPAddressPresenceByLease("plndr-svcs-lock", "kube-system", lbAddress, client), time.Second*30, time.Second).Should(BeTrue())
-				deletion = true
-
-				By("3")
 
 				assertConnection("http", lbAddress, "80", "", 1*time.Second, 30*time.Second)
-
-				By("4")
 
 				err := client.CoreV1().Services(namespace).Delete(context.TODO(), svcName, metav1.DeleteOptions{})
 				Expect(err).ToNot(HaveOccurred())
 
-				By("5")
-
 				checkIPAddress("plndr-svcs-lock", "kube-system", lbAddress, false, client)
-				// Eventually(e2e.CheckIPAddressPresenceByLease("plndr-svcs-lock", "kube-system", lbAddress, client), time.Second*30, time.Second).Should(BeFalse())
-				By("6")
 				assertConnectionError("http", lbAddress, "80", "", 3*time.Second)
-				By("7")
 			},
 			Entry("with external traffic policy - cluster", "test-svc-cluster", uint(4), corev1.ServiceExternalTrafficPolicyCluster),
 			Entry("with external traffic policy - local", "test-svc-local", uint(3), corev1.ServiceExternalTrafficPolicyLocal),
@@ -649,7 +615,6 @@ var _ = Describe("kube-vip ARP/NDP broadcast neighbor", func() {
 			ipv6VIP       string
 			client        kubernetes.Interface
 			clusterName   string
-			deletion      bool
 		)
 
 		BeforeAll(func() {
@@ -730,10 +695,6 @@ var _ = Describe("kube-vip ARP/NDP broadcast neighbor", func() {
 				return
 			}
 
-			if !deletion {
-				return
-			}
-
 			provider := cluster.NewProvider(
 				cluster.ProviderWithLogger(logger),
 				cluster.ProviderWithDocker(),
@@ -767,8 +728,6 @@ var _ = Describe("kube-vip ARP/NDP broadcast neighbor", func() {
 					client, corev1.IPFamilyPolicySingleStack, []corev1.IPFamily{corev1.IPv6Protocol}, trafficPolicy)
 
 				checkIPAddress(fmt.Sprintf("kubevip-%s", svcName), namespace, lbAddress, true, client)
-				// Eventually(e2e.CheckIPAddressPresenceByLease(fmt.Sprintf("kubevip-%s", svcName), namespace, lbAddress, client), time.Second*30, time.Second).Should(BeTrue())
-				deletion = true
 
 				assertConnection("http", lbAddress, "80", "", 1*time.Second, 30*time.Second)
 
@@ -781,8 +740,6 @@ var _ = Describe("kube-vip ARP/NDP broadcast neighbor", func() {
 				Expect(isPresent).ToNot(BeNil())
 				Expect(*isPresent).To(BeFalse())
 
-				// checkIPAddress(fmt.Sprintf("kubevip-%s", svcName), namespace, lbAddress, false, client)
-				// Eventually(e2e.CheckIPAddressPresenceByLease(fmt.Sprintf("kubevip-%s", svcName), namespace, lbAddress, client), time.Second*30, time.Second).Should(BeFalse())
 				assertConnectionError("http", lbAddress, "80", "", 3*time.Second)
 			},
 			Entry("with external traffic policy - cluster", "test-svc-cluster", uint(4), corev1.ServiceExternalTrafficPolicyCluster),

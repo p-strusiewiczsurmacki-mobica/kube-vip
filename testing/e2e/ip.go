@@ -134,33 +134,26 @@ func getKindNetworkSubnetCIDRs() []string {
 	return cidrs
 }
 
-func withTimestamp(text string) string {
-	return fmt.Sprintf("%s: %s", time.Now(), text)
-}
-
 func CheckIPAddressPresence(ip string, container string) *bool {
 	cmdOut := new(bytes.Buffer)
 	family := "-4"
 	if vip.IsIPv6(ip) {
 		family = "-6"
 	}
-	By(withTimestamp("CheckIPAddressPresence container: " + container))
+
 	cmd := exec.Command(
 		"docker", "exec", container, "ip", family, "addr", "show", "dev", "eth0",
 	)
 	cmd.Stdout = cmdOut
 	if err := cmd.Run(); err != nil {
-		By(withTimestamp(fmt.Sprintf("docker error: %s", err.Error())))
 		return nil
 	}
-	By(withTimestamp(fmt.Sprintf("docker response: %s", cmdOut.String())))
 	isPresent := strings.Contains(cmdOut.String(), ip)
 	return &isPresent
 }
 
 func CheckIPAddressPresenceByLease(name, namespace, ip string, client kubernetes.Interface) *bool {
 	container := GetLeaseHolder(name, namespace, client)
-	By(withTimestamp(fmt.Sprintf("found lease holder: %s", container)))
 	return CheckIPAddressPresence(ip, container)
 }
 
@@ -187,6 +180,5 @@ func GetLeaseHolder(name, namespace string, client kubernetes.Interface) string 
 	}, "300s").ShouldNot(HaveOccurred())
 
 	Expect(lease).ToNot(BeNil())
-	By(withTimestamp(fmt.Sprintf("got lease: %s", lease.String())))
 	return *lease.Spec.HolderIdentity
 }
