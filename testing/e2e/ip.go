@@ -6,6 +6,7 @@ package e2e
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"encoding/binary"
 	"fmt"
 	"io"
@@ -18,6 +19,9 @@ import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	"github.com/onsi/gomega/gexec"
+	coordinationv1 "k8s.io/api/coordination/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/kubernetes"
 	kindconfigv1alpha4 "sigs.k8s.io/kind/pkg/apis/config/v1alpha4"
 	"sigs.k8s.io/kind/pkg/cluster"
 )
@@ -130,19 +134,34 @@ func getKindNetworkSubnetCIDRs() []string {
 	return cidrs
 }
 
-func CheckIPAddressPresence(ip string, container string) bool {
+func withTimestamp(text string) string {
+	return fmt.Sprintf("%s: %s", time.Now(), text)
+}
+
+func CheckIPAddressPresence(ip string, container string) *bool {
 	cmdOut := new(bytes.Buffer)
 	family := "-4"
 	if vip.IsIPv6(ip) {
 		family = "-6"
 	}
-	By("CheckIPAddressPresence contianer: " + container)
+	By(withTimestamp("CheckIPAddressPresence container: " + container))
 	cmd := exec.Command(
 		"docker", "exec", container, "ip", family, "addr", "show", "dev", "eth0",
 	)
 	cmd.Stdout = cmdOut
-	cmd.Run()
-	return strings.Contains(cmdOut.String(), ip)
+	if err := cmd.Run(); err != nil {
+		By(withTimestamp(fmt.Sprintf("docker error: %s", err.Error())))
+		return nil
+	}
+	By(withTimestamp(fmt.Sprintf("docker response: %s", cmdOut.String())))
+	isPresent := strings.Contains(cmdOut.String(), ip)
+	return &isPresent
+}
+
+func CheckIPAddressPresenceByLease(name, namespace, ip string, client kubernetes.Interface) *bool {
+	container := GetLeaseHolder(name, namespace, client)
+	By(withTimestamp(fmt.Sprintf("found lease holder: %s", container)))
+	return CheckIPAddressPresence(ip, container)
 }
 
 func CheckRoutePresence(ip string, container string) bool {
@@ -157,4 +176,17 @@ func CheckRoutePresence(ip string, container string) bool {
 	cmd.Stdout = cmdOut
 	Eventually(cmd.Run(), "20s").Should(Succeed())
 	return strings.Contains(cmdOut.String(), ip)
+}
+
+func GetLeaseHolder(name, namespace string, client kubernetes.Interface) string {
+	var lease *coordinationv1.Lease
+	Eventually(func() error {
+		var err error
+		lease, err = client.CoordinationV1().Leases(namespace).Get(context.TODO(), name, metav1.GetOptions{})
+		return err
+	}, "300s").ShouldNot(HaveOccurred())
+
+	Expect(lease).ToNot(BeNil())
+	By(withTimestamp(fmt.Sprintf("got lease: %s", lease.String())))
+	return *lease.Spec.HolderIdentity
 }
