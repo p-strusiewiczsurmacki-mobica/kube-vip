@@ -13,6 +13,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"text/template"
 	"time"
 
@@ -34,20 +35,27 @@ import (
 	"github.com/onsi/gomega/gexec"
 
 	kvcluster "github.com/kube-vip/kube-vip/pkg/cluster"
+	"github.com/kube-vip/kube-vip/pkg/vip"
 	"github.com/kube-vip/kube-vip/testing/e2e"
 )
 
 var _ = Describe("kube-vip ARP/NDP broadcast neighbor", func() {
+	const (
+		dsName    = "traefik-whoami"
+		namespace = "default"
+	)
+
 	var (
-		logger                  log.Logger
-		imagePath               string
-		k8sImagePath            string
-		configPath              string
-		kubeVIPManifestTemplate *template.Template
-		// kubeVIPHostnameManifestTemplate     *template.Template
-		// kubeVIPRoutingTableManifestTemplate *template.Template
-		tempDirPath string
-		v129        bool
+		logger                              log.Logger
+		imagePath                           string
+		k8sImagePath                        string
+		configPath                          string
+		kubeVIPManifestTemplate             *template.Template
+		kubeVIPHostnameManifestTemplate     *template.Template
+		kubeVIPRoutingTableManifestTemplate *template.Template
+		tempDirPath                         string
+		v129                                bool
+		configMtx                           sync.Mutex
 	)
 
 	BeforeEach(func() {
@@ -68,24 +76,19 @@ var _ = Describe("kube-vip ARP/NDP broadcast neighbor", func() {
 		kubeVIPManifestTemplate, err = template.New("kube-vip.yaml.tmpl").ParseFiles(templatePath)
 		Expect(err).NotTo(HaveOccurred())
 
-		// hostnameTemplatePath := filepath.Join(curDir, "kube-vip-hostname.yaml.tmpl")
-		// kubeVIPHostnameManifestTemplate, err = template.New("kube-vip-hostname.yaml.tmpl").ParseFiles(hostnameTemplatePath)
-		// Expect(err).NotTo(HaveOccurred())
+		hostnameTemplatePath := filepath.Join(curDir, "kube-vip-hostname.yaml.tmpl")
+		kubeVIPHostnameManifestTemplate, err = template.New("kube-vip-hostname.yaml.tmpl").ParseFiles(hostnameTemplatePath)
+		Expect(err).NotTo(HaveOccurred())
 
-		// templateRoutingTablePath := filepath.Join(curDir, "kube-vip-routing-table.yaml.tmpl")
-		// kubeVIPRoutingTableManifestTemplate, err = template.New("kube-vip-routing-table.yaml.tmpl").ParseFiles(templateRoutingTablePath)
-		// Expect(err).NotTo(HaveOccurred())
+		templateRoutingTablePath := filepath.Join(curDir, "kube-vip-routing-table.yaml.tmpl")
+		kubeVIPRoutingTableManifestTemplate, err = template.New("kube-vip-routing-table.yaml.tmpl").ParseFiles(templateRoutingTablePath)
+		Expect(err).NotTo(HaveOccurred())
 
 		tempDirPath, err = os.MkdirTemp("", "kube-vip-test")
 		Expect(err).NotTo(HaveOccurred())
 	})
 
 	Describe("kube-vip IPv4 functionality, vip_leaderelection=true, svc_enable=true, svc_election=false", Ordered, func() {
-		const (
-			dsName    = "traefik-whoami"
-			namespace = "default"
-		)
-
 		var (
 			clusterConfig kindconfigv1alpha4.Cluster
 			ipv4VIP       string
@@ -170,12 +173,16 @@ var _ = Describe("kube-vip ARP/NDP broadcast neighbor", func() {
 			if os.Getenv("E2E_PRESERVE_CLUSTER") == "true" {
 				return
 			}
+
+			configMtx.Lock()
+			defer configMtx.Unlock()
+
 			provider := cluster.NewProvider(
 				cluster.ProviderWithLogger(logger),
 				cluster.ProviderWithDocker(),
 			)
 
-			Expect(provider.Delete(clusterName, "")).To(Succeed())
+			Eventually(provider.Delete(clusterName, ""), "30s", "200ms").Should(Succeed())
 
 			Expect(os.RemoveAll(tempDirPath)).To(Succeed())
 		})
@@ -251,11 +258,6 @@ var _ = Describe("kube-vip ARP/NDP broadcast neighbor", func() {
 	})
 
 	Describe("kube-vip IPv4 functionality, vip_leaderelection=true, svc_enable=true, svc_election=true", Ordered, func() {
-		const (
-			dsName    = "traefik-whoami"
-			namespace = "default"
-		)
-
 		var (
 			clusterConfig kindconfigv1alpha4.Cluster
 			ipv4VIP       string
@@ -264,7 +266,7 @@ var _ = Describe("kube-vip ARP/NDP broadcast neighbor", func() {
 		)
 
 		BeforeAll(func() {
-			clusterName = fmt.Sprintf("%s-ipv4", filepath.Base(tempDirPath))
+			clusterName = fmt.Sprintf("%s-svc-ipv4", filepath.Base(tempDirPath))
 
 			clusterConfig = kindconfigv1alpha4.Cluster{
 				Networking: kindconfigv1alpha4.Networking{
@@ -341,12 +343,15 @@ var _ = Describe("kube-vip ARP/NDP broadcast neighbor", func() {
 				return
 			}
 
+			configMtx.Lock()
+			defer configMtx.Unlock()
+
 			provider := cluster.NewProvider(
 				cluster.ProviderWithLogger(logger),
 				cluster.ProviderWithDocker(),
 			)
 
-			Expect(provider.Delete(clusterName, "")).To(Succeed())
+			Eventually(provider.Delete(clusterName, ""), "30s", "200ms").Should(Succeed())
 
 			Expect(os.RemoveAll(tempDirPath)).To(Succeed())
 		})
@@ -390,52 +395,9 @@ var _ = Describe("kube-vip ARP/NDP broadcast neighbor", func() {
 			Entry("with external traffic policy - cluster", "test-svc-cluster", uint(4), corev1.ServiceExternalTrafficPolicyCluster),
 			Entry("with external traffic policy - local", "test-svc-local", uint(3), corev1.ServiceExternalTrafficPolicyLocal),
 		)
-
-		// TODO: how to force 2 services to be elected by one leader, if more than 1 kube-vip instance is present???
-		// DescribeTable("only removes VIP address if it was referenced by multiple services and all of them were deleted",
-		// 	func(svc1Name string, svc2Name string, offset uint, trafficPolicy corev1.ServiceExternalTrafficPolicy) {
-		// 		lbAddress := e2e.GenerateVIPWithCustomOffset(e2e.IPv4Family, offset)
-
-		// 		createTestService(svc1Name, namespace, dsName, lbAddress,
-		// 			client, corev1.IPFamilyPolicySingleStack, trafficPolicy)
-		// 		createTestService(svc2Name, namespace, dsName, lbAddress,
-		// 			client, corev1.IPFamilyPolicySingleStack, trafficPolicy)
-
-		// 		lease1 := getLeaseHolder(fmt.Sprintf("kubevip-%s", svc1Name), namespace, client)
-		// 		Eventually(e2e.CheckIPAddressPresence(lbAddress, lease1), time.Second*10).Should(BeTrue())
-		// 		assertConnection("http", lbAddress, "80", "", 1*time.Second, 30*time.Second)
-
-		// 		lease2 := getLeaseHolder(fmt.Sprintf("kubevip-%s", svc2Name), namespace, client)
-		// 		Eventually(e2e.CheckIPAddressPresence(lbAddress, lease2), time.Second*10).Should(BeTrue())
-		// 		assertConnection("http", lbAddress, "80", "", 1*time.Second, 30*time.Second)
-
-		// 		err := client.CoreV1().Services(namespace).Delete(context.TODO(), svc1Name, metav1.DeleteOptions{})
-		// 		Expect(err).ToNot(HaveOccurred())
-
-		// 		// sleep for 3 seconds so kube-vip will hopefully process deletion request
-		// 		time.Sleep(time.Second * 3)
-
-		// 		assertConnection("http", lbAddress, "80", "", 1*time.Second, 30*time.Second)
-
-		// 		Expect(e2e.CheckIPAddressPresence(lbAddress, lease1)).To(BeTrue())
-
-		// 		err = client.CoreV1().Services(namespace).Delete(context.TODO(), svc2Name, metav1.DeleteOptions{})
-		// 		Expect(err).ToNot(HaveOccurred())
-
-		// 		Eventually(e2e.CheckIPAddressPresence(lbAddress, lease2), time.Second*10).Should(BeFalse())
-		// 		assertConnectionError("http", lbAddress, "80", "", 3*time.Second)
-		// 	},
-		// 	Entry("with external traffic policy - cluster", "test-svc1-cluster", "test-svc2-cluster", uint(8), corev1.ServiceExternalTrafficPolicyCluster),
-		// 	Entry("with external traffic policy - local", "test-svc1-local", "test-svc2-local", uint(7), corev1.ServiceExternalTrafficPolicyLocal),
-		// )
 	})
 
 	Describe("kube-vip IPv6 functionality, vip_leaderelection=true, svc_enable=true, svc_election=false", Ordered, func() {
-		const (
-			dsName    = "traefik-whoami"
-			namespace = "default"
-		)
-
 		var (
 			clusterConfig kindconfigv1alpha4.Cluster
 			ipv6VIP       string
@@ -521,12 +483,15 @@ var _ = Describe("kube-vip ARP/NDP broadcast neighbor", func() {
 				return
 			}
 
+			configMtx.Lock()
+			defer configMtx.Unlock()
+
 			provider := cluster.NewProvider(
 				cluster.ProviderWithLogger(logger),
 				cluster.ProviderWithDocker(),
 			)
 
-			Expect(provider.Delete(clusterName, "")).To(Succeed())
+			Eventually(provider.Delete(clusterName, ""), "30s", "200ms").Should(Succeed())
 
 			Expect(os.RemoveAll(tempDirPath)).To(Succeed())
 		})
@@ -605,11 +570,6 @@ var _ = Describe("kube-vip ARP/NDP broadcast neighbor", func() {
 	})
 
 	Describe("kube-vip IPv6 functionality, vip_leaderelection=true, svc_enable=true, svc_election=true", Ordered, func() {
-		const (
-			dsName    = "traefik-whoami"
-			namespace = "default"
-		)
-
 		var (
 			clusterConfig kindconfigv1alpha4.Cluster
 			ipv6VIP       string
@@ -618,7 +578,7 @@ var _ = Describe("kube-vip ARP/NDP broadcast neighbor", func() {
 		)
 
 		BeforeAll(func() {
-			clusterName = fmt.Sprintf("%s-ipv6", filepath.Base(tempDirPath))
+			clusterName = fmt.Sprintf("%s-svc-ipv6", filepath.Base(tempDirPath))
 
 			clusterConfig = kindconfigv1alpha4.Cluster{
 				Networking: kindconfigv1alpha4.Networking{
@@ -695,12 +655,15 @@ var _ = Describe("kube-vip ARP/NDP broadcast neighbor", func() {
 				return
 			}
 
+			configMtx.Lock()
+			defer configMtx.Unlock()
+
 			provider := cluster.NewProvider(
 				cluster.ProviderWithLogger(logger),
 				cluster.ProviderWithDocker(),
 			)
 
-			Expect(provider.Delete(clusterName, "")).To(Succeed())
+			Eventually(provider.Delete(clusterName, ""), "30s", "200ms").Should(Succeed())
 
 			Expect(os.RemoveAll(tempDirPath)).To(Succeed())
 		})
@@ -747,501 +710,1070 @@ var _ = Describe("kube-vip ARP/NDP broadcast neighbor", func() {
 		)
 	})
 
-	// Describe("kube-vip DualStack functionality - IPv4 primary", func() {
-	// 	var (
-	// 		clusterConfig kindconfigv1alpha4.Cluster
-	// 		dualstackVIP  string
-	// 	)
-
-	// 	BeforeEach(func() {
-	// 		clusterName = fmt.Sprintf("%s-dualstack-ipv4", filepath.Base(tempDirPath))
-
-	// 		clusterConfig = kindconfigv1alpha4.Cluster{
-	// 			Networking: kindconfigv1alpha4.Networking{
-	// 				IPFamily: kindconfigv1alpha4.DualStackFamily,
-	// 			},
-	// 			Nodes: []kindconfigv1alpha4.Node{},
-	// 		}
-
-	// 		manifestPath := filepath.Join(tempDirPath, "kube-vip-dualstack.yaml")
-
-	// 		for i := 0; i < 3; i++ {
-	// 			nodeConfig := kindconfigv1alpha4.Node{
-	// 				Role: kindconfigv1alpha4.ControlPlaneRole,
-	// 				ExtraMounts: []kindconfigv1alpha4.Mount{
-	// 					{
-	// 						HostPath:      manifestPath,
-	// 						ContainerPath: "/etc/kubernetes/manifests/kube-vip.yaml",
-	// 					},
-	// 				},
-	// 			}
-	// 			// Override the kind image version
-	// 			if k8sImagePath != "" {
-	// 				nodeConfig.Image = k8sImagePath
-	// 			}
-	// 			clusterConfig.Nodes = append(clusterConfig.Nodes, nodeConfig)
-	// 		}
-
-	// 		dualstackVIP = e2e.GenerateDualStackVIP()
-
-	// 		manifestFile, err := os.Create(manifestPath)
-	// 		Expect(err).NotTo(HaveOccurred())
-
-	// 		defer manifestFile.Close()
-
-	// 		Expect(kubeVIPManifestTemplate.Execute(manifestFile, e2e.KubevipManifestValues{
-	// 			ControlPlaneVIP: dualstackVIP,
-	// 			ImagePath:       imagePath,
-	// 			ConfigPath:      configPath,
-	// 		})).To(Succeed())
-
-	// 		if v129 {
-	// 			// create a seperate manifest
-	// 			manifestPath2 := filepath.Join(tempDirPath, "kube-vip-ipv6-first.yaml")
-
-	// 			// change the path of the mount to the new file
-	// 			clusterConfig.Nodes[0].ExtraMounts[0].HostPath = manifestPath2
-
-	// 			manifestFile2, err := os.Create(manifestPath2)
-	// 			Expect(err).NotTo(HaveOccurred())
-
-	// 			defer manifestFile2.Close()
-
-	// 			Expect(kubeVIPManifestTemplate.Execute(manifestFile2, e2e.KubevipManifestValues{
-	// 				ControlPlaneVIP: dualstackVIP,
-	// 				ImagePath:       imagePath,
-	// 				ConfigPath:      "/etc/kubernetes/super-admin.conf", // Change the kuberenetes file
-	// 			})).To(Succeed())
-	// 		}
-	// 	})
-
-	// 	It("provides an DualStack VIP addresses for the Kubernetes control plane nodes", func() {
-	// 		vips := vip.Split(dualstackVIP)
-
-	// 		By(withTimestamp("creating a kind cluster with multiple control plane nodes"))
-	// 		createKindCluster(logger, &clusterConfig, clusterName)
-
-	// 		By(withTimestamp("loading local docker image to kind cluster"))
-	// 		e2e.LoadDockerImageToKind(logger, imagePath, clusterName)
-
-	// 		By(withTimestamp("checking that the Kubernetes control plane nodes are accessible via the assigned IPv6 VIP"))
-	// 		// Allow enough time for control plane nodes to load the docker image and
-	// 		// use the default timeout for establishing a connection to the VIP
-	// 		assertControlPlaneIsRoutable(vips[1], time.Duration(0), 20*time.Second)
-
-	// 		By(withTimestamp("checking that the Kubernetes control plane nodes are accessible via the assigned IPv4 VIP"))
-	// 		// Allow enough time for control plane nodes to load the docker image and
-	// 		// use the default timeout for establishing a connection to the VIP
-	// 		assertControlPlaneIsRoutable(vips[0], time.Duration(0), 20*time.Second)
-
-	// 		// wait for a bit
-	// 		By(withTimestamp("sitting for a few seconds to hopefully allow the roles to have been created in the cluster"))
-	// 		time.Sleep(30 * time.Second)
-
-	// 		By(withTimestamp("killing the leader Kubernetes control plane node to trigger a fail-over scenario"))
-	// 		killLeader(vips[1], clusterName)
-
-	// 		By(withTimestamp("checking that the Kubernetes control plane nodes are still accessible via the assigned IPv6 VIP with little downtime"))
-	// 		// Allow at most 20 seconds of downtime when polling the control plane nodes
-	// 		assertControlPlaneIsRoutable(vips[1], 1*time.Second, 30*time.Second)
-
-	// 		By(withTimestamp("checking that the Kubernetes control plane nodes are still accessible via the assigned IPv4 VIP with little downtime"))
-	// 		// Allow at most 20 seconds of downtime when polling the control plane nodes
-	// 		assertControlPlaneIsRoutable(vips[0], 1*time.Second, 30*time.Second)
-	// 	})
-	// })
-
-	// Describe("kube-vip DualStack functionality - IPv6 primary", func() {
-	// 	var (
-	// 		clusterConfig kindconfigv1alpha4.Cluster
-	// 		dualstackVIP  string
-	// 	)
-
-	// 	BeforeEach(func() {
-	// 		clusterName = fmt.Sprintf("%s-dualstack-ipv6", filepath.Base(tempDirPath))
-
-	// 		clusterConfig = kindconfigv1alpha4.Cluster{
-	// 			Networking: kindconfigv1alpha4.Networking{
-	// 				IPFamily:      kindconfigv1alpha4.DualStackFamily,
-	// 				PodSubnet:     "fd00:10:244::/56,10.244.0.0/16",
-	// 				ServiceSubnet: "fd00:10:96::/112,10.96.0.0/16",
-	// 			},
-	// 			Nodes: []kindconfigv1alpha4.Node{},
-	// 		}
-
-	// 		manifestPath := filepath.Join(tempDirPath, "kube-vip-dualstack.yaml")
-
-	// 		for i := 0; i < 3; i++ {
-	// 			nodeConfig := kindconfigv1alpha4.Node{
-	// 				Role: kindconfigv1alpha4.ControlPlaneRole,
-	// 				ExtraMounts: []kindconfigv1alpha4.Mount{
-	// 					{
-	// 						HostPath:      manifestPath,
-	// 						ContainerPath: "/etc/kubernetes/manifests/kube-vip.yaml",
-	// 					},
-	// 				},
-	// 			}
-	// 			// Override the kind image version
-	// 			if k8sImagePath != "" {
-	// 				nodeConfig.Image = k8sImagePath
-	// 			}
-	// 			clusterConfig.Nodes = append(clusterConfig.Nodes, nodeConfig)
-	// 		}
-
-	// 		dualstackVIP = e2e.GenerateDualStackVIP()
-
-	// 		manifestFile, err := os.Create(manifestPath)
-	// 		Expect(err).NotTo(HaveOccurred())
-
-	// 		defer manifestFile.Close()
-
-	// 		Expect(kubeVIPManifestTemplate.Execute(manifestFile, e2e.KubevipManifestValues{
-	// 			ControlPlaneVIP: dualstackVIP,
-	// 			ImagePath:       imagePath,
-	// 			ConfigPath:      configPath,
-	// 		})).To(Succeed())
-
-	// 		if v129 {
-	// 			// create a seperate manifest
-	// 			manifestPath2 := filepath.Join(tempDirPath, "kube-vip-ipv6-first.yaml")
-
-	// 			// change the path of the mount to the new file
-	// 			clusterConfig.Nodes[0].ExtraMounts[0].HostPath = manifestPath2
-
-	// 			manifestFile2, err := os.Create(manifestPath2)
-	// 			Expect(err).NotTo(HaveOccurred())
-
-	// 			defer manifestFile2.Close()
-
-	// 			Expect(kubeVIPManifestTemplate.Execute(manifestFile2, e2e.KubevipManifestValues{
-	// 				ControlPlaneVIP: dualstackVIP,
-	// 				ImagePath:       imagePath,
-	// 				ConfigPath:      "/etc/kubernetes/super-admin.conf", // Change the kuberenetes file
-	// 			})).To(Succeed())
-	// 		}
-	// 	})
-
-	// 	It("provides an DualStack VIP addresses for the Kubernetes control plane nodes", func() {
-	// 		vips := vip.Split(dualstackVIP)
-
-	// 		By(withTimestamp("creating a kind cluster with multiple control plane nodes"))
-	// 		createKindCluster(logger, &clusterConfig, clusterName)
-
-	// 		By(withTimestamp("loading local docker image to kind cluster"))
-	// 		e2e.LoadDockerImageToKind(logger, imagePath, clusterName)
-
-	// 		By(withTimestamp("checking that the Kubernetes control plane nodes are accessible via the assigned IPv6 VIP"))
-	// 		// Allow enough time for control plane nodes to load the docker image and
-	// 		// use the default timeout for establishing a connection to the VIP
-	// 		assertControlPlaneIsRoutable(vips[1], time.Duration(0), 20*time.Second)
-
-	// 		By(withTimestamp("checking that the Kubernetes control plane nodes are accessible via the assigned IPv4 VIP"))
-	// 		// Allow enough time for control plane nodes to load the docker image and
-	// 		// use the default timeout for establishing a connection to the VIP
-	// 		assertControlPlaneIsRoutable(vips[0], time.Duration(0), 20*time.Second)
-
-	// 		// wait for a bit
-	// 		By(withTimestamp("sitting for a few seconds to hopefully allow the roles to have been created in the cluster"))
-	// 		time.Sleep(30 * time.Second)
-
-	// 		By(withTimestamp("killing the leader Kubernetes control plane node to trigger a fail-over scenario"))
-	// 		killLeader(vips[1], clusterName)
-
-	// 		By(withTimestamp("checking that the Kubernetes control plane nodes are still accessible via the assigned IPv6 VIP with little downtime"))
-	// 		// Allow at most 20 seconds of downtime when polling the control plane nodes
-	// 		assertControlPlaneIsRoutable(vips[1], 1*time.Second, 30*time.Second)
-
-	// 		By(withTimestamp("checking that the Kubernetes control plane nodes are still accessible via the assigned IPv4 VIP with little downtime"))
-	// 		// Allow at most 20 seconds of downtime when polling the control plane nodes
-	// 		assertControlPlaneIsRoutable(vips[0], 1*time.Second, 30*time.Second)
-	// 	})
-	// })
-
-	// Describe("kube-vip IPv4 functionality with legacy hostname", func() {
-	// 	var (
-	// 		clusterConfig kindconfigv1alpha4.Cluster
-	// 		ipv4VIP       string
-	// 	)
-
-	// 	BeforeEach(func() {
-	// 		clusterName = fmt.Sprintf("%s-ipv4-hostname", filepath.Base(tempDirPath))
-
-	// 		clusterConfig = kindconfigv1alpha4.Cluster{
-	// 			Networking: kindconfigv1alpha4.Networking{
-	// 				IPFamily: kindconfigv1alpha4.IPv4Family,
-	// 			},
-	// 			Nodes: []kindconfigv1alpha4.Node{},
-	// 		}
-
-	// 		manifestPath := filepath.Join(tempDirPath, "kube-vip-ipv4-hostname.yaml")
-
-	// 		for i := 0; i < 3; i++ {
-	// 			nodeConfig := kindconfigv1alpha4.Node{
-	// 				Role: kindconfigv1alpha4.ControlPlaneRole,
-	// 				ExtraMounts: []kindconfigv1alpha4.Mount{
-	// 					{
-	// 						HostPath:      manifestPath,
-	// 						ContainerPath: "/etc/kubernetes/manifests/kube-vip.yaml",
-	// 					},
-	// 				},
-	// 			}
-	// 			// Override the kind image version
-	// 			if k8sImagePath != "" {
-	// 				nodeConfig.Image = k8sImagePath
-	// 			}
-	// 			clusterConfig.Nodes = append(clusterConfig.Nodes, nodeConfig)
-	// 		}
-
-	// 		manifestFile, err := os.Create(manifestPath)
-	// 		Expect(err).NotTo(HaveOccurred())
-
-	// 		defer manifestFile.Close()
-
-	// 		ipv4VIP = e2e.GenerateVIP(e2e.IPv4Family)
-
-	// 		Expect(kubeVIPHostnameManifestTemplate.Execute(manifestFile, e2e.KubevipManifestValues{
-	// 			ControlPlaneVIP: ipv4VIP,
-	// 			ImagePath:       imagePath,
-	// 			ConfigPath:      configPath,
-	// 		})).To(Succeed())
-
-	// 		if v129 {
-	// 			// create a seperate manifest
-	// 			manifestPath2 := filepath.Join(tempDirPath, "kube-vip-ipv4-hostname-first.yaml")
-
-	// 			// change the path of the mount to the new file
-	// 			clusterConfig.Nodes[0].ExtraMounts[0].HostPath = manifestPath2
-
-	// 			manifestFile2, err := os.Create(manifestPath2)
-	// 			Expect(err).NotTo(HaveOccurred())
-
-	// 			defer manifestFile2.Close()
-
-	// 			Expect(kubeVIPHostnameManifestTemplate.Execute(manifestFile2, e2e.KubevipManifestValues{
-	// 				ControlPlaneVIP: ipv4VIP,
-	// 				ImagePath:       imagePath,
-	// 				ConfigPath:      "/etc/kubernetes/super-admin.conf", // Change the kuberenetes file
-	// 			})).To(Succeed())
-	// 		}
-	// 	})
-
-	// 	It("uses hostname fallback while providing an IPv4 VIP address for the Kubernetes control plane nodes", func() {
-	// 		By(withTimestamp("creating a kind cluster with multiple control plane nodes"))
-	// 		createKindCluster(logger, &clusterConfig, clusterName)
-
-	// 		By(withTimestamp("loading local docker image to kind cluster"))
-	// 		e2e.LoadDockerImageToKind(logger, imagePath, clusterName)
-
-	// 		By(withTimestamp("checking that the Kubernetes control plane nodes are accessible via the assigned IPv4 VIP"))
-	// 		// Allow enough time for control plane nodes to load the docker image and
-	// 		// use the default timeout for establishing a connection to the VIP
-	// 		assertControlPlaneIsRoutable(ipv4VIP, time.Duration(0), 20*time.Second)
-
-	// 		// wait for a bit
-	// 		By(withTimestamp("sitting for a few seconds to hopefully allow the roles to have been created in the cluster"))
-	// 		time.Sleep(30 * time.Second)
-
-	// 		By(withTimestamp("killing the leader Kubernetes control plane node to trigger a fail-over scenario"))
-	// 		killLeader(ipv4VIP, clusterName)
-
-	// 		By(withTimestamp("checking that the Kubernetes control plane nodes are still accessible via the assigned IPv4 VIP with little downtime"))
-	// 		// Allow at most 20 seconds of downtime when polling the control plane nodes
-	// 		assertControlPlaneIsRoutable(ipv4VIP, 1*time.Second, 30*time.Second)
-	// 	})
-	// })
-
-	// Describe("kube-vip IPv4 control-plane routing table mode functionality", func() {
-	// 	var (
-	// 		clusterConfig kindconfigv1alpha4.Cluster
-	// 		ipv4VIP       string
-	// 	)
-
-	// 	numberOfCPNodes := 3
-
-	// 	BeforeEach(func() {
-	// 		clusterName = fmt.Sprintf("%s-rt-ipv4", filepath.Base(tempDirPath))
-
-	// 		clusterConfig = kindconfigv1alpha4.Cluster{
-	// 			Networking: kindconfigv1alpha4.Networking{
-	// 				IPFamily: kindconfigv1alpha4.IPv4Family,
-	// 			},
-	// 			Nodes: []kindconfigv1alpha4.Node{},
-	// 		}
-
-	// 		manifestPath := filepath.Join(tempDirPath, "kube-vip-ipv4.yaml")
-
-	// 		for i := 0; i < numberOfCPNodes; i++ {
-	// 			nodeConfig := kindconfigv1alpha4.Node{
-	// 				Role: kindconfigv1alpha4.ControlPlaneRole,
-	// 				ExtraMounts: []kindconfigv1alpha4.Mount{
-	// 					{
-	// 						HostPath:      manifestPath,
-	// 						ContainerPath: "/etc/kubernetes/manifests/kube-vip.yaml",
-	// 					},
-	// 				},
-	// 			}
-	// 			// Override the kind image version
-	// 			if k8sImagePath != "" {
-	// 				nodeConfig.Image = k8sImagePath
-	// 			}
-	// 			clusterConfig.Nodes = append(clusterConfig.Nodes, nodeConfig)
-	// 		}
-
-	// 		manifestFile, err := os.Create(manifestPath)
-	// 		Expect(err).NotTo(HaveOccurred())
-
-	// 		defer manifestFile.Close()
-
-	// 		ipv4VIP = e2e.GenerateVIP(e2e.IPv4Family)
-
-	// 		Expect(kubeVIPRoutingTableManifestTemplate.Execute(manifestFile, e2e.KubevipManifestValues{
-	// 			ControlPlaneVIP: ipv4VIP,
-	// 			ImagePath:       imagePath,
-	// 			ConfigPath:      configPath,
-	// 		})).To(Succeed())
-
-	// 		if v129 {
-	// 			// create a seperate manifest
-	// 			manifestPath2 := filepath.Join(tempDirPath, "kube-vip-ipv4-first.yaml")
-
-	// 			// change the path of the mount to the new file
-	// 			clusterConfig.Nodes[0].ExtraMounts[0].HostPath = manifestPath2
-
-	// 			manifestFile2, err := os.Create(manifestPath2)
-	// 			Expect(err).NotTo(HaveOccurred())
-
-	// 			defer manifestFile2.Close()
-
-	// 			Expect(kubeVIPRoutingTableManifestTemplate.Execute(manifestFile2, e2e.KubevipManifestValues{
-	// 				ControlPlaneVIP: ipv4VIP,
-	// 				ImagePath:       imagePath,
-	// 				ConfigPath:      "/etc/kubernetes/super-admin.conf", // Change the kuberenetes file
-	// 			})).To(Succeed())
-	// 		}
-	// 	})
-
-	// 	It("setups IPv4 address and route on control-plane node", func() {
-	// 		By(withTimestamp("creating a kind cluster with multiple control plane nodes"))
-	// 		createKindCluster(logger, &clusterConfig, clusterName)
-
-	// 		By(withTimestamp("loading local docker image to kind cluster"))
-	// 		e2e.LoadDockerImageToKind(logger, imagePath, clusterName)
-
-	// 		By(withTimestamp("sitting for a few seconds to hopefully allow kube-vip to start"))
-	// 		time.Sleep(30 * time.Second)
-
-	// 		for i := 1; i <= numberOfCPNodes; i++ {
-	// 			var container string
-	// 			if i > 1 {
-	// 				container = fmt.Sprintf("%s-control-plane%d", clusterName, i)
-	// 			} else {
-	// 				container = fmt.Sprintf("%s-control-plane", clusterName)
-	// 			}
-
-	// 			exists := e2e.CheckIPAddressPresence(ipv4VIP, container)
-	// 			Expect(exists).To(BeTrue())
-	// 			exists = e2e.CheckRoutePresence(ipv4VIP, container)
-	// 			Expect(exists).To(BeTrue())
-	// 		}
-	// 	})
-	// })
-
-	// Describe("kube-vip IPv6 control-plane routing table mode functionality", func() {
-	// 	var (
-	// 		clusterConfig kindconfigv1alpha4.Cluster
-	// 		ipv6VIP       string
-	// 	)
-
-	// 	numberOfCPNodes := 3
-
-	// 	BeforeEach(func() {
-
-	// 		clusterName = fmt.Sprintf("%s-rt-ipv6", filepath.Base(tempDirPath))
-
-	// 		clusterConfig = kindconfigv1alpha4.Cluster{
-	// 			Networking: kindconfigv1alpha4.Networking{
-	// 				IPFamily: kindconfigv1alpha4.IPv6Family,
-	// 			},
-	// 			Nodes: []kindconfigv1alpha4.Node{},
-	// 		}
-
-	// 		manifestPath := filepath.Join(tempDirPath, "kube-vip-ipv6.yaml")
-
-	// 		for i := 0; i < numberOfCPNodes; i++ {
-	// 			nodeConfig := kindconfigv1alpha4.Node{
-	// 				Role: kindconfigv1alpha4.ControlPlaneRole,
-	// 				ExtraMounts: []kindconfigv1alpha4.Mount{
-	// 					{
-	// 						HostPath:      manifestPath,
-	// 						ContainerPath: "/etc/kubernetes/manifests/kube-vip.yaml",
-	// 					},
-	// 				},
-	// 			}
-	// 			// Override the kind image version
-	// 			if k8sImagePath != "" {
-	// 				nodeConfig.Image = k8sImagePath
-	// 			}
-	// 			clusterConfig.Nodes = append(clusterConfig.Nodes, nodeConfig)
-	// 		}
-
-	// 		manifestFile, err := os.Create(manifestPath)
-	// 		Expect(err).NotTo(HaveOccurred())
-
-	// 		defer manifestFile.Close()
-
-	// 		ipv6VIP = e2e.GenerateVIP(e2e.IPv6Family)
-
-	// 		Expect(kubeVIPRoutingTableManifestTemplate.Execute(manifestFile, e2e.KubevipManifestValues{
-	// 			ControlPlaneVIP: ipv6VIP,
-	// 			ImagePath:       imagePath,
-	// 			ConfigPath:      configPath,
-	// 		})).To(Succeed())
-
-	// 		if v129 {
-	// 			// create a seperate manifest
-	// 			manifestPath2 := filepath.Join(tempDirPath, "kube-vip-ipv6-first.yaml")
-
-	// 			// change the path of the mount to the new file
-	// 			clusterConfig.Nodes[0].ExtraMounts[0].HostPath = manifestPath2
-
-	// 			manifestFile2, err := os.Create(manifestPath2)
-	// 			Expect(err).NotTo(HaveOccurred())
-
-	// 			defer manifestFile2.Close()
-
-	// 			Expect(kubeVIPRoutingTableManifestTemplate.Execute(manifestFile2, e2e.KubevipManifestValues{
-	// 				ControlPlaneVIP: ipv6VIP,
-	// 				ImagePath:       imagePath,
-	// 				ConfigPath:      "/etc/kubernetes/super-admin.conf", // Change the kuberenetes file
-	// 			})).To(Succeed())
-	// 		}
-	// 	})
-
-	// 	It("setups IPv6 address and route on control-plane node", func() {
-	// 		By(withTimestamp("creating a kind cluster with multiple control plane nodes"))
-	// 		createKindCluster(logger, &clusterConfig, clusterName)
-
-	// 		By(withTimestamp("loading local docker image to kind cluster"))
-	// 		e2e.LoadDockerImageToKind(logger, imagePath, clusterName)
-
-	// 		By(withTimestamp("sitting for a few seconds to hopefully allow kube-vip to start"))
-	// 		time.Sleep(30 * time.Second)
-
-	// 		for i := 1; i <= numberOfCPNodes; i++ {
-	// 			var container string
-	// 			if i > 1 {
-	// 				container = fmt.Sprintf("%s-control-plane%d", clusterName, i)
-	// 			} else {
-	// 				container = fmt.Sprintf("%s-control-plane", clusterName)
-	// 			}
-
-	// 			exists := e2e.CheckIPAddressPresence(ipv6VIP, container)
-	// 			Expect(exists).To(BeTrue())
-	// 			exists = e2e.CheckRoutePresence(ipv6VIP, container)
-	// 			Expect(exists).To(BeTrue())
-	// 		}
-	// 	})
-	// })
+	Describe("kube-vip DualStack functionality - IPv4 primary, vip_leaderelection=true, svc_enable=true, svc_election=false", Ordered, func() {
+		var (
+			clusterConfig kindconfigv1alpha4.Cluster
+			dualstackVIP  string
+			clusterName   string
+			client        kubernetes.Interface
+		)
+
+		BeforeAll(func() {
+			clusterName = fmt.Sprintf("%s-ds-ipv4", filepath.Base(tempDirPath))
+
+			clusterConfig = kindconfigv1alpha4.Cluster{
+				Networking: kindconfigv1alpha4.Networking{
+					IPFamily: kindconfigv1alpha4.DualStackFamily,
+				},
+				Nodes: []kindconfigv1alpha4.Node{},
+			}
+
+			manifestPath := filepath.Join(tempDirPath, "kube-vip-dualstack.yaml")
+
+			for i := 0; i < 3; i++ {
+				nodeConfig := kindconfigv1alpha4.Node{
+					Role: kindconfigv1alpha4.ControlPlaneRole,
+					ExtraMounts: []kindconfigv1alpha4.Mount{
+						{
+							HostPath:      manifestPath,
+							ContainerPath: "/etc/kubernetes/manifests/kube-vip.yaml",
+						},
+					},
+				}
+				// Override the kind image version
+				if k8sImagePath != "" {
+					nodeConfig.Image = k8sImagePath
+				}
+				clusterConfig.Nodes = append(clusterConfig.Nodes, nodeConfig)
+			}
+
+			dualstackVIP = e2e.GenerateDualStackVIP()
+
+			manifestFile, err := os.Create(manifestPath)
+			Expect(err).NotTo(HaveOccurred())
+
+			defer manifestFile.Close()
+
+			Expect(kubeVIPManifestTemplate.Execute(manifestFile, e2e.KubevipManifestValues{
+				ControlPlaneVIP:      dualstackVIP,
+				ImagePath:            imagePath,
+				ConfigPath:           configPath,
+				SvcEnable:            "true",
+				EnableEndpointslices: "true",
+			})).To(Succeed())
+
+			if v129 {
+				// create a seperate manifest
+				manifestPath2 := filepath.Join(tempDirPath, "kube-vip-ipv6-first.yaml")
+
+				// change the path of the mount to the new file
+				clusterConfig.Nodes[0].ExtraMounts[0].HostPath = manifestPath2
+
+				manifestFile2, err := os.Create(manifestPath2)
+				Expect(err).NotTo(HaveOccurred())
+
+				defer manifestFile2.Close()
+
+				Expect(kubeVIPManifestTemplate.Execute(manifestFile2, e2e.KubevipManifestValues{
+					ControlPlaneVIP: dualstackVIP,
+					ImagePath:       imagePath,
+					ConfigPath:      "/etc/kubernetes/super-admin.conf", // Change the kuberenetes file
+				})).To(Succeed())
+			}
+
+			By(withTimestamp("creating a kind cluster with multiple control plane nodes"))
+			client = createKindCluster(logger, &clusterConfig, clusterName)
+
+			By(withTimestamp("creating test daemonset"))
+			createTestDS(dsName, namespace, client)
+
+			By(withTimestamp("loading local docker image to kind cluster"))
+			e2e.LoadDockerImageToKind(logger, imagePath, clusterName)
+		})
+
+		AfterAll(func() {
+			if os.Getenv("E2E_PRESERVE_CLUSTER") == "true" {
+				return
+			}
+
+			configMtx.Lock()
+			defer configMtx.Unlock()
+
+			provider := cluster.NewProvider(
+				cluster.ProviderWithLogger(logger),
+				cluster.ProviderWithDocker(),
+			)
+
+			Eventually(func() error {
+				return provider.Delete(clusterName, "")
+			}, "30s", "200ms").Should(Succeed())
+
+			Expect(os.RemoveAll(tempDirPath)).To(Succeed())
+		})
+
+		It("provides an DualStack VIP addresses for the Kubernetes control plane nodes", func() {
+			vips := vip.Split(dualstackVIP)
+
+			By(withTimestamp("checking that the Kubernetes control plane nodes are accessible via the assigned IPv6 VIP"))
+			// Allow enough time for control plane nodes to load the docker image and
+			// use the default timeout for establishing a connection to the VIP
+			assertControlPlaneIsRoutable(vips[1], time.Duration(0), 20*time.Second)
+
+			By(withTimestamp("checking that the Kubernetes control plane nodes are accessible via the assigned IPv4 VIP"))
+			// Allow enough time for control plane nodes to load the docker image and
+			// use the default timeout for establishing a connection to the VIP
+			assertControlPlaneIsRoutable(vips[0], time.Duration(0), 20*time.Second)
+
+			By(withTimestamp("killing the leader Kubernetes control plane node to trigger a fail-over scenario"))
+			killLeader(vips[1], clusterName)
+
+			By(withTimestamp("checking that the Kubernetes control plane nodes are still accessible via the assigned IPv6 VIP with little downtime"))
+			// Allow at most 20 seconds of downtime when polling the control plane nodes
+			assertControlPlaneIsRoutable(vips[1], 1*time.Second, 30*time.Second)
+
+			By(withTimestamp("checking that the Kubernetes control plane nodes are still accessible via the assigned IPv4 VIP with little downtime"))
+			// Allow at most 20 seconds of downtime when polling the control plane nodes
+			assertControlPlaneIsRoutable(vips[0], 1*time.Second, 30*time.Second)
+		})
+
+		DescribeTable("configures an IPv4 and IPv6 VIP addresses for service",
+			func(svcName string, offset uint, trafficPolicy corev1.ServiceExternalTrafficPolicy) {
+				lbAddress := e2e.GenerateDualStackVIPWithCustomOffset(offset)
+
+				lbAddresses := strings.Split(lbAddress, ",")
+
+				createTestService(svcName, namespace, dsName, lbAddress,
+					client, corev1.IPFamilyPolicyRequireDualStack, []corev1.IPFamily{corev1.IPv4Protocol, corev1.IPv6Protocol}, trafficPolicy)
+
+				checkIPAddress("plndr-svcs-lock", "kube-system", lbAddresses[0], true, client)
+				checkIPAddress("plndr-svcs-lock", "kube-system", lbAddresses[1], true, client)
+
+				assertConnection("http", lbAddresses[0], "80", "", 1*time.Second, 30*time.Second)
+				assertConnection("http", lbAddresses[1], "80", "", 1*time.Second, 30*time.Second)
+
+				err := client.CoreV1().Services(namespace).Delete(context.TODO(), svcName, metav1.DeleteOptions{})
+				Expect(err).ToNot(HaveOccurred())
+
+				checkIPAddress("plndr-svcs-lock", "kube-system", lbAddresses[0], false, client)
+				checkIPAddress("plndr-svcs-lock", "kube-system", lbAddresses[1], false, client)
+				assertConnectionError("http", lbAddresses[0], "80", "", 3*time.Second)
+				assertConnectionError("http", lbAddresses[1], "80", "", 3*time.Second)
+			},
+			Entry("with external traffic policy - cluster", "test-svc-cluster", uint(4), corev1.ServiceExternalTrafficPolicyCluster),
+			Entry("with external traffic policy - local", "test-svc-local", uint(3), corev1.ServiceExternalTrafficPolicyLocal),
+		)
+
+		DescribeTable("only removes VIP address if it was referenced by multiple services and all of them were deleted",
+			func(svc1Name string, svc2Name string, offset uint, trafficPolicy corev1.ServiceExternalTrafficPolicy) {
+				lbAddress := e2e.GenerateDualStackVIPWithCustomOffset(offset)
+
+				lbAddresses := strings.Split(lbAddress, ",")
+
+				createTestService(svc1Name, namespace, dsName, lbAddress,
+					client, corev1.IPFamilyPolicyRequireDualStack, []corev1.IPFamily{corev1.IPv4Protocol, corev1.IPv6Protocol}, trafficPolicy)
+				createTestService(svc2Name, namespace, dsName, lbAddress,
+					client, corev1.IPFamilyPolicyRequireDualStack, []corev1.IPFamily{corev1.IPv4Protocol, corev1.IPv6Protocol}, trafficPolicy)
+
+				checkIPAddress("plndr-svcs-lock", "kube-system", lbAddresses[0], true, client)
+				checkIPAddress("plndr-svcs-lock", "kube-system", lbAddresses[1], true, client)
+
+				assertConnection("http", lbAddresses[0], "80", "", 1*time.Second, 30*time.Second)
+				assertConnection("http", lbAddresses[1], "80", "", 1*time.Second, 30*time.Second)
+
+				err := client.CoreV1().Services(namespace).Delete(context.TODO(), svc1Name, metav1.DeleteOptions{})
+				Expect(err).ToNot(HaveOccurred())
+
+				// sleep for 3 seconds so kube-vip will hopefully process deletion request
+				time.Sleep(time.Second * 3)
+
+				assertConnection("http", lbAddresses[0], "80", "", 1*time.Second, 30*time.Second)
+				assertConnection("http", lbAddresses[1], "80", "", 1*time.Second, 30*time.Second)
+
+				checkIPAddress("plndr-svcs-lock", "kube-system", lbAddresses[0], true, client)
+				checkIPAddress("plndr-svcs-lock", "kube-system", lbAddresses[1], true, client)
+
+				err = client.CoreV1().Services(namespace).Delete(context.TODO(), svc2Name, metav1.DeleteOptions{})
+				Expect(err).ToNot(HaveOccurred())
+
+				checkIPAddress("plndr-svcs-lock", "kube-system", lbAddresses[0], false, client)
+				checkIPAddress("plndr-svcs-lock", "kube-system", lbAddresses[1], false, client)
+
+				assertConnectionError("http", lbAddresses[0], "80", "", 3*time.Second)
+				assertConnectionError("http", lbAddresses[1], "80", "", 3*time.Second)
+			},
+			Entry("with external traffic policy - cluster", "test-svc1-cluster", "test-svc2-cluster", uint(8), corev1.ServiceExternalTrafficPolicyCluster),
+			Entry("with external traffic policy - local", "test-svc1-local", "test-svc2-local", uint(7), corev1.ServiceExternalTrafficPolicyLocal),
+		)
+	})
+
+	Describe("kube-vip DualStack functionality - IPv4 primary, vip_leaderelection=true, svc_enable=true, svc_election=true", Ordered, func() {
+		var (
+			clusterConfig kindconfigv1alpha4.Cluster
+			dualstackVIP  string
+			clusterName   string
+			client        kubernetes.Interface
+		)
+
+		BeforeAll(func() {
+			clusterName = fmt.Sprintf("%s-ds-svc-ipv4", filepath.Base(tempDirPath))
+
+			clusterConfig = kindconfigv1alpha4.Cluster{
+				Networking: kindconfigv1alpha4.Networking{
+					IPFamily: kindconfigv1alpha4.DualStackFamily,
+				},
+				Nodes: []kindconfigv1alpha4.Node{},
+			}
+
+			manifestPath := filepath.Join(tempDirPath, "kube-vip-dualstack.yaml")
+
+			for i := 0; i < 3; i++ {
+				nodeConfig := kindconfigv1alpha4.Node{
+					Role: kindconfigv1alpha4.ControlPlaneRole,
+					ExtraMounts: []kindconfigv1alpha4.Mount{
+						{
+							HostPath:      manifestPath,
+							ContainerPath: "/etc/kubernetes/manifests/kube-vip.yaml",
+						},
+					},
+				}
+				// Override the kind image version
+				if k8sImagePath != "" {
+					nodeConfig.Image = k8sImagePath
+				}
+				clusterConfig.Nodes = append(clusterConfig.Nodes, nodeConfig)
+			}
+
+			dualstackVIP = e2e.GenerateDualStackVIP()
+
+			manifestFile, err := os.Create(manifestPath)
+			Expect(err).NotTo(HaveOccurred())
+
+			defer manifestFile.Close()
+
+			Expect(kubeVIPManifestTemplate.Execute(manifestFile, e2e.KubevipManifestValues{
+				ControlPlaneVIP:      dualstackVIP,
+				ImagePath:            imagePath,
+				ConfigPath:           configPath,
+				SvcEnable:            "true",
+				EnableEndpointslices: "true",
+				SvcElectionEnable:    "true",
+			})).To(Succeed())
+
+			if v129 {
+				// create a seperate manifest
+				manifestPath2 := filepath.Join(tempDirPath, "kube-vip-ipv6-first.yaml")
+
+				// change the path of the mount to the new file
+				clusterConfig.Nodes[0].ExtraMounts[0].HostPath = manifestPath2
+
+				manifestFile2, err := os.Create(manifestPath2)
+				Expect(err).NotTo(HaveOccurred())
+
+				defer manifestFile2.Close()
+
+				Expect(kubeVIPManifestTemplate.Execute(manifestFile2, e2e.KubevipManifestValues{
+					ControlPlaneVIP: dualstackVIP,
+					ImagePath:       imagePath,
+					ConfigPath:      "/etc/kubernetes/super-admin.conf", // Change the kuberenetes file
+				})).To(Succeed())
+			}
+
+			By(withTimestamp("creating a kind cluster with multiple control plane nodes"))
+			client = createKindCluster(logger, &clusterConfig, clusterName)
+
+			By(withTimestamp("creating test daemonset"))
+			createTestDS(dsName, namespace, client)
+
+			By(withTimestamp("loading local docker image to kind cluster"))
+			e2e.LoadDockerImageToKind(logger, imagePath, clusterName)
+		})
+
+		AfterAll(func() {
+			if os.Getenv("E2E_PRESERVE_CLUSTER") == "true" {
+				return
+			}
+
+			configMtx.Lock()
+			defer configMtx.Unlock()
+
+			provider := cluster.NewProvider(
+				cluster.ProviderWithLogger(logger),
+				cluster.ProviderWithDocker(),
+			)
+
+			Eventually(func() error {
+				return provider.Delete(clusterName, "")
+			}, "30s", "200ms").Should(Succeed())
+
+			Expect(os.RemoveAll(tempDirPath)).To(Succeed())
+		})
+
+		It("provides an DualStack VIP addresses for the Kubernetes control plane nodes", func() {
+			vips := vip.Split(dualstackVIP)
+
+			By(withTimestamp("checking that the Kubernetes control plane nodes are accessible via the assigned IPv6 VIP"))
+			// Allow enough time for control plane nodes to load the docker image and
+			// use the default timeout for establishing a connection to the VIP
+			assertControlPlaneIsRoutable(vips[1], time.Duration(0), 20*time.Second)
+
+			By(withTimestamp("checking that the Kubernetes control plane nodes are accessible via the assigned IPv4 VIP"))
+			// Allow enough time for control plane nodes to load the docker image and
+			// use the default timeout for establishing a connection to the VIP
+			assertControlPlaneIsRoutable(vips[0], time.Duration(0), 20*time.Second)
+
+			By(withTimestamp("killing the leader Kubernetes control plane node to trigger a fail-over scenario"))
+			killLeader(vips[1], clusterName)
+
+			By(withTimestamp("checking that the Kubernetes control plane nodes are still accessible via the assigned IPv6 VIP with little downtime"))
+			// Allow at most 20 seconds of downtime when polling the control plane nodes
+			assertControlPlaneIsRoutable(vips[1], 1*time.Second, 30*time.Second)
+
+			By(withTimestamp("checking that the Kubernetes control plane nodes are still accessible via the assigned IPv4 VIP with little downtime"))
+			// Allow at most 20 seconds of downtime when polling the control plane nodes
+			assertControlPlaneIsRoutable(vips[0], 1*time.Second, 30*time.Second)
+		})
+
+		DescribeTable("configures an IPv6 VIP address for service",
+			func(svcName string, offset uint, trafficPolicy corev1.ServiceExternalTrafficPolicy) {
+				lbAddress := e2e.GenerateDualStackVIPWithCustomOffset(offset)
+				lbAddresses := strings.Split(lbAddress, ",")
+
+				createTestService(svcName, namespace, dsName, lbAddress,
+					client, corev1.IPFamilyPolicyRequireDualStack, []corev1.IPFamily{corev1.IPv4Protocol, corev1.IPv6Protocol}, trafficPolicy)
+
+				checkIPAddress(fmt.Sprintf("kubevip-%s", svcName), namespace, lbAddresses[0], true, client)
+				checkIPAddress(fmt.Sprintf("kubevip-%s", svcName), namespace, lbAddresses[1], true, client)
+
+				assertConnection("http", lbAddresses[0], "80", "", 1*time.Second, 30*time.Second)
+				assertConnection("http", lbAddresses[1], "80", "", 1*time.Second, 30*time.Second)
+
+				container := e2e.GetLeaseHolder(fmt.Sprintf("kubevip-%s", svcName), namespace, client)
+
+				err := client.CoreV1().Services(namespace).Delete(context.TODO(), svcName, metav1.DeleteOptions{})
+				Expect(err).ToNot(HaveOccurred())
+
+				isPresent := e2e.CheckIPAddressPresence(lbAddresses[0], container)
+				Expect(isPresent).ToNot(BeNil())
+				Expect(*isPresent).To(BeFalse())
+
+				isPresent = e2e.CheckIPAddressPresence(lbAddresses[1], container)
+				Expect(isPresent).ToNot(BeNil())
+				Expect(*isPresent).To(BeFalse())
+
+				assertConnectionError("http", lbAddress, "80", "", 3*time.Second)
+			},
+			Entry("with external traffic policy - cluster", "test-svc-cluster", uint(4), corev1.ServiceExternalTrafficPolicyCluster),
+			Entry("with external traffic policy - local", "test-svc-local", uint(3), corev1.ServiceExternalTrafficPolicyLocal),
+		)
+	})
+
+	Describe("kube-vip DualStack functionality - IPv6 primary, vip_leaderelection=true, svc_enable=true, svc_election=false", Ordered, func() {
+		var (
+			clusterConfig kindconfigv1alpha4.Cluster
+			dualstackVIP  string
+			clusterName   string
+			client        kubernetes.Interface
+		)
+
+		BeforeAll(func() {
+			clusterName = fmt.Sprintf("%s-ds-ipv6", filepath.Base(tempDirPath))
+
+			clusterConfig = kindconfigv1alpha4.Cluster{
+				Networking: kindconfigv1alpha4.Networking{
+					IPFamily:      kindconfigv1alpha4.DualStackFamily,
+					PodSubnet:     "fd00:10:244::/56,10.244.0.0/16",
+					ServiceSubnet: "fd00:10:96::/112,10.96.0.0/16",
+				},
+				Nodes: []kindconfigv1alpha4.Node{},
+			}
+
+			manifestPath := filepath.Join(tempDirPath, "kube-vip-dualstack.yaml")
+
+			for i := 0; i < 3; i++ {
+				nodeConfig := kindconfigv1alpha4.Node{
+					Role: kindconfigv1alpha4.ControlPlaneRole,
+					ExtraMounts: []kindconfigv1alpha4.Mount{
+						{
+							HostPath:      manifestPath,
+							ContainerPath: "/etc/kubernetes/manifests/kube-vip.yaml",
+						},
+					},
+				}
+				// Override the kind image version
+				if k8sImagePath != "" {
+					nodeConfig.Image = k8sImagePath
+				}
+				clusterConfig.Nodes = append(clusterConfig.Nodes, nodeConfig)
+			}
+
+			dualstackVIP = e2e.GenerateDualStackVIP()
+
+			manifestFile, err := os.Create(manifestPath)
+			Expect(err).NotTo(HaveOccurred())
+
+			defer manifestFile.Close()
+
+			Expect(kubeVIPManifestTemplate.Execute(manifestFile, e2e.KubevipManifestValues{
+				ControlPlaneVIP:      dualstackVIP,
+				ImagePath:            imagePath,
+				ConfigPath:           configPath,
+				SvcEnable:            "true",
+				EnableEndpointslices: "true",
+			})).To(Succeed())
+
+			if v129 {
+				// create a seperate manifest
+				manifestPath2 := filepath.Join(tempDirPath, "kube-vip-ipv6-first.yaml")
+
+				// change the path of the mount to the new file
+				clusterConfig.Nodes[0].ExtraMounts[0].HostPath = manifestPath2
+
+				manifestFile2, err := os.Create(manifestPath2)
+				Expect(err).NotTo(HaveOccurred())
+
+				defer manifestFile2.Close()
+
+				Expect(kubeVIPManifestTemplate.Execute(manifestFile2, e2e.KubevipManifestValues{
+					ControlPlaneVIP: dualstackVIP,
+					ImagePath:       imagePath,
+					ConfigPath:      "/etc/kubernetes/super-admin.conf", // Change the kuberenetes file
+				})).To(Succeed())
+			}
+
+			By(withTimestamp("creating a kind cluster with multiple control plane nodes"))
+			client = createKindCluster(logger, &clusterConfig, clusterName)
+
+			By(withTimestamp("creating test daemonset"))
+			createTestDS(dsName, namespace, client)
+
+			By(withTimestamp("loading local docker image to kind cluster"))
+			e2e.LoadDockerImageToKind(logger, imagePath, clusterName)
+		})
+
+		AfterAll(func() {
+			if os.Getenv("E2E_PRESERVE_CLUSTER") == "true" {
+				return
+			}
+
+			configMtx.Lock()
+			defer configMtx.Unlock()
+
+			provider := cluster.NewProvider(
+				cluster.ProviderWithLogger(logger),
+				cluster.ProviderWithDocker(),
+			)
+
+			Eventually(func() error {
+				err := provider.Delete(clusterName, "")
+				if err != nil {
+					By(withTimestamp(err.Error()))
+				}
+				return err
+			}, "30s", "200ms").Should(Succeed())
+
+			Expect(os.RemoveAll(tempDirPath)).To(Succeed())
+		})
+
+		It("provides an DualStack VIP addresses for the Kubernetes control plane nodes", func() {
+			vips := vip.Split(dualstackVIP)
+
+			By(withTimestamp("checking that the Kubernetes control plane nodes are accessible via the assigned IPv6 VIP"))
+			// Allow enough time for control plane nodes to load the docker image and
+			// use the default timeout for establishing a connection to the VIP
+			assertControlPlaneIsRoutable(vips[1], time.Duration(0), 20*time.Second)
+
+			By(withTimestamp("checking that the Kubernetes control plane nodes are accessible via the assigned IPv4 VIP"))
+			// Allow enough time for control plane nodes to load the docker image and
+			// use the default timeout for establishing a connection to the VIP
+			assertControlPlaneIsRoutable(vips[0], time.Duration(0), 20*time.Second)
+
+			By(withTimestamp("killing the leader Kubernetes control plane node to trigger a fail-over scenario"))
+			killLeader(vips[1], clusterName)
+
+			By(withTimestamp("checking that the Kubernetes control plane nodes are still accessible via the assigned IPv6 VIP with little downtime"))
+			// Allow at most 20 seconds of downtime when polling the control plane nodes
+			assertControlPlaneIsRoutable(vips[1], 1*time.Second, 30*time.Second)
+
+			By(withTimestamp("checking that the Kubernetes control plane nodes are still accessible via the assigned IPv4 VIP with little downtime"))
+			// Allow at most 20 seconds of downtime when polling the control plane nodes
+			assertControlPlaneIsRoutable(vips[0], 1*time.Second, 30*time.Second)
+		})
+
+		DescribeTable("configures an IPv4 and IPv6 VIP addresses for service",
+			func(svcName string, offset uint, trafficPolicy corev1.ServiceExternalTrafficPolicy) {
+				lbAddress := e2e.GenerateDualStackVIPWithCustomOffset(offset)
+
+				lbAddresses := strings.Split(lbAddress, ",")
+
+				createTestService(svcName, namespace, dsName, lbAddress,
+					client, corev1.IPFamilyPolicyRequireDualStack, []corev1.IPFamily{corev1.IPv4Protocol, corev1.IPv6Protocol}, trafficPolicy)
+
+				checkIPAddress("plndr-svcs-lock", "kube-system", lbAddresses[0], true, client)
+				checkIPAddress("plndr-svcs-lock", "kube-system", lbAddresses[1], true, client)
+
+				assertConnection("http", lbAddresses[0], "80", "", 1*time.Second, 30*time.Second)
+				assertConnection("http", lbAddresses[1], "80", "", 1*time.Second, 30*time.Second)
+
+				err := client.CoreV1().Services(namespace).Delete(context.TODO(), svcName, metav1.DeleteOptions{})
+				Expect(err).ToNot(HaveOccurred())
+
+				checkIPAddress("plndr-svcs-lock", "kube-system", lbAddresses[0], false, client)
+				checkIPAddress("plndr-svcs-lock", "kube-system", lbAddresses[1], false, client)
+				assertConnectionError("http", lbAddresses[0], "80", "", 3*time.Second)
+				assertConnectionError("http", lbAddresses[1], "80", "", 3*time.Second)
+			},
+			Entry("with external traffic policy - cluster", "test-svc-cluster", uint(4), corev1.ServiceExternalTrafficPolicyCluster),
+			Entry("with external traffic policy - local", "test-svc-local", uint(3), corev1.ServiceExternalTrafficPolicyLocal),
+		)
+
+		DescribeTable("only removes VIP address if it was referenced by multiple services and all of them were deleted",
+			func(svc1Name string, svc2Name string, offset uint, trafficPolicy corev1.ServiceExternalTrafficPolicy) {
+				lbAddress := e2e.GenerateDualStackVIPWithCustomOffset(offset)
+
+				lbAddresses := strings.Split(lbAddress, ",")
+
+				createTestService(svc1Name, namespace, dsName, lbAddress,
+					client, corev1.IPFamilyPolicyRequireDualStack, []corev1.IPFamily{corev1.IPv4Protocol, corev1.IPv6Protocol}, trafficPolicy)
+				createTestService(svc2Name, namespace, dsName, lbAddress,
+					client, corev1.IPFamilyPolicyRequireDualStack, []corev1.IPFamily{corev1.IPv4Protocol, corev1.IPv6Protocol}, trafficPolicy)
+
+				checkIPAddress("plndr-svcs-lock", "kube-system", lbAddresses[0], true, client)
+				checkIPAddress("plndr-svcs-lock", "kube-system", lbAddresses[1], true, client)
+
+				assertConnection("http", lbAddresses[0], "80", "", 1*time.Second, 30*time.Second)
+				assertConnection("http", lbAddresses[1], "80", "", 1*time.Second, 30*time.Second)
+
+				err := client.CoreV1().Services(namespace).Delete(context.TODO(), svc1Name, metav1.DeleteOptions{})
+				Expect(err).ToNot(HaveOccurred())
+
+				// sleep for 3 seconds so kube-vip will hopefully process deletion request
+				time.Sleep(time.Second * 3)
+
+				assertConnection("http", lbAddresses[0], "80", "", 1*time.Second, 30*time.Second)
+				assertConnection("http", lbAddresses[1], "80", "", 1*time.Second, 30*time.Second)
+
+				checkIPAddress("plndr-svcs-lock", "kube-system", lbAddresses[0], true, client)
+				checkIPAddress("plndr-svcs-lock", "kube-system", lbAddresses[1], true, client)
+
+				err = client.CoreV1().Services(namespace).Delete(context.TODO(), svc2Name, metav1.DeleteOptions{})
+				Expect(err).ToNot(HaveOccurred())
+
+				checkIPAddress("plndr-svcs-lock", "kube-system", lbAddresses[0], false, client)
+				checkIPAddress("plndr-svcs-lock", "kube-system", lbAddresses[1], false, client)
+
+				assertConnectionError("http", lbAddresses[0], "80", "", 3*time.Second)
+				assertConnectionError("http", lbAddresses[1], "80", "", 3*time.Second)
+			},
+			Entry("with external traffic policy - cluster", "test-svc1-cluster", "test-svc2-cluster", uint(8), corev1.ServiceExternalTrafficPolicyCluster),
+			Entry("with external traffic policy - local", "test-svc1-local", "test-svc2-local", uint(7), corev1.ServiceExternalTrafficPolicyLocal),
+		)
+	})
+
+	Describe("kube-vip DualStack functionality - IPv6 primary, vip_leaderelection=true, svc_enable=true, svc_election=true", Ordered, func() {
+		var (
+			clusterConfig kindconfigv1alpha4.Cluster
+			dualstackVIP  string
+			clusterName   string
+			client        kubernetes.Interface
+		)
+
+		BeforeAll(func() {
+			clusterName = fmt.Sprintf("%s-ds-svc-ipv6", filepath.Base(tempDirPath))
+
+			clusterConfig = kindconfigv1alpha4.Cluster{
+				Networking: kindconfigv1alpha4.Networking{
+					IPFamily:      kindconfigv1alpha4.DualStackFamily,
+					PodSubnet:     "fd00:10:244::/56,10.244.0.0/16",
+					ServiceSubnet: "fd00:10:96::/112,10.96.0.0/16",
+				},
+				Nodes: []kindconfigv1alpha4.Node{},
+			}
+
+			manifestPath := filepath.Join(tempDirPath, "kube-vip-dualstack.yaml")
+
+			for i := 0; i < 3; i++ {
+				nodeConfig := kindconfigv1alpha4.Node{
+					Role: kindconfigv1alpha4.ControlPlaneRole,
+					ExtraMounts: []kindconfigv1alpha4.Mount{
+						{
+							HostPath:      manifestPath,
+							ContainerPath: "/etc/kubernetes/manifests/kube-vip.yaml",
+						},
+					},
+				}
+				// Override the kind image version
+				if k8sImagePath != "" {
+					nodeConfig.Image = k8sImagePath
+				}
+				clusterConfig.Nodes = append(clusterConfig.Nodes, nodeConfig)
+			}
+
+			dualstackVIP = e2e.GenerateDualStackVIP()
+
+			manifestFile, err := os.Create(manifestPath)
+			Expect(err).NotTo(HaveOccurred())
+
+			defer manifestFile.Close()
+
+			Expect(kubeVIPManifestTemplate.Execute(manifestFile, e2e.KubevipManifestValues{
+				ControlPlaneVIP:      dualstackVIP,
+				ImagePath:            imagePath,
+				ConfigPath:           configPath,
+				SvcEnable:            "true",
+				EnableEndpointslices: "true",
+				SvcElectionEnable:    "true",
+			})).To(Succeed())
+
+			if v129 {
+				// create a seperate manifest
+				manifestPath2 := filepath.Join(tempDirPath, "kube-vip-ipv6-first.yaml")
+
+				// change the path of the mount to the new file
+				clusterConfig.Nodes[0].ExtraMounts[0].HostPath = manifestPath2
+
+				manifestFile2, err := os.Create(manifestPath2)
+				Expect(err).NotTo(HaveOccurred())
+
+				defer manifestFile2.Close()
+
+				Expect(kubeVIPManifestTemplate.Execute(manifestFile2, e2e.KubevipManifestValues{
+					ControlPlaneVIP: dualstackVIP,
+					ImagePath:       imagePath,
+					ConfigPath:      "/etc/kubernetes/super-admin.conf", // Change the kuberenetes file
+				})).To(Succeed())
+			}
+
+			By(withTimestamp("creating a kind cluster with multiple control plane nodes"))
+			client = createKindCluster(logger, &clusterConfig, clusterName)
+
+			By(withTimestamp("creating test daemonset"))
+			createTestDS(dsName, namespace, client)
+
+			By(withTimestamp("loading local docker image to kind cluster"))
+			e2e.LoadDockerImageToKind(logger, imagePath, clusterName)
+		})
+
+		AfterAll(func() {
+			if os.Getenv("E2E_PRESERVE_CLUSTER") == "true" {
+				return
+			}
+
+			configMtx.Lock()
+			defer configMtx.Unlock()
+
+			provider := cluster.NewProvider(
+				cluster.ProviderWithLogger(logger),
+				cluster.ProviderWithDocker(),
+			)
+
+			Eventually(func() error {
+				return provider.Delete(clusterName, "")
+			}, "30s", "200ms").Should(Succeed())
+
+			Expect(os.RemoveAll(tempDirPath)).To(Succeed())
+		})
+
+		It("provides an DualStack VIP addresses for the Kubernetes control plane nodes", func() {
+			vips := vip.Split(dualstackVIP)
+
+			By(withTimestamp("checking that the Kubernetes control plane nodes are accessible via the assigned IPv6 VIP"))
+			// Allow enough time for control plane nodes to load the docker image and
+			// use the default timeout for establishing a connection to the VIP
+			assertControlPlaneIsRoutable(vips[1], time.Duration(0), 20*time.Second)
+
+			By(withTimestamp("checking that the Kubernetes control plane nodes are accessible via the assigned IPv4 VIP"))
+			// Allow enough time for control plane nodes to load the docker image and
+			// use the default timeout for establishing a connection to the VIP
+			assertControlPlaneIsRoutable(vips[0], time.Duration(0), 20*time.Second)
+
+			By(withTimestamp("killing the leader Kubernetes control plane node to trigger a fail-over scenario"))
+			killLeader(vips[1], clusterName)
+
+			By(withTimestamp("checking that the Kubernetes control plane nodes are still accessible via the assigned IPv6 VIP with little downtime"))
+			// Allow at most 20 seconds of downtime when polling the control plane nodes
+			assertControlPlaneIsRoutable(vips[1], 1*time.Second, 30*time.Second)
+
+			By(withTimestamp("checking that the Kubernetes control plane nodes are still accessible via the assigned IPv4 VIP with little downtime"))
+			// Allow at most 20 seconds of downtime when polling the control plane nodes
+			assertControlPlaneIsRoutable(vips[0], 1*time.Second, 30*time.Second)
+		})
+
+		DescribeTable("configures an IPv6 VIP address for service",
+			func(svcName string, offset uint, trafficPolicy corev1.ServiceExternalTrafficPolicy) {
+				lbAddress := e2e.GenerateDualStackVIPWithCustomOffset(offset)
+				lbAddresses := strings.Split(lbAddress, ",")
+
+				createTestService(svcName, namespace, dsName, lbAddress,
+					client, corev1.IPFamilyPolicyRequireDualStack, []corev1.IPFamily{corev1.IPv4Protocol, corev1.IPv6Protocol}, trafficPolicy)
+
+				checkIPAddress(fmt.Sprintf("kubevip-%s", svcName), namespace, lbAddresses[0], true, client)
+				checkIPAddress(fmt.Sprintf("kubevip-%s", svcName), namespace, lbAddresses[1], true, client)
+
+				assertConnection("http", lbAddresses[0], "80", "", 1*time.Second, 30*time.Second)
+				assertConnection("http", lbAddresses[1], "80", "", 1*time.Second, 30*time.Second)
+
+				container := e2e.GetLeaseHolder(fmt.Sprintf("kubevip-%s", svcName), namespace, client)
+
+				err := client.CoreV1().Services(namespace).Delete(context.TODO(), svcName, metav1.DeleteOptions{})
+				Expect(err).ToNot(HaveOccurred())
+
+				isPresent := e2e.CheckIPAddressPresence(lbAddresses[0], container)
+				Expect(isPresent).ToNot(BeNil())
+				Expect(*isPresent).To(BeFalse())
+
+				isPresent = e2e.CheckIPAddressPresence(lbAddresses[1], container)
+				Expect(isPresent).ToNot(BeNil())
+				Expect(*isPresent).To(BeFalse())
+
+				assertConnectionError("http", lbAddress, "80", "", 3*time.Second)
+			},
+			Entry("with external traffic policy - cluster", "test-svc-cluster", uint(4), corev1.ServiceExternalTrafficPolicyCluster),
+			Entry("with external traffic policy - local", "test-svc-local", uint(3), corev1.ServiceExternalTrafficPolicyLocal),
+		)
+	})
+
+	Describe("kube-vip IPv4 functionality with legacy hostname", Ordered, func() {
+		var (
+			clusterConfig kindconfigv1alpha4.Cluster
+			ipv4VIP       string
+			clusterName   string
+		)
+
+		BeforeAll(func() {
+			clusterName = fmt.Sprintf("%s-ipv4-hostname", filepath.Base(tempDirPath))
+
+			clusterConfig = kindconfigv1alpha4.Cluster{
+				Networking: kindconfigv1alpha4.Networking{
+					IPFamily: kindconfigv1alpha4.IPv4Family,
+				},
+				Nodes: []kindconfigv1alpha4.Node{},
+			}
+
+			manifestPath := filepath.Join(tempDirPath, "kube-vip-ipv4-hostname.yaml")
+
+			for i := 0; i < 3; i++ {
+				nodeConfig := kindconfigv1alpha4.Node{
+					Role: kindconfigv1alpha4.ControlPlaneRole,
+					ExtraMounts: []kindconfigv1alpha4.Mount{
+						{
+							HostPath:      manifestPath,
+							ContainerPath: "/etc/kubernetes/manifests/kube-vip.yaml",
+						},
+					},
+				}
+				// Override the kind image version
+				if k8sImagePath != "" {
+					nodeConfig.Image = k8sImagePath
+				}
+				clusterConfig.Nodes = append(clusterConfig.Nodes, nodeConfig)
+			}
+
+			manifestFile, err := os.Create(manifestPath)
+			Expect(err).NotTo(HaveOccurred())
+
+			defer manifestFile.Close()
+
+			ipv4VIP = e2e.GenerateVIP(e2e.IPv4Family)
+
+			Expect(kubeVIPHostnameManifestTemplate.Execute(manifestFile, e2e.KubevipManifestValues{
+				ControlPlaneVIP: ipv4VIP,
+				ImagePath:       imagePath,
+				ConfigPath:      configPath,
+			})).To(Succeed())
+
+			if v129 {
+				// create a seperate manifest
+				manifestPath2 := filepath.Join(tempDirPath, "kube-vip-ipv4-hostname-first.yaml")
+
+				// change the path of the mount to the new file
+				clusterConfig.Nodes[0].ExtraMounts[0].HostPath = manifestPath2
+
+				manifestFile2, err := os.Create(manifestPath2)
+				Expect(err).NotTo(HaveOccurred())
+
+				defer manifestFile2.Close()
+
+				Expect(kubeVIPHostnameManifestTemplate.Execute(manifestFile2, e2e.KubevipManifestValues{
+					ControlPlaneVIP: ipv4VIP,
+					ImagePath:       imagePath,
+					ConfigPath:      "/etc/kubernetes/super-admin.conf", // Change the kuberenetes file
+				})).To(Succeed())
+			}
+		})
+
+		AfterAll(func() {
+			if os.Getenv("E2E_PRESERVE_CLUSTER") == "true" {
+				return
+			}
+
+			configMtx.Lock()
+			defer configMtx.Unlock()
+
+			provider := cluster.NewProvider(
+				cluster.ProviderWithLogger(logger),
+				cluster.ProviderWithDocker(),
+			)
+
+			Eventually(provider.Delete(clusterName, ""), "30s", "200ms").Should(Succeed())
+
+			Expect(os.RemoveAll(tempDirPath)).To(Succeed())
+		})
+
+		It("uses hostname fallback while providing an IPv4 VIP address for the Kubernetes control plane nodes", func() {
+			By(withTimestamp("creating a kind cluster with multiple control plane nodes"))
+			createKindCluster(logger, &clusterConfig, clusterName)
+
+			By(withTimestamp("loading local docker image to kind cluster"))
+			e2e.LoadDockerImageToKind(logger, imagePath, clusterName)
+
+			By(withTimestamp("checking that the Kubernetes control plane nodes are accessible via the assigned IPv4 VIP"))
+			// Allow enough time for control plane nodes to load the docker image and
+			// use the default timeout for establishing a connection to the VIP
+			assertControlPlaneIsRoutable(ipv4VIP, time.Duration(0), 20*time.Second)
+
+			// wait for a bit
+			By(withTimestamp("sitting for a few seconds to hopefully allow the roles to have been created in the cluster"))
+			time.Sleep(30 * time.Second)
+
+			By(withTimestamp("killing the leader Kubernetes control plane node to trigger a fail-over scenario"))
+			killLeader(ipv4VIP, clusterName)
+
+			By(withTimestamp("checking that the Kubernetes control plane nodes are still accessible via the assigned IPv4 VIP with little downtime"))
+			// Allow at most 20 seconds of downtime when polling the control plane nodes
+			assertControlPlaneIsRoutable(ipv4VIP, 1*time.Second, 30*time.Second)
+		})
+	})
+
+	Describe("kube-vip IPv4 control-plane routing table mode functionality", Ordered, func() {
+		var (
+			clusterConfig kindconfigv1alpha4.Cluster
+			ipv4VIP       string
+			clusterName   string
+		)
+
+		numberOfCPNodes := 3
+
+		BeforeAll(func() {
+			clusterName = fmt.Sprintf("%s-rt-ipv4", filepath.Base(tempDirPath))
+
+			clusterConfig = kindconfigv1alpha4.Cluster{
+				Networking: kindconfigv1alpha4.Networking{
+					IPFamily: kindconfigv1alpha4.IPv4Family,
+				},
+				Nodes: []kindconfigv1alpha4.Node{},
+			}
+
+			manifestPath := filepath.Join(tempDirPath, "kube-vip-ipv4.yaml")
+
+			for i := 0; i < numberOfCPNodes; i++ {
+				nodeConfig := kindconfigv1alpha4.Node{
+					Role: kindconfigv1alpha4.ControlPlaneRole,
+					ExtraMounts: []kindconfigv1alpha4.Mount{
+						{
+							HostPath:      manifestPath,
+							ContainerPath: "/etc/kubernetes/manifests/kube-vip.yaml",
+						},
+					},
+				}
+				// Override the kind image version
+				if k8sImagePath != "" {
+					nodeConfig.Image = k8sImagePath
+				}
+				clusterConfig.Nodes = append(clusterConfig.Nodes, nodeConfig)
+			}
+
+			manifestFile, err := os.Create(manifestPath)
+			Expect(err).NotTo(HaveOccurred())
+
+			defer manifestFile.Close()
+
+			ipv4VIP = e2e.GenerateVIP(e2e.IPv4Family)
+
+			Expect(kubeVIPRoutingTableManifestTemplate.Execute(manifestFile, e2e.KubevipManifestValues{
+				ControlPlaneVIP: ipv4VIP,
+				ImagePath:       imagePath,
+				ConfigPath:      configPath,
+			})).To(Succeed())
+
+			if v129 {
+				// create a seperate manifest
+				manifestPath2 := filepath.Join(tempDirPath, "kube-vip-ipv4-first.yaml")
+
+				// change the path of the mount to the new file
+				clusterConfig.Nodes[0].ExtraMounts[0].HostPath = manifestPath2
+
+				manifestFile2, err := os.Create(manifestPath2)
+				Expect(err).NotTo(HaveOccurred())
+
+				defer manifestFile2.Close()
+
+				Expect(kubeVIPRoutingTableManifestTemplate.Execute(manifestFile2, e2e.KubevipManifestValues{
+					ControlPlaneVIP: ipv4VIP,
+					ImagePath:       imagePath,
+					ConfigPath:      "/etc/kubernetes/super-admin.conf", // Change the kuberenetes file
+				})).To(Succeed())
+			}
+		})
+
+		AfterAll(func() {
+			if os.Getenv("E2E_PRESERVE_CLUSTER") == "true" {
+				return
+			}
+
+			configMtx.Lock()
+			defer configMtx.Unlock()
+
+			provider := cluster.NewProvider(
+				cluster.ProviderWithLogger(logger),
+				cluster.ProviderWithDocker(),
+			)
+
+			Eventually(provider.Delete(clusterName, ""), "30s", "200ms").Should(Succeed())
+
+			Expect(os.RemoveAll(tempDirPath)).To(Succeed())
+		})
+
+		It("setups IPv4 address and route on control-plane node", func() {
+			By(withTimestamp("creating a kind cluster with multiple control plane nodes"))
+			createKindCluster(logger, &clusterConfig, clusterName)
+
+			By(withTimestamp("loading local docker image to kind cluster"))
+			e2e.LoadDockerImageToKind(logger, imagePath, clusterName)
+
+			By(withTimestamp("sitting for a few seconds to hopefully allow kube-vip to start"))
+			time.Sleep(30 * time.Second)
+
+			for i := 1; i <= numberOfCPNodes; i++ {
+				var container string
+				if i > 1 {
+					container = fmt.Sprintf("%s-control-plane%d", clusterName, i)
+				} else {
+					container = fmt.Sprintf("%s-control-plane", clusterName)
+				}
+
+				exists := e2e.CheckIPAddressPresence(ipv4VIP, container)
+				Expect(*exists).To(BeTrue())
+				rtExists := e2e.CheckRoutePresence(ipv4VIP, container)
+				Expect(rtExists).To(BeTrue())
+			}
+		})
+	})
+
+	Describe("kube-vip IPv6 control-plane routing table mode functionality", Ordered, func() {
+		var (
+			clusterConfig kindconfigv1alpha4.Cluster
+			ipv6VIP       string
+			clusterName   string
+		)
+
+		numberOfCPNodes := 3
+
+		BeforeAll(func() {
+
+			clusterName = fmt.Sprintf("%s-rt-ipv6", filepath.Base(tempDirPath))
+
+			clusterConfig = kindconfigv1alpha4.Cluster{
+				Networking: kindconfigv1alpha4.Networking{
+					IPFamily: kindconfigv1alpha4.IPv6Family,
+				},
+				Nodes: []kindconfigv1alpha4.Node{},
+			}
+
+			manifestPath := filepath.Join(tempDirPath, "kube-vip-ipv6.yaml")
+
+			for i := 0; i < numberOfCPNodes; i++ {
+				nodeConfig := kindconfigv1alpha4.Node{
+					Role: kindconfigv1alpha4.ControlPlaneRole,
+					ExtraMounts: []kindconfigv1alpha4.Mount{
+						{
+							HostPath:      manifestPath,
+							ContainerPath: "/etc/kubernetes/manifests/kube-vip.yaml",
+						},
+					},
+				}
+				// Override the kind image version
+				if k8sImagePath != "" {
+					nodeConfig.Image = k8sImagePath
+				}
+				clusterConfig.Nodes = append(clusterConfig.Nodes, nodeConfig)
+			}
+
+			manifestFile, err := os.Create(manifestPath)
+			Expect(err).NotTo(HaveOccurred())
+
+			defer manifestFile.Close()
+
+			ipv6VIP = e2e.GenerateVIP(e2e.IPv6Family)
+
+			Expect(kubeVIPRoutingTableManifestTemplate.Execute(manifestFile, e2e.KubevipManifestValues{
+				ControlPlaneVIP: ipv6VIP,
+				ImagePath:       imagePath,
+				ConfigPath:      configPath,
+			})).To(Succeed())
+
+			if v129 {
+				// create a seperate manifest
+				manifestPath2 := filepath.Join(tempDirPath, "kube-vip-ipv6-first.yaml")
+
+				// change the path of the mount to the new file
+				clusterConfig.Nodes[0].ExtraMounts[0].HostPath = manifestPath2
+
+				manifestFile2, err := os.Create(manifestPath2)
+				Expect(err).NotTo(HaveOccurred())
+
+				defer manifestFile2.Close()
+
+				Expect(kubeVIPRoutingTableManifestTemplate.Execute(manifestFile2, e2e.KubevipManifestValues{
+					ControlPlaneVIP: ipv6VIP,
+					ImagePath:       imagePath,
+					ConfigPath:      "/etc/kubernetes/super-admin.conf", // Change the kuberenetes file
+				})).To(Succeed())
+			}
+		})
+
+		AfterAll(func() {
+			if os.Getenv("E2E_PRESERVE_CLUSTER") == "true" {
+				return
+			}
+
+			configMtx.Lock()
+			defer configMtx.Unlock()
+
+			provider := cluster.NewProvider(
+				cluster.ProviderWithLogger(logger),
+				cluster.ProviderWithDocker(),
+			)
+
+			Eventually(provider.Delete(clusterName, ""), "30s", "200ms").Should(Succeed())
+
+			Expect(os.RemoveAll(tempDirPath)).To(Succeed())
+		})
+
+		It("setups IPv6 address and route on control-plane node", func() {
+			By(withTimestamp("creating a kind cluster with multiple control plane nodes"))
+			createKindCluster(logger, &clusterConfig, clusterName)
+
+			By(withTimestamp("loading local docker image to kind cluster"))
+			e2e.LoadDockerImageToKind(logger, imagePath, clusterName)
+
+			By(withTimestamp("sitting for a few seconds to hopefully allow kube-vip to start"))
+			time.Sleep(30 * time.Second)
+
+			for i := 1; i <= numberOfCPNodes; i++ {
+				var container string
+				if i > 1 {
+					container = fmt.Sprintf("%s-control-plane%d", clusterName, i)
+				} else {
+					container = fmt.Sprintf("%s-control-plane", clusterName)
+				}
+
+				exists := e2e.CheckIPAddressPresence(ipv6VIP, container)
+				Expect(*exists).To(BeTrue())
+				rtExists := e2e.CheckRoutePresence(ipv6VIP, container)
+				Expect(rtExists).To(BeTrue())
+			}
+		})
+	})
 })
 
 func createKindCluster(logger log.Logger, config *v1alpha4.Cluster, clusterName string) kubernetes.Interface {
@@ -1448,21 +1980,7 @@ func createTestService(name, namespace, target, lbAddress string, client kuberne
 		_, err := client.CoreV1().Services(namespace).Create(context.TODO(), &s, metav1.CreateOptions{})
 		return err
 	}, time.Second*60, time.Second).Should(Succeed())
-	// _, err := client.CoreV1().Services(namespace).Create(context.TODO(), &s, metav1.CreateOptions{})
-	// Expect(err).ToNot(HaveOccurred())
 }
-
-// func getLeaseHolder(name, namespace string, client kubernetes.Interface) string {
-// 	var lease *coordinationv1.Lease
-// 	Eventually(func() error {
-// 		var err error
-// 		lease, err = client.CoordinationV1().Leases(namespace).Get(context.TODO(), name, metav1.GetOptions{})
-// 		return err
-// 	}, "300s").ShouldNot(HaveOccurred())
-
-// 	Expect(lease).ToNot(BeNil())
-// 	return *lease.Spec.HolderIdentity
-// }
 
 func checkIPAddress(name, namespace, lbAddress string, expected bool, client kubernetes.Interface) {
 	isPresent := false

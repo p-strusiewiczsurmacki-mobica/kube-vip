@@ -108,6 +108,10 @@ func GenerateDualStackVIP() string {
 	return GenerateVIP(IPv4Family) + "," + GenerateVIP(IPv6Family)
 }
 
+func GenerateDualStackVIPWithCustomOffset(offset uint) string {
+	return GenerateVIPWithCustomOffset(IPv4Family, offset) + "," + GenerateVIPWithCustomOffset(IPv6Family, offset)
+}
+
 func getKindNetworkSubnetCIDRs() []string {
 	cmd := exec.Command(
 		"docker", "inspect", "kind",
@@ -154,6 +158,9 @@ func CheckIPAddressPresence(ip string, container string) *bool {
 
 func CheckIPAddressPresenceByLease(name, namespace, ip string, client kubernetes.Interface) *bool {
 	container := GetLeaseHolder(name, namespace, client)
+	if container == "" {
+		return nil
+	}
 	return CheckIPAddressPresence(ip, container)
 }
 
