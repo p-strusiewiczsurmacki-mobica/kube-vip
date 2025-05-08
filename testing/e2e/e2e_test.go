@@ -209,14 +209,14 @@ var _ = Describe("kube-vip ARP/NDP broadcast neighbor", func() {
 				createTestService(svcName, namespace, dsName, lbAddress,
 					client, corev1.IPFamilyPolicySingleStack, []corev1.IPFamily{corev1.IPv4Protocol}, trafficPolicy)
 
-				checkIPAddress("plndr-svcs-lock", "kube-system", lbAddress, true, client, &stopClusterRemoval)
+				checkIPAddressByLease("plndr-svcs-lock", "kube-system", lbAddress, true, client, &stopClusterRemoval)
 
 				assertConnection("http", lbAddress, "80", "", 3*time.Second, 60*time.Second, &stopClusterRemoval)
 
 				err := client.CoreV1().Services(namespace).Delete(context.TODO(), svcName, metav1.DeleteOptions{})
 				Expect(err).ToNot(HaveOccurred())
 
-				checkIPAddress("plndr-svcs-lock", "kube-system", lbAddress, false, client, &stopClusterRemoval)
+				checkIPAddressByLease("plndr-svcs-lock", "kube-system", lbAddress, false, client, &stopClusterRemoval)
 				assertConnectionError("http", lbAddress, "80", "", 3*time.Second)
 			},
 			Entry("with external traffic policy - cluster", "test-svc-cluster", uint(6), corev1.ServiceExternalTrafficPolicyCluster),
@@ -232,7 +232,7 @@ var _ = Describe("kube-vip ARP/NDP broadcast neighbor", func() {
 				createTestService(svc2Name, namespace, dsName, lbAddress,
 					client, corev1.IPFamilyPolicySingleStack, []corev1.IPFamily{corev1.IPv4Protocol}, trafficPolicy)
 
-				checkIPAddress("plndr-svcs-lock", "kube-system", lbAddress, true, client, &stopClusterRemoval)
+				checkIPAddressByLease("plndr-svcs-lock", "kube-system", lbAddress, true, client, &stopClusterRemoval)
 
 				assertConnection("http", lbAddress, "80", "", 3*time.Second, 60*time.Second, &stopClusterRemoval)
 
@@ -244,12 +244,12 @@ var _ = Describe("kube-vip ARP/NDP broadcast neighbor", func() {
 
 				assertConnection("http", lbAddress, "80", "", 3*time.Second, 60*time.Second, &stopClusterRemoval)
 
-				checkIPAddress("plndr-svcs-lock", "kube-system", lbAddress, true, client, &stopClusterRemoval)
+				checkIPAddressByLease("plndr-svcs-lock", "kube-system", lbAddress, true, client, &stopClusterRemoval)
 
 				err = client.CoreV1().Services(namespace).Delete(context.TODO(), svc2Name, metav1.DeleteOptions{})
 				Expect(err).ToNot(HaveOccurred())
 
-				checkIPAddress("plndr-svcs-lock", "kube-system", lbAddress, false, client, &stopClusterRemoval)
+				checkIPAddressByLease("plndr-svcs-lock", "kube-system", lbAddress, false, client, &stopClusterRemoval)
 
 				assertConnectionError("http", lbAddress, "80", "", 3*time.Second)
 			},
@@ -379,7 +379,7 @@ var _ = Describe("kube-vip ARP/NDP broadcast neighbor", func() {
 				createTestService(svcName, namespace, dsName, lbAddress,
 					client, corev1.IPFamilyPolicySingleStack, []corev1.IPFamily{corev1.IPv4Protocol}, trafficPolicy)
 
-				checkIPAddress(fmt.Sprintf("kubevip-%s", svcName), namespace, lbAddress, true, client, &stopClusterRemoval)
+				checkIPAddressByLease(fmt.Sprintf("kubevip-%s", svcName), namespace, lbAddress, true, client, &stopClusterRemoval)
 
 				assertConnection("http", lbAddress, "80", "", 3*time.Second, 60*time.Second, &stopClusterRemoval)
 
@@ -388,9 +388,7 @@ var _ = Describe("kube-vip ARP/NDP broadcast neighbor", func() {
 				err := client.CoreV1().Services(namespace).Delete(context.TODO(), svcName, metav1.DeleteOptions{})
 				Expect(err).ToNot(HaveOccurred())
 
-				isPresent := e2e.CheckIPAddressPresence(lbAddress, container)
-				Expect(isPresent).ToNot(BeNil())
-				Expect(*isPresent).To(BeFalse())
+				checkIPAddress(lbAddress, container, false)
 
 				assertConnectionError("http", lbAddress, "80", "", 3*time.Second)
 			},
@@ -521,14 +519,14 @@ var _ = Describe("kube-vip ARP/NDP broadcast neighbor", func() {
 				createTestService(svcName, namespace, dsName, lbAddress,
 					client, corev1.IPFamilyPolicySingleStack, []corev1.IPFamily{corev1.IPv6Protocol}, trafficPolicy)
 
-				checkIPAddress("plndr-svcs-lock", "kube-system", lbAddress, true, client, &stopClusterRemoval)
+				checkIPAddressByLease("plndr-svcs-lock", "kube-system", lbAddress, true, client, &stopClusterRemoval)
 
 				assertConnection("http", lbAddress, "80", "", 3*time.Second, 60*time.Second, &stopClusterRemoval)
 
 				err := client.CoreV1().Services(namespace).Delete(context.TODO(), svcName, metav1.DeleteOptions{})
 				Expect(err).ToNot(HaveOccurred())
 
-				checkIPAddress("plndr-svcs-lock", "kube-system", lbAddress, false, client, &stopClusterRemoval)
+				checkIPAddressByLease("plndr-svcs-lock", "kube-system", lbAddress, false, client, &stopClusterRemoval)
 				assertConnectionError("http", lbAddress, "80", "", 3*time.Second)
 			},
 			Entry("with external traffic policy - cluster", "test-svc-cluster", uint(14), corev1.ServiceExternalTrafficPolicyCluster),
@@ -544,7 +542,7 @@ var _ = Describe("kube-vip ARP/NDP broadcast neighbor", func() {
 				createTestService(svc2Name, namespace, dsName, lbAddress,
 					client, corev1.IPFamilyPolicySingleStack, []corev1.IPFamily{corev1.IPv6Protocol}, trafficPolicy)
 
-				checkIPAddress("plndr-svcs-lock", "kube-system", lbAddress, true, client, &stopClusterRemoval)
+				checkIPAddressByLease("plndr-svcs-lock", "kube-system", lbAddress, true, client, &stopClusterRemoval)
 
 				assertConnection("http", lbAddress, "80", "", 3*time.Second, 60*time.Second, &stopClusterRemoval)
 
@@ -555,12 +553,12 @@ var _ = Describe("kube-vip ARP/NDP broadcast neighbor", func() {
 				time.Sleep(time.Second * 3)
 
 				assertConnection("http", lbAddress, "80", "", 3*time.Second, 60*time.Second, &stopClusterRemoval)
-				checkIPAddress("plndr-svcs-lock", "kube-system", lbAddress, true, client, &stopClusterRemoval)
+				checkIPAddressByLease("plndr-svcs-lock", "kube-system", lbAddress, true, client, &stopClusterRemoval)
 
 				err = client.CoreV1().Services(namespace).Delete(context.TODO(), svc2Name, metav1.DeleteOptions{})
 				Expect(err).ToNot(HaveOccurred())
 
-				checkIPAddress("plndr-svcs-lock", "kube-system", lbAddress, false, client, &stopClusterRemoval)
+				checkIPAddressByLease("plndr-svcs-lock", "kube-system", lbAddress, false, client, &stopClusterRemoval)
 				assertConnectionError("http", lbAddress, "80", "", 3*time.Second)
 			},
 			Entry("with external traffic policy - cluster", "test-svc1-cluster", "test-svc2-cluster", uint(16), corev1.ServiceExternalTrafficPolicyCluster),
@@ -690,7 +688,7 @@ var _ = Describe("kube-vip ARP/NDP broadcast neighbor", func() {
 				createTestService(svcName, namespace, dsName, lbAddress,
 					client, corev1.IPFamilyPolicySingleStack, []corev1.IPFamily{corev1.IPv6Protocol}, trafficPolicy)
 
-				checkIPAddress(fmt.Sprintf("kubevip-%s", svcName), namespace, lbAddress, true, client, &stopClusterRemoval)
+				checkIPAddressByLease(fmt.Sprintf("kubevip-%s", svcName), namespace, lbAddress, true, client, &stopClusterRemoval)
 
 				assertConnection("http", lbAddress, "80", "", 3*time.Second, 60*time.Second, &stopClusterRemoval)
 
@@ -699,9 +697,7 @@ var _ = Describe("kube-vip ARP/NDP broadcast neighbor", func() {
 				err := client.CoreV1().Services(namespace).Delete(context.TODO(), svcName, metav1.DeleteOptions{})
 				Expect(err).ToNot(HaveOccurred())
 
-				isPresent := e2e.CheckIPAddressPresence(lbAddress, container)
-				Expect(isPresent).ToNot(BeNil())
-				Expect(*isPresent).To(BeFalse())
+				checkIPAddress(lbAddress, container, false)
 
 				assertConnectionError("http", lbAddress, "80", "", 3*time.Second)
 			},
@@ -846,8 +842,8 @@ var _ = Describe("kube-vip ARP/NDP broadcast neighbor", func() {
 				createTestService(svcName, namespace, dsName, lbAddress,
 					client, corev1.IPFamilyPolicyRequireDualStack, []corev1.IPFamily{corev1.IPv4Protocol, corev1.IPv6Protocol}, trafficPolicy)
 
-				checkIPAddress("plndr-svcs-lock", "kube-system", lbAddresses[0], true, client, &stopClusterRemoval)
-				checkIPAddress("plndr-svcs-lock", "kube-system", lbAddresses[1], true, client, &stopClusterRemoval)
+				checkIPAddressByLease("plndr-svcs-lock", "kube-system", lbAddresses[0], true, client, &stopClusterRemoval)
+				checkIPAddressByLease("plndr-svcs-lock", "kube-system", lbAddresses[1], true, client, &stopClusterRemoval)
 
 				assertConnection("http", lbAddresses[0], "80", "", 3*time.Second, 60*time.Second, &stopClusterRemoval)
 				assertConnection("http", lbAddresses[1], "80", "", 3*time.Second, 60*time.Second, &stopClusterRemoval)
@@ -855,8 +851,8 @@ var _ = Describe("kube-vip ARP/NDP broadcast neighbor", func() {
 				err := client.CoreV1().Services(namespace).Delete(context.TODO(), svcName, metav1.DeleteOptions{})
 				Expect(err).ToNot(HaveOccurred())
 
-				checkIPAddress("plndr-svcs-lock", "kube-system", lbAddresses[0], false, client, &stopClusterRemoval)
-				checkIPAddress("plndr-svcs-lock", "kube-system", lbAddresses[1], false, client, &stopClusterRemoval)
+				checkIPAddressByLease("plndr-svcs-lock", "kube-system", lbAddresses[0], false, client, &stopClusterRemoval)
+				checkIPAddressByLease("plndr-svcs-lock", "kube-system", lbAddresses[1], false, client, &stopClusterRemoval)
 				assertConnectionError("http", lbAddresses[0], "80", "", 3*time.Second)
 				assertConnectionError("http", lbAddresses[1], "80", "", 3*time.Second)
 			},
@@ -875,8 +871,8 @@ var _ = Describe("kube-vip ARP/NDP broadcast neighbor", func() {
 				createTestService(svc2Name, namespace, dsName, lbAddress,
 					client, corev1.IPFamilyPolicyRequireDualStack, []corev1.IPFamily{corev1.IPv4Protocol, corev1.IPv6Protocol}, trafficPolicy)
 
-				checkIPAddress("plndr-svcs-lock", "kube-system", lbAddresses[0], true, client, &stopClusterRemoval)
-				checkIPAddress("plndr-svcs-lock", "kube-system", lbAddresses[1], true, client, &stopClusterRemoval)
+				checkIPAddressByLease("plndr-svcs-lock", "kube-system", lbAddresses[0], true, client, &stopClusterRemoval)
+				checkIPAddressByLease("plndr-svcs-lock", "kube-system", lbAddresses[1], true, client, &stopClusterRemoval)
 
 				assertConnection("http", lbAddresses[0], "80", "", 3*time.Second, 60*time.Second, &stopClusterRemoval)
 				assertConnection("http", lbAddresses[1], "80", "", 3*time.Second, 60*time.Second, &stopClusterRemoval)
@@ -890,14 +886,14 @@ var _ = Describe("kube-vip ARP/NDP broadcast neighbor", func() {
 				assertConnection("http", lbAddresses[0], "80", "", 3*time.Second, 60*time.Second, &stopClusterRemoval)
 				assertConnection("http", lbAddresses[1], "80", "", 3*time.Second, 60*time.Second, &stopClusterRemoval)
 
-				checkIPAddress("plndr-svcs-lock", "kube-system", lbAddresses[0], true, client, &stopClusterRemoval)
-				checkIPAddress("plndr-svcs-lock", "kube-system", lbAddresses[1], true, client, &stopClusterRemoval)
+				checkIPAddressByLease("plndr-svcs-lock", "kube-system", lbAddresses[0], true, client, &stopClusterRemoval)
+				checkIPAddressByLease("plndr-svcs-lock", "kube-system", lbAddresses[1], true, client, &stopClusterRemoval)
 
 				err = client.CoreV1().Services(namespace).Delete(context.TODO(), svc2Name, metav1.DeleteOptions{})
 				Expect(err).ToNot(HaveOccurred())
 
-				checkIPAddress("plndr-svcs-lock", "kube-system", lbAddresses[0], false, client, &stopClusterRemoval)
-				checkIPAddress("plndr-svcs-lock", "kube-system", lbAddresses[1], false, client, &stopClusterRemoval)
+				checkIPAddressByLease("plndr-svcs-lock", "kube-system", lbAddresses[0], false, client, &stopClusterRemoval)
+				checkIPAddressByLease("plndr-svcs-lock", "kube-system", lbAddresses[1], false, client, &stopClusterRemoval)
 
 				assertConnectionError("http", lbAddresses[0], "80", "", 3*time.Second)
 				assertConnectionError("http", lbAddresses[1], "80", "", 3*time.Second)
@@ -1035,7 +1031,7 @@ var _ = Describe("kube-vip ARP/NDP broadcast neighbor", func() {
 			assertControlPlaneIsRoutable(vips[0], 3*time.Second, 60*time.Second)
 		})
 
-		DescribeTable("configures an IPv6 VIP address for service",
+		DescribeTable("configures an IPv4 and IPv6 VIP addresses for service",
 			func(svcName string, offset uint, trafficPolicy corev1.ServiceExternalTrafficPolicy) {
 				lbAddress := e2e.GenerateDualStackVIP(offset)
 				lbAddresses := strings.Split(lbAddress, ",")
@@ -1043,8 +1039,8 @@ var _ = Describe("kube-vip ARP/NDP broadcast neighbor", func() {
 				createTestService(svcName, namespace, dsName, lbAddress,
 					client, corev1.IPFamilyPolicyRequireDualStack, []corev1.IPFamily{corev1.IPv4Protocol, corev1.IPv6Protocol}, trafficPolicy)
 
-				checkIPAddress(fmt.Sprintf("kubevip-%s", svcName), namespace, lbAddresses[0], true, client, &stopClusterRemoval)
-				checkIPAddress(fmt.Sprintf("kubevip-%s", svcName), namespace, lbAddresses[1], true, client, &stopClusterRemoval)
+				checkIPAddressByLease(fmt.Sprintf("kubevip-%s", svcName), namespace, lbAddresses[0], true, client, &stopClusterRemoval)
+				checkIPAddressByLease(fmt.Sprintf("kubevip-%s", svcName), namespace, lbAddresses[1], true, client, &stopClusterRemoval)
 
 				assertConnection("http", lbAddresses[0], "80", "", 3*time.Second, 60*time.Second, &stopClusterRemoval)
 				assertConnection("http", lbAddresses[1], "80", "", 3*time.Second, 60*time.Second, &stopClusterRemoval)
@@ -1054,15 +1050,11 @@ var _ = Describe("kube-vip ARP/NDP broadcast neighbor", func() {
 				err := client.CoreV1().Services(namespace).Delete(context.TODO(), svcName, metav1.DeleteOptions{})
 				Expect(err).ToNot(HaveOccurred())
 
-				isPresent := e2e.CheckIPAddressPresence(lbAddresses[0], container)
-				Expect(isPresent).ToNot(BeNil())
-				Expect(*isPresent).To(BeFalse())
+				checkIPAddress(lbAddresses[0], container, false)
+				checkIPAddress(lbAddresses[1], container, false)
 
-				isPresent = e2e.CheckIPAddressPresence(lbAddresses[1], container)
-				Expect(isPresent).ToNot(BeNil())
-				Expect(*isPresent).To(BeFalse())
-
-				assertConnectionError("http", lbAddress, "80", "", 3*time.Second)
+				assertConnectionError("http", lbAddresses[0], "80", "", 3*time.Second)
+				assertConnectionError("http", lbAddresses[1], "80", "", 3*time.Second)
 			},
 			Entry("with external traffic policy - cluster", "test-svc-cluster", uint(27), corev1.ServiceExternalTrafficPolicyCluster),
 			Entry("with external traffic policy - local", "test-svc-local", uint(28), corev1.ServiceExternalTrafficPolicyLocal),
@@ -1211,8 +1203,8 @@ var _ = Describe("kube-vip ARP/NDP broadcast neighbor", func() {
 				createTestService(svcName, namespace, dsName, lbAddress,
 					client, corev1.IPFamilyPolicyRequireDualStack, []corev1.IPFamily{corev1.IPv4Protocol, corev1.IPv6Protocol}, trafficPolicy)
 
-				checkIPAddress("plndr-svcs-lock", "kube-system", lbAddresses[0], true, client, &stopClusterRemoval)
-				checkIPAddress("plndr-svcs-lock", "kube-system", lbAddresses[1], true, client, &stopClusterRemoval)
+				checkIPAddressByLease("plndr-svcs-lock", "kube-system", lbAddresses[0], true, client, &stopClusterRemoval)
+				checkIPAddressByLease("plndr-svcs-lock", "kube-system", lbAddresses[1], true, client, &stopClusterRemoval)
 
 				assertConnection("http", lbAddresses[0], "80", "", 3*time.Second, 60*time.Second, &stopClusterRemoval)
 				assertConnection("http", lbAddresses[1], "80", "", 3*time.Second, 60*time.Second, &stopClusterRemoval)
@@ -1220,8 +1212,8 @@ var _ = Describe("kube-vip ARP/NDP broadcast neighbor", func() {
 				err := client.CoreV1().Services(namespace).Delete(context.TODO(), svcName, metav1.DeleteOptions{})
 				Expect(err).ToNot(HaveOccurred())
 
-				checkIPAddress("plndr-svcs-lock", "kube-system", lbAddresses[0], false, client, &stopClusterRemoval)
-				checkIPAddress("plndr-svcs-lock", "kube-system", lbAddresses[1], false, client, &stopClusterRemoval)
+				checkIPAddressByLease("plndr-svcs-lock", "kube-system", lbAddresses[0], false, client, &stopClusterRemoval)
+				checkIPAddressByLease("plndr-svcs-lock", "kube-system", lbAddresses[1], false, client, &stopClusterRemoval)
 				assertConnectionError("http", lbAddresses[0], "80", "", 3*time.Second)
 				assertConnectionError("http", lbAddresses[1], "80", "", 3*time.Second)
 			},
@@ -1240,8 +1232,8 @@ var _ = Describe("kube-vip ARP/NDP broadcast neighbor", func() {
 				createTestService(svc2Name, namespace, dsName, lbAddress,
 					client, corev1.IPFamilyPolicyRequireDualStack, []corev1.IPFamily{corev1.IPv4Protocol, corev1.IPv6Protocol}, trafficPolicy)
 
-				checkIPAddress("plndr-svcs-lock", "kube-system", lbAddresses[0], true, client, &stopClusterRemoval)
-				checkIPAddress("plndr-svcs-lock", "kube-system", lbAddresses[1], true, client, &stopClusterRemoval)
+				checkIPAddressByLease("plndr-svcs-lock", "kube-system", lbAddresses[0], true, client, &stopClusterRemoval)
+				checkIPAddressByLease("plndr-svcs-lock", "kube-system", lbAddresses[1], true, client, &stopClusterRemoval)
 
 				assertConnection("http", lbAddresses[0], "80", "", 3*time.Second, 60*time.Second, &stopClusterRemoval)
 				assertConnection("http", lbAddresses[1], "80", "", 3*time.Second, 60*time.Second, &stopClusterRemoval)
@@ -1255,14 +1247,14 @@ var _ = Describe("kube-vip ARP/NDP broadcast neighbor", func() {
 				assertConnection("http", lbAddresses[0], "80", "", 3*time.Second, 60*time.Second, &stopClusterRemoval)
 				assertConnection("http", lbAddresses[1], "80", "", 3*time.Second, 60*time.Second, &stopClusterRemoval)
 
-				checkIPAddress("plndr-svcs-lock", "kube-system", lbAddresses[0], true, client, &stopClusterRemoval)
-				checkIPAddress("plndr-svcs-lock", "kube-system", lbAddresses[1], true, client, &stopClusterRemoval)
+				checkIPAddressByLease("plndr-svcs-lock", "kube-system", lbAddresses[0], true, client, &stopClusterRemoval)
+				checkIPAddressByLease("plndr-svcs-lock", "kube-system", lbAddresses[1], true, client, &stopClusterRemoval)
 
 				err = client.CoreV1().Services(namespace).Delete(context.TODO(), svc2Name, metav1.DeleteOptions{})
 				Expect(err).ToNot(HaveOccurred())
 
-				checkIPAddress("plndr-svcs-lock", "kube-system", lbAddresses[0], false, client, &stopClusterRemoval)
-				checkIPAddress("plndr-svcs-lock", "kube-system", lbAddresses[1], false, client, &stopClusterRemoval)
+				checkIPAddressByLease("plndr-svcs-lock", "kube-system", lbAddresses[0], false, client, &stopClusterRemoval)
+				checkIPAddressByLease("plndr-svcs-lock", "kube-system", lbAddresses[1], false, client, &stopClusterRemoval)
 
 				assertConnectionError("http", lbAddresses[0], "80", "", 3*time.Second)
 				assertConnectionError("http", lbAddresses[1], "80", "", 3*time.Second)
@@ -1410,8 +1402,8 @@ var _ = Describe("kube-vip ARP/NDP broadcast neighbor", func() {
 				createTestService(svcName, namespace, dsName, lbAddress,
 					client, corev1.IPFamilyPolicyRequireDualStack, []corev1.IPFamily{corev1.IPv4Protocol, corev1.IPv6Protocol}, trafficPolicy)
 
-				checkIPAddress(fmt.Sprintf("kubevip-%s", svcName), namespace, lbAddresses[0], true, client, &stopClusterRemoval)
-				checkIPAddress(fmt.Sprintf("kubevip-%s", svcName), namespace, lbAddresses[1], true, client, &stopClusterRemoval)
+				checkIPAddressByLease(fmt.Sprintf("kubevip-%s", svcName), namespace, lbAddresses[0], true, client, &stopClusterRemoval)
+				checkIPAddressByLease(fmt.Sprintf("kubevip-%s", svcName), namespace, lbAddresses[1], true, client, &stopClusterRemoval)
 
 				assertConnection("http", lbAddresses[0], "80", "", 3*time.Second, 60*time.Second, &stopClusterRemoval)
 				assertConnection("http", lbAddresses[1], "80", "", 3*time.Second, 60*time.Second, &stopClusterRemoval)
@@ -1421,15 +1413,11 @@ var _ = Describe("kube-vip ARP/NDP broadcast neighbor", func() {
 				err := client.CoreV1().Services(namespace).Delete(context.TODO(), svcName, metav1.DeleteOptions{})
 				Expect(err).ToNot(HaveOccurred())
 
-				isPresent := e2e.CheckIPAddressPresence(lbAddresses[0], container)
-				Expect(isPresent).ToNot(BeNil())
-				Expect(*isPresent).To(BeFalse())
+				checkIPAddress(lbAddresses[0], container, false)
+				checkIPAddress(lbAddresses[1], container, false)
 
-				isPresent = e2e.CheckIPAddressPresence(lbAddresses[1], container)
-				Expect(isPresent).ToNot(BeNil())
-				Expect(*isPresent).To(BeFalse())
-
-				assertConnectionError("http", lbAddress, "80", "", 3*time.Second)
+				assertConnectionError("http", lbAddresses[0], "80", "", 3*time.Second)
+				assertConnectionError("http", lbAddresses[1], "80", "", 3*time.Second)
 			},
 			Entry("with external traffic policy - cluster", "test-svc-cluster", uint(35), corev1.ServiceExternalTrafficPolicyCluster),
 			Entry("with external traffic policy - local", "test-svc-local", uint(36), corev1.ServiceExternalTrafficPolicyLocal),
@@ -1655,8 +1643,8 @@ var _ = Describe("kube-vip ARP/NDP broadcast neighbor", func() {
 					container = fmt.Sprintf("%s-control-plane", clusterName)
 				}
 
-				exists := e2e.CheckIPAddressPresence(ipv4VIP, container)
-				Expect(*exists).To(BeTrue())
+				checkIPAddress(ipv4VIP, container, true)
+
 				rtExists := e2e.CheckRoutePresence(ipv4VIP, container)
 				Expect(rtExists).To(BeTrue())
 			}
@@ -1771,8 +1759,7 @@ var _ = Describe("kube-vip ARP/NDP broadcast neighbor", func() {
 					container = fmt.Sprintf("%s-control-plane", clusterName)
 				}
 
-				exists := e2e.CheckIPAddressPresence(ipv6VIP, container)
-				Expect(*exists).To(BeTrue())
+				checkIPAddress(ipv6VIP, container, true)
 				rtExists := e2e.CheckRoutePresence(ipv6VIP, container)
 				Expect(rtExists).To(BeTrue())
 			}
@@ -2000,28 +1987,10 @@ func createTestService(name, namespace, target, lbAddress string, client kuberne
 	}, time.Second*60, time.Second).Should(Succeed())
 }
 
-func checkIPAddress(name, namespace, lbAddress string, expected bool, client kubernetes.Interface, stopClusterRemoval *bool) {
-	By("checkIPAddress: " + lbAddress)
-	isPresent := false
-	defer func() {
-		By("Executing Defer checkIPAddress: " + lbAddress)
-		if isPresent != expected {
-			By("checkIPAddress - stopping cluster removal: " + lbAddress)
-			*stopClusterRemoval = true
-		}
-	}()
+func checkIPAddress(container, lbAddress string, expected bool) {
+	Eventually(e2e.CheckIPAddressPresence(lbAddress, container, expected), time.Second*120, time.Second).Should(BeTrue())
+}
 
-	Eventually(func() *bool {
-		value := e2e.CheckIPAddressPresenceByLease(name, namespace, lbAddress, client)
-		if value != nil {
-			isPresent = *value
-		}
-		return value
-	}, time.Second*120, time.Second).ShouldNot(BeNil())
-	matcher := BeFalse()
-
-	if expected {
-		matcher = BeTrue()
-	}
-	Expect(isPresent).To(matcher)
+func checkIPAddressByLease(name, namespace, lbAddress string, expected bool, client kubernetes.Interface, stopClusterRemoval *bool) {
+	Eventually(e2e.CheckIPAddressPresenceByLease(name, namespace, lbAddress, client, expected), time.Second*120, time.Second).Should(BeTrue())
 }

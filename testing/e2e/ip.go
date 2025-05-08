@@ -130,7 +130,7 @@ func getKindNetworkSubnetCIDRs() []string {
 	return cidrs
 }
 
-func CheckIPAddressPresence(ip string, container string) *bool {
+func CheckIPAddressPresence(ip string, container string, expected bool) bool {
 	cmdOut := new(bytes.Buffer)
 	family := "-4"
 	if vip.IsIPv6(ip) {
@@ -142,18 +142,18 @@ func CheckIPAddressPresence(ip string, container string) *bool {
 	)
 	cmd.Stdout = cmdOut
 	if err := cmd.Run(); err != nil {
-		return nil
+		return false
 	}
 	isPresent := strings.Contains(cmdOut.String(), ip)
-	return &isPresent
+	return isPresent == expected
 }
 
-func CheckIPAddressPresenceByLease(name, namespace, ip string, client kubernetes.Interface) *bool {
+func CheckIPAddressPresenceByLease(name, namespace, ip string, client kubernetes.Interface, expected bool) bool {
 	container := GetLeaseHolder(name, namespace, client)
 	if container == "" {
-		return nil
+		return false
 	}
-	return CheckIPAddressPresence(ip, container)
+	return CheckIPAddressPresence(ip, container, expected)
 }
 
 func CheckRoutePresence(ip string, container string) bool {
