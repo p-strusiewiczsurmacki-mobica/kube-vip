@@ -67,11 +67,7 @@ func EnsureKindNetwork() {
 	Eventually(session).Should(gexec.Exit(0))
 }
 
-func GenerateVIP(family string) string {
-	return GenerateVIPWithCustomOffset(family, 5)
-}
-
-func GenerateVIPWithCustomOffset(family string, offset uint) string {
+func GenerateVIP(family string, offset uint) string {
 	cidrs := getKindNetworkSubnetCIDRs()
 
 	for _, cidr := range cidrs {
@@ -104,12 +100,8 @@ func GenerateVIPWithCustomOffset(family string, offset uint) string {
 	return ""
 }
 
-func GenerateDualStackVIP() string {
-	return GenerateVIP(IPv4Family) + "," + GenerateVIP(IPv6Family)
-}
-
-func GenerateDualStackVIPWithCustomOffset(offset uint) string {
-	return GenerateVIPWithCustomOffset(IPv4Family, offset) + "," + GenerateVIPWithCustomOffset(IPv6Family, offset)
+func GenerateDualStackVIP(offset uint) string {
+	return GenerateVIP(IPv4Family, offset) + "," + GenerateVIP(IPv6Family, offset)
 }
 
 func getKindNetworkSubnetCIDRs() []string {

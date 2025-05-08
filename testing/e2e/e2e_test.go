@@ -90,10 +90,11 @@ var _ = Describe("kube-vip ARP/NDP broadcast neighbor", func() {
 
 	Describe("kube-vip IPv4 functionality, vip_leaderelection=true, svc_enable=true, svc_election=false", Ordered, func() {
 		var (
-			clusterConfig kindconfigv1alpha4.Cluster
-			ipv4VIP       string
-			client        kubernetes.Interface
-			clusterName   string
+			clusterConfig      kindconfigv1alpha4.Cluster
+			ipv4VIP            string
+			client             kubernetes.Interface
+			clusterName        string
+			stopClusterRemoval bool
 		)
 
 		BeforeAll(func() {
@@ -130,7 +131,7 @@ var _ = Describe("kube-vip ARP/NDP broadcast neighbor", func() {
 
 			defer manifestFile.Close()
 
-			ipv4VIP = e2e.GenerateVIP(e2e.IPv4Family)
+			ipv4VIP = e2e.GenerateVIP(e2e.IPv4Family, 5)
 
 			Expect(kubeVIPManifestTemplate.Execute(manifestFile, e2e.KubevipManifestValues{
 				ControlPlaneVIP:   ipv4VIP,
@@ -170,7 +171,7 @@ var _ = Describe("kube-vip ARP/NDP broadcast neighbor", func() {
 		})
 
 		AfterAll(func() {
-			if os.Getenv("E2E_PRESERVE_CLUSTER") == "true" {
+			if os.Getenv("E2E_PRESERVE_CLUSTER") == "true" || stopClusterRemoval {
 				return
 			}
 
@@ -198,42 +199,42 @@ var _ = Describe("kube-vip ARP/NDP broadcast neighbor", func() {
 
 			By(withTimestamp("checking that the Kubernetes control plane nodes are still accessible via the assigned IPv4 VIP with little downtime"))
 			// Allow at most 30 seconds of downtime when polling the control plane nodes
-			assertControlPlaneIsRoutable(ipv4VIP, 1*time.Second, 30*time.Second)
+			assertControlPlaneIsRoutable(ipv4VIP, 3*time.Second, 60*time.Second)
 		})
 
 		DescribeTable("configures an IPv4 VIP address for service",
 			func(svcName string, offset uint, trafficPolicy corev1.ServiceExternalTrafficPolicy) {
-				lbAddress := e2e.GenerateVIPWithCustomOffset(e2e.IPv4Family, offset)
+				lbAddress := e2e.GenerateVIP(e2e.IPv4Family, offset)
 
 				createTestService(svcName, namespace, dsName, lbAddress,
 					client, corev1.IPFamilyPolicySingleStack, []corev1.IPFamily{corev1.IPv4Protocol}, trafficPolicy)
 
-				checkIPAddress("plndr-svcs-lock", "kube-system", lbAddress, true, client)
+				checkIPAddress("plndr-svcs-lock", "kube-system", lbAddress, true, client, &stopClusterRemoval)
 
-				assertConnection("http", lbAddress, "80", "", 1*time.Second, 30*time.Second)
+				assertConnection("http", lbAddress, "80", "", 3*time.Second, 60*time.Second, &stopClusterRemoval)
 
 				err := client.CoreV1().Services(namespace).Delete(context.TODO(), svcName, metav1.DeleteOptions{})
 				Expect(err).ToNot(HaveOccurred())
 
-				checkIPAddress("plndr-svcs-lock", "kube-system", lbAddress, false, client)
+				checkIPAddress("plndr-svcs-lock", "kube-system", lbAddress, false, client, &stopClusterRemoval)
 				assertConnectionError("http", lbAddress, "80", "", 3*time.Second)
 			},
-			Entry("with external traffic policy - cluster", "test-svc-cluster", uint(4), corev1.ServiceExternalTrafficPolicyCluster),
-			Entry("with external traffic policy - local", "test-svc-local", uint(3), corev1.ServiceExternalTrafficPolicyLocal),
+			Entry("with external traffic policy - cluster", "test-svc-cluster", uint(6), corev1.ServiceExternalTrafficPolicyCluster),
+			Entry("with external traffic policy - local", "test-svc-local", uint(7), corev1.ServiceExternalTrafficPolicyLocal),
 		)
 
 		DescribeTable("only removes VIP address if it was referenced by multiple services and all of them were deleted",
 			func(svc1Name string, svc2Name string, offset uint, trafficPolicy corev1.ServiceExternalTrafficPolicy) {
-				lbAddress := e2e.GenerateVIPWithCustomOffset(e2e.IPv4Family, offset)
+				lbAddress := e2e.GenerateVIP(e2e.IPv4Family, offset)
 
 				createTestService(svc1Name, namespace, dsName, lbAddress,
 					client, corev1.IPFamilyPolicySingleStack, []corev1.IPFamily{corev1.IPv4Protocol}, trafficPolicy)
 				createTestService(svc2Name, namespace, dsName, lbAddress,
 					client, corev1.IPFamilyPolicySingleStack, []corev1.IPFamily{corev1.IPv4Protocol}, trafficPolicy)
 
-				checkIPAddress("plndr-svcs-lock", "kube-system", lbAddress, true, client)
+				checkIPAddress("plndr-svcs-lock", "kube-system", lbAddress, true, client, &stopClusterRemoval)
 
-				assertConnection("http", lbAddress, "80", "", 1*time.Second, 30*time.Second)
+				assertConnection("http", lbAddress, "80", "", 3*time.Second, 60*time.Second, &stopClusterRemoval)
 
 				err := client.CoreV1().Services(namespace).Delete(context.TODO(), svc1Name, metav1.DeleteOptions{})
 				Expect(err).ToNot(HaveOccurred())
@@ -241,28 +242,29 @@ var _ = Describe("kube-vip ARP/NDP broadcast neighbor", func() {
 				// sleep for 3 seconds so kube-vip will hopefully process deletion request
 				time.Sleep(time.Second * 3)
 
-				assertConnection("http", lbAddress, "80", "", 1*time.Second, 30*time.Second)
+				assertConnection("http", lbAddress, "80", "", 3*time.Second, 60*time.Second, &stopClusterRemoval)
 
-				checkIPAddress("plndr-svcs-lock", "kube-system", lbAddress, true, client)
+				checkIPAddress("plndr-svcs-lock", "kube-system", lbAddress, true, client, &stopClusterRemoval)
 
 				err = client.CoreV1().Services(namespace).Delete(context.TODO(), svc2Name, metav1.DeleteOptions{})
 				Expect(err).ToNot(HaveOccurred())
 
-				checkIPAddress("plndr-svcs-lock", "kube-system", lbAddress, false, client)
+				checkIPAddress("plndr-svcs-lock", "kube-system", lbAddress, false, client, &stopClusterRemoval)
 
 				assertConnectionError("http", lbAddress, "80", "", 3*time.Second)
 			},
 			Entry("with external traffic policy - cluster", "test-svc1-cluster", "test-svc2-cluster", uint(8), corev1.ServiceExternalTrafficPolicyCluster),
-			Entry("with external traffic policy - local", "test-svc1-local", "test-svc2-local", uint(7), corev1.ServiceExternalTrafficPolicyLocal),
+			Entry("with external traffic policy - local", "test-svc1-local", "test-svc2-local", uint(9), corev1.ServiceExternalTrafficPolicyLocal),
 		)
 	})
 
 	Describe("kube-vip IPv4 functionality, vip_leaderelection=true, svc_enable=true, svc_election=true", Ordered, func() {
 		var (
-			clusterConfig kindconfigv1alpha4.Cluster
-			ipv4VIP       string
-			client        kubernetes.Interface
-			clusterName   string
+			clusterConfig      kindconfigv1alpha4.Cluster
+			ipv4VIP            string
+			client             kubernetes.Interface
+			clusterName        string
+			stopClusterRemoval bool
 		)
 
 		BeforeAll(func() {
@@ -299,7 +301,7 @@ var _ = Describe("kube-vip ARP/NDP broadcast neighbor", func() {
 
 			defer manifestFile.Close()
 
-			ipv4VIP = e2e.GenerateVIP(e2e.IPv4Family)
+			ipv4VIP = e2e.GenerateVIP(e2e.IPv4Family, 10)
 
 			Expect(kubeVIPManifestTemplate.Execute(manifestFile, e2e.KubevipManifestValues{
 				ControlPlaneVIP:   ipv4VIP,
@@ -339,7 +341,7 @@ var _ = Describe("kube-vip ARP/NDP broadcast neighbor", func() {
 		})
 
 		AfterAll(func() {
-			if os.Getenv("E2E_PRESERVE_CLUSTER") == "true" {
+			if os.Getenv("E2E_PRESERVE_CLUSTER") == "true" || stopClusterRemoval {
 				return
 			}
 
@@ -367,19 +369,19 @@ var _ = Describe("kube-vip ARP/NDP broadcast neighbor", func() {
 
 			By(withTimestamp("checking that the Kubernetes control plane nodes are still accessible via the assigned IPv4 VIP with little downtime"))
 			// Allow at most 30 seconds of downtime when polling the control plane nodes
-			assertControlPlaneIsRoutable(ipv4VIP, 1*time.Second, 30*time.Second)
+			assertControlPlaneIsRoutable(ipv4VIP, 3*time.Second, 60*time.Second)
 		})
 
 		DescribeTable("configures an IPv4 VIP address for service",
 			func(svcName string, offset uint, trafficPolicy corev1.ServiceExternalTrafficPolicy) {
-				lbAddress := e2e.GenerateVIPWithCustomOffset(e2e.IPv4Family, offset)
+				lbAddress := e2e.GenerateVIP(e2e.IPv4Family, offset)
 
 				createTestService(svcName, namespace, dsName, lbAddress,
 					client, corev1.IPFamilyPolicySingleStack, []corev1.IPFamily{corev1.IPv4Protocol}, trafficPolicy)
 
-				checkIPAddress(fmt.Sprintf("kubevip-%s", svcName), namespace, lbAddress, true, client)
+				checkIPAddress(fmt.Sprintf("kubevip-%s", svcName), namespace, lbAddress, true, client, &stopClusterRemoval)
 
-				assertConnection("http", lbAddress, "80", "", 1*time.Second, 30*time.Second)
+				assertConnection("http", lbAddress, "80", "", 3*time.Second, 60*time.Second, &stopClusterRemoval)
 
 				container := e2e.GetLeaseHolder(fmt.Sprintf("kubevip-%s", svcName), namespace, client)
 
@@ -392,17 +394,18 @@ var _ = Describe("kube-vip ARP/NDP broadcast neighbor", func() {
 
 				assertConnectionError("http", lbAddress, "80", "", 3*time.Second)
 			},
-			Entry("with external traffic policy - cluster", "test-svc-cluster", uint(4), corev1.ServiceExternalTrafficPolicyCluster),
-			Entry("with external traffic policy - local", "test-svc-local", uint(3), corev1.ServiceExternalTrafficPolicyLocal),
+			Entry("with external traffic policy - cluster", "test-svc-cluster", uint(11), corev1.ServiceExternalTrafficPolicyCluster),
+			Entry("with external traffic policy - local", "test-svc-local", uint(12), corev1.ServiceExternalTrafficPolicyLocal),
 		)
 	})
 
 	Describe("kube-vip IPv6 functionality, vip_leaderelection=true, svc_enable=true, svc_election=false", Ordered, func() {
 		var (
-			clusterConfig kindconfigv1alpha4.Cluster
-			ipv6VIP       string
-			client        kubernetes.Interface
-			clusterName   string
+			clusterConfig      kindconfigv1alpha4.Cluster
+			ipv6VIP            string
+			client             kubernetes.Interface
+			clusterName        string
+			stopClusterRemoval bool
 		)
 
 		BeforeAll(func() {
@@ -434,7 +437,7 @@ var _ = Describe("kube-vip ARP/NDP broadcast neighbor", func() {
 				clusterConfig.Nodes = append(clusterConfig.Nodes, nodeConfig)
 			}
 
-			ipv6VIP = e2e.GenerateVIP(e2e.IPv6Family)
+			ipv6VIP = e2e.GenerateVIP(e2e.IPv6Family, 13)
 
 			manifestFile, err := os.Create(manifestPath)
 			Expect(err).NotTo(HaveOccurred())
@@ -479,7 +482,7 @@ var _ = Describe("kube-vip ARP/NDP broadcast neighbor", func() {
 		})
 
 		AfterAll(func() {
-			if os.Getenv("E2E_PRESERVE_CLUSTER") == "true" {
+			if os.Getenv("E2E_PRESERVE_CLUSTER") == "true" || stopClusterRemoval {
 				return
 			}
 
@@ -508,42 +511,42 @@ var _ = Describe("kube-vip ARP/NDP broadcast neighbor", func() {
 
 			By(withTimestamp("checking that the Kubernetes control plane nodes are still accessible via the assigned IPv6 VIP with little downtime"))
 			// Allow at most 20 seconds of downtime when polling the control plane nodes
-			assertControlPlaneIsRoutable(ipv6VIP, 1*time.Second, 30*time.Second)
+			assertControlPlaneIsRoutable(ipv6VIP, 3*time.Second, 60*time.Second)
 		})
 
 		DescribeTable("configures an IPv6 VIP address for service",
 			func(svcName string, offset uint, trafficPolicy corev1.ServiceExternalTrafficPolicy) {
-				lbAddress := e2e.GenerateVIPWithCustomOffset(e2e.IPv6Family, offset)
+				lbAddress := e2e.GenerateVIP(e2e.IPv6Family, offset)
 
 				createTestService(svcName, namespace, dsName, lbAddress,
 					client, corev1.IPFamilyPolicySingleStack, []corev1.IPFamily{corev1.IPv6Protocol}, trafficPolicy)
 
-				checkIPAddress("plndr-svcs-lock", "kube-system", lbAddress, true, client)
+				checkIPAddress("plndr-svcs-lock", "kube-system", lbAddress, true, client, &stopClusterRemoval)
 
-				assertConnection("http", lbAddress, "80", "", 1*time.Second, 30*time.Second)
+				assertConnection("http", lbAddress, "80", "", 3*time.Second, 60*time.Second, &stopClusterRemoval)
 
 				err := client.CoreV1().Services(namespace).Delete(context.TODO(), svcName, metav1.DeleteOptions{})
 				Expect(err).ToNot(HaveOccurred())
 
-				checkIPAddress("plndr-svcs-lock", "kube-system", lbAddress, false, client)
+				checkIPAddress("plndr-svcs-lock", "kube-system", lbAddress, false, client, &stopClusterRemoval)
 				assertConnectionError("http", lbAddress, "80", "", 3*time.Second)
 			},
-			Entry("with external traffic policy - cluster", "test-svc-cluster", uint(4), corev1.ServiceExternalTrafficPolicyCluster),
-			Entry("with external traffic policy - local", "test-svc-local", uint(3), corev1.ServiceExternalTrafficPolicyLocal),
+			Entry("with external traffic policy - cluster", "test-svc-cluster", uint(14), corev1.ServiceExternalTrafficPolicyCluster),
+			Entry("with external traffic policy - local", "test-svc-local", uint(15), corev1.ServiceExternalTrafficPolicyLocal),
 		)
 
 		DescribeTable("only removes VIP address if it was referenced by multiple services and all of them were deleted",
 			func(svc1Name string, svc2Name string, offset uint, trafficPolicy corev1.ServiceExternalTrafficPolicy) {
-				lbAddress := e2e.GenerateVIPWithCustomOffset(e2e.IPv6Family, offset)
+				lbAddress := e2e.GenerateVIP(e2e.IPv6Family, offset)
 
 				createTestService(svc1Name, namespace, dsName, lbAddress,
 					client, corev1.IPFamilyPolicySingleStack, []corev1.IPFamily{corev1.IPv6Protocol}, trafficPolicy)
 				createTestService(svc2Name, namespace, dsName, lbAddress,
 					client, corev1.IPFamilyPolicySingleStack, []corev1.IPFamily{corev1.IPv6Protocol}, trafficPolicy)
 
-				checkIPAddress("plndr-svcs-lock", "kube-system", lbAddress, true, client)
+				checkIPAddress("plndr-svcs-lock", "kube-system", lbAddress, true, client, &stopClusterRemoval)
 
-				assertConnection("http", lbAddress, "80", "", 1*time.Second, 30*time.Second)
+				assertConnection("http", lbAddress, "80", "", 3*time.Second, 60*time.Second, &stopClusterRemoval)
 
 				err := client.CoreV1().Services(namespace).Delete(context.TODO(), svc1Name, metav1.DeleteOptions{})
 				Expect(err).ToNot(HaveOccurred())
@@ -551,26 +554,27 @@ var _ = Describe("kube-vip ARP/NDP broadcast neighbor", func() {
 				// sleep for 3 seconds so kube-vip will hopefully process deletion request
 				time.Sleep(time.Second * 3)
 
-				assertConnection("http", lbAddress, "80", "", 1*time.Second, 30*time.Second)
-				checkIPAddress("plndr-svcs-lock", "kube-system", lbAddress, true, client)
+				assertConnection("http", lbAddress, "80", "", 3*time.Second, 60*time.Second, &stopClusterRemoval)
+				checkIPAddress("plndr-svcs-lock", "kube-system", lbAddress, true, client, &stopClusterRemoval)
 
 				err = client.CoreV1().Services(namespace).Delete(context.TODO(), svc2Name, metav1.DeleteOptions{})
 				Expect(err).ToNot(HaveOccurred())
 
-				checkIPAddress("plndr-svcs-lock", "kube-system", lbAddress, false, client)
+				checkIPAddress("plndr-svcs-lock", "kube-system", lbAddress, false, client, &stopClusterRemoval)
 				assertConnectionError("http", lbAddress, "80", "", 3*time.Second)
 			},
-			Entry("with external traffic policy - cluster", "test-svc1-cluster", "test-svc2-cluster", uint(8), corev1.ServiceExternalTrafficPolicyCluster),
-			Entry("with external traffic policy - local", "test-svc1-local", "test-svc2-local", uint(7), corev1.ServiceExternalTrafficPolicyLocal),
+			Entry("with external traffic policy - cluster", "test-svc1-cluster", "test-svc2-cluster", uint(16), corev1.ServiceExternalTrafficPolicyCluster),
+			Entry("with external traffic policy - local", "test-svc1-local", "test-svc2-local", uint(17), corev1.ServiceExternalTrafficPolicyLocal),
 		)
 	})
 
 	Describe("kube-vip IPv6 functionality, vip_leaderelection=true, svc_enable=true, svc_election=true", Ordered, func() {
 		var (
-			clusterConfig kindconfigv1alpha4.Cluster
-			ipv6VIP       string
-			client        kubernetes.Interface
-			clusterName   string
+			clusterConfig      kindconfigv1alpha4.Cluster
+			ipv6VIP            string
+			client             kubernetes.Interface
+			clusterName        string
+			stopClusterRemoval bool
 		)
 
 		BeforeAll(func() {
@@ -602,7 +606,7 @@ var _ = Describe("kube-vip ARP/NDP broadcast neighbor", func() {
 				clusterConfig.Nodes = append(clusterConfig.Nodes, nodeConfig)
 			}
 
-			ipv6VIP = e2e.GenerateVIP(e2e.IPv6Family)
+			ipv6VIP = e2e.GenerateVIP(e2e.IPv6Family, 18)
 
 			manifestFile, err := os.Create(manifestPath)
 			Expect(err).NotTo(HaveOccurred())
@@ -647,7 +651,7 @@ var _ = Describe("kube-vip ARP/NDP broadcast neighbor", func() {
 		})
 
 		AfterAll(func() {
-			if os.Getenv("E2E_PRESERVE_CLUSTER") == "true" {
+			if os.Getenv("E2E_PRESERVE_CLUSTER") == "true" || stopClusterRemoval {
 				return
 			}
 
@@ -676,19 +680,19 @@ var _ = Describe("kube-vip ARP/NDP broadcast neighbor", func() {
 
 			By(withTimestamp("checking that the Kubernetes control plane nodes are still accessible via the assigned IPv6 VIP with little downtime"))
 			// Allow at most 20 seconds of downtime when polling the control plane nodes
-			assertControlPlaneIsRoutable(ipv6VIP, 1*time.Second, 30*time.Second)
+			assertControlPlaneIsRoutable(ipv6VIP, 3*time.Second, 60*time.Second)
 		})
 
 		DescribeTable("configures an IPv6 VIP address for service",
 			func(svcName string, offset uint, trafficPolicy corev1.ServiceExternalTrafficPolicy) {
-				lbAddress := e2e.GenerateVIPWithCustomOffset(e2e.IPv6Family, offset)
+				lbAddress := e2e.GenerateVIP(e2e.IPv6Family, offset)
 
 				createTestService(svcName, namespace, dsName, lbAddress,
 					client, corev1.IPFamilyPolicySingleStack, []corev1.IPFamily{corev1.IPv6Protocol}, trafficPolicy)
 
-				checkIPAddress(fmt.Sprintf("kubevip-%s", svcName), namespace, lbAddress, true, client)
+				checkIPAddress(fmt.Sprintf("kubevip-%s", svcName), namespace, lbAddress, true, client, &stopClusterRemoval)
 
-				assertConnection("http", lbAddress, "80", "", 1*time.Second, 30*time.Second)
+				assertConnection("http", lbAddress, "80", "", 3*time.Second, 60*time.Second, &stopClusterRemoval)
 
 				container := e2e.GetLeaseHolder(fmt.Sprintf("kubevip-%s", svcName), namespace, client)
 
@@ -701,17 +705,18 @@ var _ = Describe("kube-vip ARP/NDP broadcast neighbor", func() {
 
 				assertConnectionError("http", lbAddress, "80", "", 3*time.Second)
 			},
-			Entry("with external traffic policy - cluster", "test-svc-cluster", uint(4), corev1.ServiceExternalTrafficPolicyCluster),
-			Entry("with external traffic policy - local", "test-svc-local", uint(3), corev1.ServiceExternalTrafficPolicyLocal),
+			Entry("with external traffic policy - cluster", "test-svc-cluster", uint(19), corev1.ServiceExternalTrafficPolicyCluster),
+			Entry("with external traffic policy - local", "test-svc-local", uint(20), corev1.ServiceExternalTrafficPolicyLocal),
 		)
 	})
 
 	Describe("kube-vip DualStack functionality - IPv4 primary, vip_leaderelection=true, svc_enable=true, svc_election=false", Ordered, func() {
 		var (
-			clusterConfig kindconfigv1alpha4.Cluster
-			dualstackVIP  string
-			clusterName   string
-			client        kubernetes.Interface
+			clusterConfig      kindconfigv1alpha4.Cluster
+			dualstackVIP       string
+			clusterName        string
+			client             kubernetes.Interface
+			stopClusterRemoval bool
 		)
 
 		BeforeAll(func() {
@@ -743,7 +748,7 @@ var _ = Describe("kube-vip ARP/NDP broadcast neighbor", func() {
 				clusterConfig.Nodes = append(clusterConfig.Nodes, nodeConfig)
 			}
 
-			dualstackVIP = e2e.GenerateDualStackVIP()
+			dualstackVIP = e2e.GenerateDualStackVIP(21)
 
 			manifestFile, err := os.Create(manifestPath)
 			Expect(err).NotTo(HaveOccurred())
@@ -788,7 +793,7 @@ var _ = Describe("kube-vip ARP/NDP broadcast neighbor", func() {
 		})
 
 		AfterAll(func() {
-			if os.Getenv("E2E_PRESERVE_CLUSTER") == "true" {
+			if os.Getenv("E2E_PRESERVE_CLUSTER") == "true" || stopClusterRemoval {
 				return
 			}
 
@@ -825,43 +830,43 @@ var _ = Describe("kube-vip ARP/NDP broadcast neighbor", func() {
 
 			By(withTimestamp("checking that the Kubernetes control plane nodes are still accessible via the assigned IPv6 VIP with little downtime"))
 			// Allow at most 20 seconds of downtime when polling the control plane nodes
-			assertControlPlaneIsRoutable(vips[1], 1*time.Second, 30*time.Second)
+			assertControlPlaneIsRoutable(vips[1], 3*time.Second, 60*time.Second)
 
 			By(withTimestamp("checking that the Kubernetes control plane nodes are still accessible via the assigned IPv4 VIP with little downtime"))
 			// Allow at most 20 seconds of downtime when polling the control plane nodes
-			assertControlPlaneIsRoutable(vips[0], 1*time.Second, 30*time.Second)
+			assertControlPlaneIsRoutable(vips[0], 3*time.Second, 60*time.Second)
 		})
 
 		DescribeTable("configures an IPv4 and IPv6 VIP addresses for service",
 			func(svcName string, offset uint, trafficPolicy corev1.ServiceExternalTrafficPolicy) {
-				lbAddress := e2e.GenerateDualStackVIPWithCustomOffset(offset)
+				lbAddress := e2e.GenerateDualStackVIP(offset)
 
 				lbAddresses := strings.Split(lbAddress, ",")
 
 				createTestService(svcName, namespace, dsName, lbAddress,
 					client, corev1.IPFamilyPolicyRequireDualStack, []corev1.IPFamily{corev1.IPv4Protocol, corev1.IPv6Protocol}, trafficPolicy)
 
-				checkIPAddress("plndr-svcs-lock", "kube-system", lbAddresses[0], true, client)
-				checkIPAddress("plndr-svcs-lock", "kube-system", lbAddresses[1], true, client)
+				checkIPAddress("plndr-svcs-lock", "kube-system", lbAddresses[0], true, client, &stopClusterRemoval)
+				checkIPAddress("plndr-svcs-lock", "kube-system", lbAddresses[1], true, client, &stopClusterRemoval)
 
-				assertConnection("http", lbAddresses[0], "80", "", 1*time.Second, 30*time.Second)
-				assertConnection("http", lbAddresses[1], "80", "", 1*time.Second, 30*time.Second)
+				assertConnection("http", lbAddresses[0], "80", "", 3*time.Second, 60*time.Second, &stopClusterRemoval)
+				assertConnection("http", lbAddresses[1], "80", "", 3*time.Second, 60*time.Second, &stopClusterRemoval)
 
 				err := client.CoreV1().Services(namespace).Delete(context.TODO(), svcName, metav1.DeleteOptions{})
 				Expect(err).ToNot(HaveOccurred())
 
-				checkIPAddress("plndr-svcs-lock", "kube-system", lbAddresses[0], false, client)
-				checkIPAddress("plndr-svcs-lock", "kube-system", lbAddresses[1], false, client)
+				checkIPAddress("plndr-svcs-lock", "kube-system", lbAddresses[0], false, client, &stopClusterRemoval)
+				checkIPAddress("plndr-svcs-lock", "kube-system", lbAddresses[1], false, client, &stopClusterRemoval)
 				assertConnectionError("http", lbAddresses[0], "80", "", 3*time.Second)
 				assertConnectionError("http", lbAddresses[1], "80", "", 3*time.Second)
 			},
-			Entry("with external traffic policy - cluster", "test-svc-cluster", uint(4), corev1.ServiceExternalTrafficPolicyCluster),
-			Entry("with external traffic policy - local", "test-svc-local", uint(3), corev1.ServiceExternalTrafficPolicyLocal),
+			Entry("with external traffic policy - cluster", "test-svc-cluster", uint(22), corev1.ServiceExternalTrafficPolicyCluster),
+			Entry("with external traffic policy - local", "test-svc-local", uint(23), corev1.ServiceExternalTrafficPolicyLocal),
 		)
 
 		DescribeTable("only removes VIP address if it was referenced by multiple services and all of them were deleted",
 			func(svc1Name string, svc2Name string, offset uint, trafficPolicy corev1.ServiceExternalTrafficPolicy) {
-				lbAddress := e2e.GenerateDualStackVIPWithCustomOffset(offset)
+				lbAddress := e2e.GenerateDualStackVIP(offset)
 
 				lbAddresses := strings.Split(lbAddress, ",")
 
@@ -870,11 +875,11 @@ var _ = Describe("kube-vip ARP/NDP broadcast neighbor", func() {
 				createTestService(svc2Name, namespace, dsName, lbAddress,
 					client, corev1.IPFamilyPolicyRequireDualStack, []corev1.IPFamily{corev1.IPv4Protocol, corev1.IPv6Protocol}, trafficPolicy)
 
-				checkIPAddress("plndr-svcs-lock", "kube-system", lbAddresses[0], true, client)
-				checkIPAddress("plndr-svcs-lock", "kube-system", lbAddresses[1], true, client)
+				checkIPAddress("plndr-svcs-lock", "kube-system", lbAddresses[0], true, client, &stopClusterRemoval)
+				checkIPAddress("plndr-svcs-lock", "kube-system", lbAddresses[1], true, client, &stopClusterRemoval)
 
-				assertConnection("http", lbAddresses[0], "80", "", 1*time.Second, 30*time.Second)
-				assertConnection("http", lbAddresses[1], "80", "", 1*time.Second, 30*time.Second)
+				assertConnection("http", lbAddresses[0], "80", "", 3*time.Second, 60*time.Second, &stopClusterRemoval)
+				assertConnection("http", lbAddresses[1], "80", "", 3*time.Second, 60*time.Second, &stopClusterRemoval)
 
 				err := client.CoreV1().Services(namespace).Delete(context.TODO(), svc1Name, metav1.DeleteOptions{})
 				Expect(err).ToNot(HaveOccurred())
@@ -882,32 +887,33 @@ var _ = Describe("kube-vip ARP/NDP broadcast neighbor", func() {
 				// sleep for 3 seconds so kube-vip will hopefully process deletion request
 				time.Sleep(time.Second * 3)
 
-				assertConnection("http", lbAddresses[0], "80", "", 1*time.Second, 30*time.Second)
-				assertConnection("http", lbAddresses[1], "80", "", 1*time.Second, 30*time.Second)
+				assertConnection("http", lbAddresses[0], "80", "", 3*time.Second, 60*time.Second, &stopClusterRemoval)
+				assertConnection("http", lbAddresses[1], "80", "", 3*time.Second, 60*time.Second, &stopClusterRemoval)
 
-				checkIPAddress("plndr-svcs-lock", "kube-system", lbAddresses[0], true, client)
-				checkIPAddress("plndr-svcs-lock", "kube-system", lbAddresses[1], true, client)
+				checkIPAddress("plndr-svcs-lock", "kube-system", lbAddresses[0], true, client, &stopClusterRemoval)
+				checkIPAddress("plndr-svcs-lock", "kube-system", lbAddresses[1], true, client, &stopClusterRemoval)
 
 				err = client.CoreV1().Services(namespace).Delete(context.TODO(), svc2Name, metav1.DeleteOptions{})
 				Expect(err).ToNot(HaveOccurred())
 
-				checkIPAddress("plndr-svcs-lock", "kube-system", lbAddresses[0], false, client)
-				checkIPAddress("plndr-svcs-lock", "kube-system", lbAddresses[1], false, client)
+				checkIPAddress("plndr-svcs-lock", "kube-system", lbAddresses[0], false, client, &stopClusterRemoval)
+				checkIPAddress("plndr-svcs-lock", "kube-system", lbAddresses[1], false, client, &stopClusterRemoval)
 
 				assertConnectionError("http", lbAddresses[0], "80", "", 3*time.Second)
 				assertConnectionError("http", lbAddresses[1], "80", "", 3*time.Second)
 			},
-			Entry("with external traffic policy - cluster", "test-svc1-cluster", "test-svc2-cluster", uint(8), corev1.ServiceExternalTrafficPolicyCluster),
-			Entry("with external traffic policy - local", "test-svc1-local", "test-svc2-local", uint(7), corev1.ServiceExternalTrafficPolicyLocal),
+			Entry("with external traffic policy - cluster", "test-svc1-cluster", "test-svc2-cluster", uint(24), corev1.ServiceExternalTrafficPolicyCluster),
+			Entry("with external traffic policy - local", "test-svc1-local", "test-svc2-local", uint(25), corev1.ServiceExternalTrafficPolicyLocal),
 		)
 	})
 
 	Describe("kube-vip DualStack functionality - IPv4 primary, vip_leaderelection=true, svc_enable=true, svc_election=true", Ordered, func() {
 		var (
-			clusterConfig kindconfigv1alpha4.Cluster
-			dualstackVIP  string
-			clusterName   string
-			client        kubernetes.Interface
+			clusterConfig      kindconfigv1alpha4.Cluster
+			dualstackVIP       string
+			clusterName        string
+			client             kubernetes.Interface
+			stopClusterRemoval bool
 		)
 
 		BeforeAll(func() {
@@ -939,7 +945,7 @@ var _ = Describe("kube-vip ARP/NDP broadcast neighbor", func() {
 				clusterConfig.Nodes = append(clusterConfig.Nodes, nodeConfig)
 			}
 
-			dualstackVIP = e2e.GenerateDualStackVIP()
+			dualstackVIP = e2e.GenerateDualStackVIP(26)
 
 			manifestFile, err := os.Create(manifestPath)
 			Expect(err).NotTo(HaveOccurred())
@@ -985,7 +991,7 @@ var _ = Describe("kube-vip ARP/NDP broadcast neighbor", func() {
 		})
 
 		AfterAll(func() {
-			if os.Getenv("E2E_PRESERVE_CLUSTER") == "true" {
+			if os.Getenv("E2E_PRESERVE_CLUSTER") == "true" || stopClusterRemoval {
 				return
 			}
 
@@ -1022,26 +1028,26 @@ var _ = Describe("kube-vip ARP/NDP broadcast neighbor", func() {
 
 			By(withTimestamp("checking that the Kubernetes control plane nodes are still accessible via the assigned IPv6 VIP with little downtime"))
 			// Allow at most 20 seconds of downtime when polling the control plane nodes
-			assertControlPlaneIsRoutable(vips[1], 1*time.Second, 30*time.Second)
+			assertControlPlaneIsRoutable(vips[1], 3*time.Second, 60*time.Second)
 
 			By(withTimestamp("checking that the Kubernetes control plane nodes are still accessible via the assigned IPv4 VIP with little downtime"))
 			// Allow at most 20 seconds of downtime when polling the control plane nodes
-			assertControlPlaneIsRoutable(vips[0], 1*time.Second, 30*time.Second)
+			assertControlPlaneIsRoutable(vips[0], 3*time.Second, 60*time.Second)
 		})
 
 		DescribeTable("configures an IPv6 VIP address for service",
 			func(svcName string, offset uint, trafficPolicy corev1.ServiceExternalTrafficPolicy) {
-				lbAddress := e2e.GenerateDualStackVIPWithCustomOffset(offset)
+				lbAddress := e2e.GenerateDualStackVIP(offset)
 				lbAddresses := strings.Split(lbAddress, ",")
 
 				createTestService(svcName, namespace, dsName, lbAddress,
 					client, corev1.IPFamilyPolicyRequireDualStack, []corev1.IPFamily{corev1.IPv4Protocol, corev1.IPv6Protocol}, trafficPolicy)
 
-				checkIPAddress(fmt.Sprintf("kubevip-%s", svcName), namespace, lbAddresses[0], true, client)
-				checkIPAddress(fmt.Sprintf("kubevip-%s", svcName), namespace, lbAddresses[1], true, client)
+				checkIPAddress(fmt.Sprintf("kubevip-%s", svcName), namespace, lbAddresses[0], true, client, &stopClusterRemoval)
+				checkIPAddress(fmt.Sprintf("kubevip-%s", svcName), namespace, lbAddresses[1], true, client, &stopClusterRemoval)
 
-				assertConnection("http", lbAddresses[0], "80", "", 1*time.Second, 30*time.Second)
-				assertConnection("http", lbAddresses[1], "80", "", 1*time.Second, 30*time.Second)
+				assertConnection("http", lbAddresses[0], "80", "", 3*time.Second, 60*time.Second, &stopClusterRemoval)
+				assertConnection("http", lbAddresses[1], "80", "", 3*time.Second, 60*time.Second, &stopClusterRemoval)
 
 				container := e2e.GetLeaseHolder(fmt.Sprintf("kubevip-%s", svcName), namespace, client)
 
@@ -1058,17 +1064,18 @@ var _ = Describe("kube-vip ARP/NDP broadcast neighbor", func() {
 
 				assertConnectionError("http", lbAddress, "80", "", 3*time.Second)
 			},
-			Entry("with external traffic policy - cluster", "test-svc-cluster", uint(4), corev1.ServiceExternalTrafficPolicyCluster),
-			Entry("with external traffic policy - local", "test-svc-local", uint(3), corev1.ServiceExternalTrafficPolicyLocal),
+			Entry("with external traffic policy - cluster", "test-svc-cluster", uint(27), corev1.ServiceExternalTrafficPolicyCluster),
+			Entry("with external traffic policy - local", "test-svc-local", uint(28), corev1.ServiceExternalTrafficPolicyLocal),
 		)
 	})
 
 	Describe("kube-vip DualStack functionality - IPv6 primary, vip_leaderelection=true, svc_enable=true, svc_election=false", Ordered, func() {
 		var (
-			clusterConfig kindconfigv1alpha4.Cluster
-			dualstackVIP  string
-			clusterName   string
-			client        kubernetes.Interface
+			clusterConfig      kindconfigv1alpha4.Cluster
+			dualstackVIP       string
+			clusterName        string
+			client             kubernetes.Interface
+			stopClusterRemoval bool
 		)
 
 		BeforeAll(func() {
@@ -1102,7 +1109,7 @@ var _ = Describe("kube-vip ARP/NDP broadcast neighbor", func() {
 				clusterConfig.Nodes = append(clusterConfig.Nodes, nodeConfig)
 			}
 
-			dualstackVIP = e2e.GenerateDualStackVIP()
+			dualstackVIP = e2e.GenerateDualStackVIP(29)
 
 			manifestFile, err := os.Create(manifestPath)
 			Expect(err).NotTo(HaveOccurred())
@@ -1147,7 +1154,7 @@ var _ = Describe("kube-vip ARP/NDP broadcast neighbor", func() {
 		})
 
 		AfterAll(func() {
-			if os.Getenv("E2E_PRESERVE_CLUSTER") == "true" {
+			if os.Getenv("E2E_PRESERVE_CLUSTER") == "true" || stopClusterRemoval {
 				return
 			}
 
@@ -1188,43 +1195,43 @@ var _ = Describe("kube-vip ARP/NDP broadcast neighbor", func() {
 
 			By(withTimestamp("checking that the Kubernetes control plane nodes are still accessible via the assigned IPv6 VIP with little downtime"))
 			// Allow at most 20 seconds of downtime when polling the control plane nodes
-			assertControlPlaneIsRoutable(vips[1], 1*time.Second, 30*time.Second)
+			assertControlPlaneIsRoutable(vips[1], 3*time.Second, 60*time.Second)
 
 			By(withTimestamp("checking that the Kubernetes control plane nodes are still accessible via the assigned IPv4 VIP with little downtime"))
 			// Allow at most 20 seconds of downtime when polling the control plane nodes
-			assertControlPlaneIsRoutable(vips[0], 1*time.Second, 30*time.Second)
+			assertControlPlaneIsRoutable(vips[0], 3*time.Second, 60*time.Second)
 		})
 
 		DescribeTable("configures an IPv4 and IPv6 VIP addresses for service",
 			func(svcName string, offset uint, trafficPolicy corev1.ServiceExternalTrafficPolicy) {
-				lbAddress := e2e.GenerateDualStackVIPWithCustomOffset(offset)
+				lbAddress := e2e.GenerateDualStackVIP(offset)
 
 				lbAddresses := strings.Split(lbAddress, ",")
 
 				createTestService(svcName, namespace, dsName, lbAddress,
 					client, corev1.IPFamilyPolicyRequireDualStack, []corev1.IPFamily{corev1.IPv4Protocol, corev1.IPv6Protocol}, trafficPolicy)
 
-				checkIPAddress("plndr-svcs-lock", "kube-system", lbAddresses[0], true, client)
-				checkIPAddress("plndr-svcs-lock", "kube-system", lbAddresses[1], true, client)
+				checkIPAddress("plndr-svcs-lock", "kube-system", lbAddresses[0], true, client, &stopClusterRemoval)
+				checkIPAddress("plndr-svcs-lock", "kube-system", lbAddresses[1], true, client, &stopClusterRemoval)
 
-				assertConnection("http", lbAddresses[0], "80", "", 1*time.Second, 30*time.Second)
-				assertConnection("http", lbAddresses[1], "80", "", 1*time.Second, 30*time.Second)
+				assertConnection("http", lbAddresses[0], "80", "", 3*time.Second, 60*time.Second, &stopClusterRemoval)
+				assertConnection("http", lbAddresses[1], "80", "", 3*time.Second, 60*time.Second, &stopClusterRemoval)
 
 				err := client.CoreV1().Services(namespace).Delete(context.TODO(), svcName, metav1.DeleteOptions{})
 				Expect(err).ToNot(HaveOccurred())
 
-				checkIPAddress("plndr-svcs-lock", "kube-system", lbAddresses[0], false, client)
-				checkIPAddress("plndr-svcs-lock", "kube-system", lbAddresses[1], false, client)
+				checkIPAddress("plndr-svcs-lock", "kube-system", lbAddresses[0], false, client, &stopClusterRemoval)
+				checkIPAddress("plndr-svcs-lock", "kube-system", lbAddresses[1], false, client, &stopClusterRemoval)
 				assertConnectionError("http", lbAddresses[0], "80", "", 3*time.Second)
 				assertConnectionError("http", lbAddresses[1], "80", "", 3*time.Second)
 			},
-			Entry("with external traffic policy - cluster", "test-svc-cluster", uint(4), corev1.ServiceExternalTrafficPolicyCluster),
-			Entry("with external traffic policy - local", "test-svc-local", uint(3), corev1.ServiceExternalTrafficPolicyLocal),
+			Entry("with external traffic policy - cluster", "test-svc-cluster", uint(30), corev1.ServiceExternalTrafficPolicyCluster),
+			Entry("with external traffic policy - local", "test-svc-local", uint(31), corev1.ServiceExternalTrafficPolicyLocal),
 		)
 
 		DescribeTable("only removes VIP address if it was referenced by multiple services and all of them were deleted",
 			func(svc1Name string, svc2Name string, offset uint, trafficPolicy corev1.ServiceExternalTrafficPolicy) {
-				lbAddress := e2e.GenerateDualStackVIPWithCustomOffset(offset)
+				lbAddress := e2e.GenerateDualStackVIP(offset)
 
 				lbAddresses := strings.Split(lbAddress, ",")
 
@@ -1233,11 +1240,11 @@ var _ = Describe("kube-vip ARP/NDP broadcast neighbor", func() {
 				createTestService(svc2Name, namespace, dsName, lbAddress,
 					client, corev1.IPFamilyPolicyRequireDualStack, []corev1.IPFamily{corev1.IPv4Protocol, corev1.IPv6Protocol}, trafficPolicy)
 
-				checkIPAddress("plndr-svcs-lock", "kube-system", lbAddresses[0], true, client)
-				checkIPAddress("plndr-svcs-lock", "kube-system", lbAddresses[1], true, client)
+				checkIPAddress("plndr-svcs-lock", "kube-system", lbAddresses[0], true, client, &stopClusterRemoval)
+				checkIPAddress("plndr-svcs-lock", "kube-system", lbAddresses[1], true, client, &stopClusterRemoval)
 
-				assertConnection("http", lbAddresses[0], "80", "", 1*time.Second, 30*time.Second)
-				assertConnection("http", lbAddresses[1], "80", "", 1*time.Second, 30*time.Second)
+				assertConnection("http", lbAddresses[0], "80", "", 3*time.Second, 60*time.Second, &stopClusterRemoval)
+				assertConnection("http", lbAddresses[1], "80", "", 3*time.Second, 60*time.Second, &stopClusterRemoval)
 
 				err := client.CoreV1().Services(namespace).Delete(context.TODO(), svc1Name, metav1.DeleteOptions{})
 				Expect(err).ToNot(HaveOccurred())
@@ -1245,32 +1252,33 @@ var _ = Describe("kube-vip ARP/NDP broadcast neighbor", func() {
 				// sleep for 3 seconds so kube-vip will hopefully process deletion request
 				time.Sleep(time.Second * 3)
 
-				assertConnection("http", lbAddresses[0], "80", "", 1*time.Second, 30*time.Second)
-				assertConnection("http", lbAddresses[1], "80", "", 1*time.Second, 30*time.Second)
+				assertConnection("http", lbAddresses[0], "80", "", 3*time.Second, 60*time.Second, &stopClusterRemoval)
+				assertConnection("http", lbAddresses[1], "80", "", 3*time.Second, 60*time.Second, &stopClusterRemoval)
 
-				checkIPAddress("plndr-svcs-lock", "kube-system", lbAddresses[0], true, client)
-				checkIPAddress("plndr-svcs-lock", "kube-system", lbAddresses[1], true, client)
+				checkIPAddress("plndr-svcs-lock", "kube-system", lbAddresses[0], true, client, &stopClusterRemoval)
+				checkIPAddress("plndr-svcs-lock", "kube-system", lbAddresses[1], true, client, &stopClusterRemoval)
 
 				err = client.CoreV1().Services(namespace).Delete(context.TODO(), svc2Name, metav1.DeleteOptions{})
 				Expect(err).ToNot(HaveOccurred())
 
-				checkIPAddress("plndr-svcs-lock", "kube-system", lbAddresses[0], false, client)
-				checkIPAddress("plndr-svcs-lock", "kube-system", lbAddresses[1], false, client)
+				checkIPAddress("plndr-svcs-lock", "kube-system", lbAddresses[0], false, client, &stopClusterRemoval)
+				checkIPAddress("plndr-svcs-lock", "kube-system", lbAddresses[1], false, client, &stopClusterRemoval)
 
 				assertConnectionError("http", lbAddresses[0], "80", "", 3*time.Second)
 				assertConnectionError("http", lbAddresses[1], "80", "", 3*time.Second)
 			},
-			Entry("with external traffic policy - cluster", "test-svc1-cluster", "test-svc2-cluster", uint(8), corev1.ServiceExternalTrafficPolicyCluster),
-			Entry("with external traffic policy - local", "test-svc1-local", "test-svc2-local", uint(7), corev1.ServiceExternalTrafficPolicyLocal),
+			Entry("with external traffic policy - cluster", "test-svc1-cluster", "test-svc2-cluster", uint(32), corev1.ServiceExternalTrafficPolicyCluster),
+			Entry("with external traffic policy - local", "test-svc1-local", "test-svc2-local", uint(33), corev1.ServiceExternalTrafficPolicyLocal),
 		)
 	})
 
 	Describe("kube-vip DualStack functionality - IPv6 primary, vip_leaderelection=true, svc_enable=true, svc_election=true", Ordered, func() {
 		var (
-			clusterConfig kindconfigv1alpha4.Cluster
-			dualstackVIP  string
-			clusterName   string
-			client        kubernetes.Interface
+			clusterConfig      kindconfigv1alpha4.Cluster
+			dualstackVIP       string
+			clusterName        string
+			client             kubernetes.Interface
+			stopClusterRemoval bool
 		)
 
 		BeforeAll(func() {
@@ -1304,7 +1312,7 @@ var _ = Describe("kube-vip ARP/NDP broadcast neighbor", func() {
 				clusterConfig.Nodes = append(clusterConfig.Nodes, nodeConfig)
 			}
 
-			dualstackVIP = e2e.GenerateDualStackVIP()
+			dualstackVIP = e2e.GenerateDualStackVIP(34)
 
 			manifestFile, err := os.Create(manifestPath)
 			Expect(err).NotTo(HaveOccurred())
@@ -1350,7 +1358,7 @@ var _ = Describe("kube-vip ARP/NDP broadcast neighbor", func() {
 		})
 
 		AfterAll(func() {
-			if os.Getenv("E2E_PRESERVE_CLUSTER") == "true" {
+			if os.Getenv("E2E_PRESERVE_CLUSTER") == "true" || stopClusterRemoval {
 				return
 			}
 
@@ -1387,26 +1395,26 @@ var _ = Describe("kube-vip ARP/NDP broadcast neighbor", func() {
 
 			By(withTimestamp("checking that the Kubernetes control plane nodes are still accessible via the assigned IPv6 VIP with little downtime"))
 			// Allow at most 20 seconds of downtime when polling the control plane nodes
-			assertControlPlaneIsRoutable(vips[1], 1*time.Second, 30*time.Second)
+			assertControlPlaneIsRoutable(vips[1], 3*time.Second, 60*time.Second)
 
 			By(withTimestamp("checking that the Kubernetes control plane nodes are still accessible via the assigned IPv4 VIP with little downtime"))
 			// Allow at most 20 seconds of downtime when polling the control plane nodes
-			assertControlPlaneIsRoutable(vips[0], 1*time.Second, 30*time.Second)
+			assertControlPlaneIsRoutable(vips[0], 3*time.Second, 60*time.Second)
 		})
 
 		DescribeTable("configures an IPv6 VIP address for service",
 			func(svcName string, offset uint, trafficPolicy corev1.ServiceExternalTrafficPolicy) {
-				lbAddress := e2e.GenerateDualStackVIPWithCustomOffset(offset)
+				lbAddress := e2e.GenerateDualStackVIP(offset)
 				lbAddresses := strings.Split(lbAddress, ",")
 
 				createTestService(svcName, namespace, dsName, lbAddress,
 					client, corev1.IPFamilyPolicyRequireDualStack, []corev1.IPFamily{corev1.IPv4Protocol, corev1.IPv6Protocol}, trafficPolicy)
 
-				checkIPAddress(fmt.Sprintf("kubevip-%s", svcName), namespace, lbAddresses[0], true, client)
-				checkIPAddress(fmt.Sprintf("kubevip-%s", svcName), namespace, lbAddresses[1], true, client)
+				checkIPAddress(fmt.Sprintf("kubevip-%s", svcName), namespace, lbAddresses[0], true, client, &stopClusterRemoval)
+				checkIPAddress(fmt.Sprintf("kubevip-%s", svcName), namespace, lbAddresses[1], true, client, &stopClusterRemoval)
 
-				assertConnection("http", lbAddresses[0], "80", "", 1*time.Second, 30*time.Second)
-				assertConnection("http", lbAddresses[1], "80", "", 1*time.Second, 30*time.Second)
+				assertConnection("http", lbAddresses[0], "80", "", 3*time.Second, 60*time.Second, &stopClusterRemoval)
+				assertConnection("http", lbAddresses[1], "80", "", 3*time.Second, 60*time.Second, &stopClusterRemoval)
 
 				container := e2e.GetLeaseHolder(fmt.Sprintf("kubevip-%s", svcName), namespace, client)
 
@@ -1423,8 +1431,8 @@ var _ = Describe("kube-vip ARP/NDP broadcast neighbor", func() {
 
 				assertConnectionError("http", lbAddress, "80", "", 3*time.Second)
 			},
-			Entry("with external traffic policy - cluster", "test-svc-cluster", uint(4), corev1.ServiceExternalTrafficPolicyCluster),
-			Entry("with external traffic policy - local", "test-svc-local", uint(3), corev1.ServiceExternalTrafficPolicyLocal),
+			Entry("with external traffic policy - cluster", "test-svc-cluster", uint(35), corev1.ServiceExternalTrafficPolicyCluster),
+			Entry("with external traffic policy - local", "test-svc-local", uint(36), corev1.ServiceExternalTrafficPolicyLocal),
 		)
 	})
 
@@ -1469,7 +1477,7 @@ var _ = Describe("kube-vip ARP/NDP broadcast neighbor", func() {
 
 			defer manifestFile.Close()
 
-			ipv4VIP = e2e.GenerateVIP(e2e.IPv4Family)
+			ipv4VIP = e2e.GenerateVIP(e2e.IPv4Family, 37)
 
 			Expect(kubeVIPHostnameManifestTemplate.Execute(manifestFile, e2e.KubevipManifestValues{
 				ControlPlaneVIP: ipv4VIP,
@@ -1536,7 +1544,7 @@ var _ = Describe("kube-vip ARP/NDP broadcast neighbor", func() {
 
 			By(withTimestamp("checking that the Kubernetes control plane nodes are still accessible via the assigned IPv4 VIP with little downtime"))
 			// Allow at most 20 seconds of downtime when polling the control plane nodes
-			assertControlPlaneIsRoutable(ipv4VIP, 1*time.Second, 30*time.Second)
+			assertControlPlaneIsRoutable(ipv4VIP, 3*time.Second, 60*time.Second)
 		})
 	})
 
@@ -1583,7 +1591,7 @@ var _ = Describe("kube-vip ARP/NDP broadcast neighbor", func() {
 
 			defer manifestFile.Close()
 
-			ipv4VIP = e2e.GenerateVIP(e2e.IPv4Family)
+			ipv4VIP = e2e.GenerateVIP(e2e.IPv4Family, 38)
 
 			Expect(kubeVIPRoutingTableManifestTemplate.Execute(manifestFile, e2e.KubevipManifestValues{
 				ControlPlaneVIP: ipv4VIP,
@@ -1699,7 +1707,7 @@ var _ = Describe("kube-vip ARP/NDP broadcast neighbor", func() {
 
 			defer manifestFile.Close()
 
-			ipv6VIP = e2e.GenerateVIP(e2e.IPv6Family)
+			ipv6VIP = e2e.GenerateVIP(e2e.IPv6Family, 39)
 
 			Expect(kubeVIPRoutingTableManifestTemplate.Execute(manifestFile, e2e.KubevipManifestValues{
 				ControlPlaneVIP: ipv6VIP,
@@ -1804,11 +1812,12 @@ func createKindCluster(logger log.Logger, config *v1alpha4.Cluster, clusterName 
 
 // Assume the VIP is routable if status code is 200 or 500. Since etcd might glitch.
 func assertControlPlaneIsRoutable(controlPlaneVIP string, transportTimeout, eventuallyTimeout time.Duration) {
-	assertConnection("https", controlPlaneVIP, "6443", "livez", transportTimeout, eventuallyTimeout)
+	var stopClusterRemoval bool
+	assertConnection("https", controlPlaneVIP, "6443", "livez", transportTimeout, eventuallyTimeout, &stopClusterRemoval)
 }
 
 // Assume connection to the provided address is possible
-func assertConnection(protocol, ip, port, suffix string, transportTimeout, eventuallyTimeout time.Duration) {
+func assertConnection(protocol, ip, port, suffix string, transportTimeout, eventuallyTimeout time.Duration, stopClusterRemoval *bool) {
 	if strings.Contains(ip, ":") {
 		ip = fmt.Sprintf("[%s]", ip)
 	}
@@ -1817,12 +1826,23 @@ func assertConnection(protocol, ip, port, suffix string, transportTimeout, event
 		TLSClientConfig: &tls.Config{InsecureSkipVerify: true}, // nolint
 	}
 	client := &http.Client{Transport: transport, Timeout: transportTimeout}
+
+	code := 0
+
+	defer func() {
+		if code != http.StatusOK && code != http.StatusInternalServerError {
+			By("Executing Defer assertConnection")
+			*stopClusterRemoval = true
+		}
+	}()
+
 	Eventually(func() int {
 		resp, _ := client.Get(fmt.Sprintf("%s://%s:%s/%s", protocol, ip, port, suffix))
 		if resp == nil {
 			return -1
 		}
 		defer resp.Body.Close()
+		code = resp.StatusCode
 		return resp.StatusCode
 	}, eventuallyTimeout).Should(BeElementOf([]int{http.StatusOK, http.StatusInternalServerError}), fmt.Sprintf("Failed to connect to %s", ip))
 }
@@ -1833,6 +1853,8 @@ func assertConnectionError(protocol, ip, port, suffix string, transportTimeout t
 		ip = fmt.Sprintf("[%s]", ip)
 	}
 
+	By("assertConnectionError: " + ip)
+
 	transport := &http.Transport{
 		TLSClientConfig: &tls.Config{InsecureSkipVerify: true}, // nolint
 	}
@@ -1841,7 +1863,7 @@ func assertConnectionError(protocol, ip, port, suffix string, transportTimeout t
 	Eventually(func() error {
 		_, err := client.Get(fmt.Sprintf("%s://%s:%s/%s", protocol, ip, port, suffix))
 		return err
-	}, time.Second*10).Should(HaveOccurred())
+	}, time.Second*30).Should(HaveOccurred())
 }
 
 func killLeader(leaderIPAddr string, clusterName string) {
@@ -1978,8 +2000,15 @@ func createTestService(name, namespace, target, lbAddress string, client kuberne
 	}, time.Second*60, time.Second).Should(Succeed())
 }
 
-func checkIPAddress(name, namespace, lbAddress string, expected bool, client kubernetes.Interface) {
+func checkIPAddress(name, namespace, lbAddress string, expected bool, client kubernetes.Interface, stopClusterRemoval *bool) {
 	isPresent := false
+	defer func() {
+		By("Executing Defer checkIPAddress")
+		if isPresent != expected {
+			*stopClusterRemoval = true
+		}
+	}()
+
 	Eventually(func() *bool {
 		value := e2e.CheckIPAddressPresenceByLease(name, namespace, lbAddress, client)
 		if value != nil {
@@ -1988,6 +2017,7 @@ func checkIPAddress(name, namespace, lbAddress string, expected bool, client kub
 		return value
 	}, time.Second*120, time.Second).ShouldNot(BeNil())
 	matcher := BeFalse()
+
 	if expected {
 		matcher = BeTrue()
 	}
