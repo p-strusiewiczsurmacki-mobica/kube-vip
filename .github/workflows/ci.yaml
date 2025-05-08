@@ -55,6 +55,13 @@ jobs:
         uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
+      - name: Enable docker IPv6 mode
+        working-directory: v2/e2e
+        run: |
+          sudo mkdir -p /etc/docker
+          sudo cp daemon.json /etc/docker/daemon.json
+          sudo systemctl restart docker.service
+          sleep 10
       - name: Build image locally
         run: make dockerx86Local
       - name: Run Manifest generation tests
