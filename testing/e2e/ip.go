@@ -137,14 +137,19 @@ func CheckIPAddressPresence(ip string, container string, expected bool) bool {
 		family = "-6"
 	}
 
+	By(fmt.Sprintf("%s: ip: %s, expected: %t", "CheckIPAddressPresence", ip, expected))
+
 	cmd := exec.Command(
 		"docker", "exec", container, "ip", family, "addr", "show", "dev", "eth0",
 	)
 	cmd.Stdout = cmdOut
 	if err := cmd.Run(); err != nil {
+		By(fmt.Sprintf("Error %s: %s", "CheckIPAddressPresence", err.Error()))
 		return false
 	}
+	By(fmt.Sprintf("Output %s: %s", "CheckIPAddressPresence", cmdOut.String()))
 	isPresent := strings.Contains(cmdOut.String(), ip)
+	By(fmt.Sprintf("%s isPresent: %t", "CheckIPAddressPresence", isPresent))
 	return isPresent == expected
 }
 

@@ -154,9 +154,11 @@ var _ = Describe("kube-vip ARP/NDP broadcast neighbor", func() {
 				defer manifestFile2.Close()
 
 				Expect(kubeVIPManifestTemplate.Execute(manifestFile2, e2e.KubevipManifestValues{
-					ControlPlaneVIP: ipv4VIP,
-					ImagePath:       imagePath,
-					ConfigPath:      "/etc/kubernetes/super-admin.conf", // Change the kuberenetes file
+					ControlPlaneVIP:   ipv4VIP,
+					ImagePath:         imagePath,
+					ConfigPath:        "/etc/kubernetes/super-admin.conf", // Change the kuberenetes file
+					SvcEnable:         "true",
+					SvcElectionEnable: "false",
 				})).To(Succeed())
 			}
 
@@ -324,9 +326,11 @@ var _ = Describe("kube-vip ARP/NDP broadcast neighbor", func() {
 				defer manifestFile2.Close()
 
 				Expect(kubeVIPManifestTemplate.Execute(manifestFile2, e2e.KubevipManifestValues{
-					ControlPlaneVIP: ipv4VIP,
-					ImagePath:       imagePath,
-					ConfigPath:      "/etc/kubernetes/super-admin.conf", // Change the kuberenetes file
+					ControlPlaneVIP:   ipv4VIP,
+					ImagePath:         imagePath,
+					ConfigPath:        "/etc/kubernetes/super-admin.conf", // Change the kuberenetes file
+					SvcEnable:         "true",
+					SvcElectionEnable: "true",
 				})).To(Succeed())
 			}
 
@@ -388,7 +392,7 @@ var _ = Describe("kube-vip ARP/NDP broadcast neighbor", func() {
 				err := client.CoreV1().Services(namespace).Delete(context.TODO(), svcName, metav1.DeleteOptions{})
 				Expect(err).ToNot(HaveOccurred())
 
-				checkIPAddress(lbAddress, container, false)
+				checkIPAddress(lbAddress, container, false, &stopClusterRemoval)
 
 				assertConnectionError("http", lbAddress, "80", "", 3*time.Second)
 			},
@@ -463,9 +467,11 @@ var _ = Describe("kube-vip ARP/NDP broadcast neighbor", func() {
 				defer manifestFile2.Close()
 
 				Expect(kubeVIPManifestTemplate.Execute(manifestFile2, e2e.KubevipManifestValues{
-					ControlPlaneVIP: ipv6VIP,
-					ImagePath:       imagePath,
-					ConfigPath:      "/etc/kubernetes/super-admin.conf", // Change the kuberenetes file
+					ControlPlaneVIP:   ipv6VIP,
+					ImagePath:         imagePath,
+					ConfigPath:        "/etc/kubernetes/super-admin.conf", // Change the kuberenetes file
+					SvcEnable:         "true",
+					SvcElectionEnable: "false",
 				})).To(Succeed())
 			}
 
@@ -632,9 +638,11 @@ var _ = Describe("kube-vip ARP/NDP broadcast neighbor", func() {
 				defer manifestFile2.Close()
 
 				Expect(kubeVIPManifestTemplate.Execute(manifestFile2, e2e.KubevipManifestValues{
-					ControlPlaneVIP: ipv6VIP,
-					ImagePath:       imagePath,
-					ConfigPath:      "/etc/kubernetes/super-admin.conf", // Change the kuberenetes file
+					ControlPlaneVIP:   ipv6VIP,
+					ImagePath:         imagePath,
+					ConfigPath:        "/etc/kubernetes/super-admin.conf", // Change the kuberenetes file
+					SvcEnable:         "true",
+					SvcElectionEnable: "true",
 				})).To(Succeed())
 			}
 
@@ -697,7 +705,7 @@ var _ = Describe("kube-vip ARP/NDP broadcast neighbor", func() {
 				err := client.CoreV1().Services(namespace).Delete(context.TODO(), svcName, metav1.DeleteOptions{})
 				Expect(err).ToNot(HaveOccurred())
 
-				checkIPAddress(lbAddress, container, false)
+				checkIPAddress(lbAddress, container, false, &stopClusterRemoval)
 
 				assertConnectionError("http", lbAddress, "80", "", 3*time.Second)
 			},
@@ -761,7 +769,7 @@ var _ = Describe("kube-vip ARP/NDP broadcast neighbor", func() {
 
 			if v129 {
 				// create a seperate manifest
-				manifestPath2 := filepath.Join(tempDirPath, "kube-vip-ipv6-first.yaml")
+				manifestPath2 := filepath.Join(tempDirPath, "kube-vip-ipv4-first.yaml")
 
 				// change the path of the mount to the new file
 				clusterConfig.Nodes[0].ExtraMounts[0].HostPath = manifestPath2
@@ -772,9 +780,11 @@ var _ = Describe("kube-vip ARP/NDP broadcast neighbor", func() {
 				defer manifestFile2.Close()
 
 				Expect(kubeVIPManifestTemplate.Execute(manifestFile2, e2e.KubevipManifestValues{
-					ControlPlaneVIP: dualstackVIP,
-					ImagePath:       imagePath,
-					ConfigPath:      "/etc/kubernetes/super-admin.conf", // Change the kuberenetes file
+					ControlPlaneVIP:      dualstackVIP,
+					ImagePath:            imagePath,
+					ConfigPath:           "/etc/kubernetes/super-admin.conf", // Change the kuberenetes file
+					SvcEnable:            "true",
+					EnableEndpointslices: "true",
 				})).To(Succeed())
 			}
 
@@ -970,9 +980,12 @@ var _ = Describe("kube-vip ARP/NDP broadcast neighbor", func() {
 				defer manifestFile2.Close()
 
 				Expect(kubeVIPManifestTemplate.Execute(manifestFile2, e2e.KubevipManifestValues{
-					ControlPlaneVIP: dualstackVIP,
-					ImagePath:       imagePath,
-					ConfigPath:      "/etc/kubernetes/super-admin.conf", // Change the kuberenetes file
+					ControlPlaneVIP:      dualstackVIP,
+					ImagePath:            imagePath,
+					ConfigPath:           "/etc/kubernetes/super-admin.conf", // Change the kuberenetes file
+					SvcEnable:            "true",
+					EnableEndpointslices: "true",
+					SvcElectionEnable:    "true",
 				})).To(Succeed())
 			}
 
@@ -1050,8 +1063,8 @@ var _ = Describe("kube-vip ARP/NDP broadcast neighbor", func() {
 				err := client.CoreV1().Services(namespace).Delete(context.TODO(), svcName, metav1.DeleteOptions{})
 				Expect(err).ToNot(HaveOccurred())
 
-				checkIPAddress(lbAddresses[0], container, false)
-				checkIPAddress(lbAddresses[1], container, false)
+				checkIPAddress(lbAddresses[0], container, false, &stopClusterRemoval)
+				checkIPAddress(lbAddresses[1], container, false, &stopClusterRemoval)
 
 				assertConnectionError("http", lbAddresses[0], "80", "", 3*time.Second)
 				assertConnectionError("http", lbAddresses[1], "80", "", 3*time.Second)
@@ -1129,9 +1142,11 @@ var _ = Describe("kube-vip ARP/NDP broadcast neighbor", func() {
 				defer manifestFile2.Close()
 
 				Expect(kubeVIPManifestTemplate.Execute(manifestFile2, e2e.KubevipManifestValues{
-					ControlPlaneVIP: dualstackVIP,
-					ImagePath:       imagePath,
-					ConfigPath:      "/etc/kubernetes/super-admin.conf", // Change the kuberenetes file
+					ControlPlaneVIP:      dualstackVIP,
+					ImagePath:            imagePath,
+					ConfigPath:           "/etc/kubernetes/super-admin.conf", // Change the kuberenetes file
+					SvcEnable:            "true",
+					EnableEndpointslices: "true",
 				})).To(Succeed())
 			}
 
@@ -1333,9 +1348,12 @@ var _ = Describe("kube-vip ARP/NDP broadcast neighbor", func() {
 				defer manifestFile2.Close()
 
 				Expect(kubeVIPManifestTemplate.Execute(manifestFile2, e2e.KubevipManifestValues{
-					ControlPlaneVIP: dualstackVIP,
-					ImagePath:       imagePath,
-					ConfigPath:      "/etc/kubernetes/super-admin.conf", // Change the kuberenetes file
+					ControlPlaneVIP:      dualstackVIP,
+					ImagePath:            imagePath,
+					ConfigPath:           "/etc/kubernetes/super-admin.conf", // Change the kuberenetes file
+					SvcEnable:            "true",
+					EnableEndpointslices: "true",
+					SvcElectionEnable:    "true",
 				})).To(Succeed())
 			}
 
@@ -1413,8 +1431,8 @@ var _ = Describe("kube-vip ARP/NDP broadcast neighbor", func() {
 				err := client.CoreV1().Services(namespace).Delete(context.TODO(), svcName, metav1.DeleteOptions{})
 				Expect(err).ToNot(HaveOccurred())
 
-				checkIPAddress(lbAddresses[0], container, false)
-				checkIPAddress(lbAddresses[1], container, false)
+				checkIPAddress(lbAddresses[0], container, false, &stopClusterRemoval)
+				checkIPAddress(lbAddresses[1], container, false, &stopClusterRemoval)
 
 				assertConnectionError("http", lbAddresses[0], "80", "", 3*time.Second)
 				assertConnectionError("http", lbAddresses[1], "80", "", 3*time.Second)
@@ -1538,9 +1556,10 @@ var _ = Describe("kube-vip ARP/NDP broadcast neighbor", func() {
 
 	Describe("kube-vip IPv4 control-plane routing table mode functionality", Ordered, func() {
 		var (
-			clusterConfig kindconfigv1alpha4.Cluster
-			ipv4VIP       string
-			clusterName   string
+			clusterConfig      kindconfigv1alpha4.Cluster
+			ipv4VIP            string
+			clusterName        string
+			stopClusterRemoval bool
 		)
 
 		numberOfCPNodes := 3
@@ -1643,7 +1662,7 @@ var _ = Describe("kube-vip ARP/NDP broadcast neighbor", func() {
 					container = fmt.Sprintf("%s-control-plane", clusterName)
 				}
 
-				checkIPAddress(ipv4VIP, container, true)
+				checkIPAddress(ipv4VIP, container, true, &stopClusterRemoval)
 
 				rtExists := e2e.CheckRoutePresence(ipv4VIP, container)
 				Expect(rtExists).To(BeTrue())
@@ -1653,9 +1672,10 @@ var _ = Describe("kube-vip ARP/NDP broadcast neighbor", func() {
 
 	Describe("kube-vip IPv6 control-plane routing table mode functionality", Ordered, func() {
 		var (
-			clusterConfig kindconfigv1alpha4.Cluster
-			ipv6VIP       string
-			clusterName   string
+			clusterConfig      kindconfigv1alpha4.Cluster
+			ipv6VIP            string
+			clusterName        string
+			stopClusterRemoval bool
 		)
 
 		numberOfCPNodes := 3
@@ -1759,7 +1779,7 @@ var _ = Describe("kube-vip ARP/NDP broadcast neighbor", func() {
 					container = fmt.Sprintf("%s-control-plane", clusterName)
 				}
 
-				checkIPAddress(ipv6VIP, container, true)
+				checkIPAddress(ipv6VIP, container, true, &stopClusterRemoval)
 				rtExists := e2e.CheckRoutePresence(ipv6VIP, container)
 				Expect(rtExists).To(BeTrue())
 			}
@@ -1987,10 +2007,16 @@ func createTestService(name, namespace, target, lbAddress string, client kuberne
 	}, time.Second*60, time.Second).Should(Succeed())
 }
 
-func checkIPAddress(container, lbAddress string, expected bool) {
-	Eventually(e2e.CheckIPAddressPresence(lbAddress, container, expected), time.Second*120, time.Second).Should(BeTrue())
+func checkIPAddress(lbAddress, container string, expected bool, stopClusterRemoval *bool) {
+	By(withTimestamp("checkIPAddress"))
+	*stopClusterRemoval = true
+	Eventually(e2e.CheckIPAddressPresence(lbAddress, container, expected), time.Second*30, time.Second).Should(BeTrue())
+	*stopClusterRemoval = false
 }
 
 func checkIPAddressByLease(name, namespace, lbAddress string, expected bool, client kubernetes.Interface, stopClusterRemoval *bool) {
-	Eventually(e2e.CheckIPAddressPresenceByLease(name, namespace, lbAddress, client, expected), time.Second*120, time.Second).Should(BeTrue())
+	By(withTimestamp("checkIPAddressByLease"))
+	*stopClusterRemoval = true
+	Eventually(e2e.CheckIPAddressPresenceByLease(name, namespace, lbAddress, client, expected), time.Second*30, time.Second).Should(BeTrue())
+	*stopClusterRemoval = false
 }
