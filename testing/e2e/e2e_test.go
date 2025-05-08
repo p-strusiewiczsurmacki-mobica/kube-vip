@@ -2001,10 +2001,12 @@ func createTestService(name, namespace, target, lbAddress string, client kuberne
 }
 
 func checkIPAddress(name, namespace, lbAddress string, expected bool, client kubernetes.Interface, stopClusterRemoval *bool) {
+	By("checkIPAddress: " + lbAddress)
 	isPresent := false
 	defer func() {
-		By("Executing Defer checkIPAddress")
+		By("Executing Defer checkIPAddress: " + lbAddress)
 		if isPresent != expected {
+			By("checkIPAddress - stopping cluster removal: " + lbAddress)
 			*stopClusterRemoval = true
 		}
 	}()
