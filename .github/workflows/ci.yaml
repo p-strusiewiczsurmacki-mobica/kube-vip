@@ -55,13 +55,6 @@ jobs:
         uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
-      - name: Enable docker IPv6 mode
-        working-directory: v2/e2e
-        run: |
-          sudo mkdir -p /etc/docker
-          sudo cp daemon.json /etc/docker/daemon.json
-          sudo systemctl restart docker.service
-          sleep 10
       - name: Build image locally
         run: make dockerx86Local
       - name: Run Manifest generation tests
@@ -69,7 +62,7 @@ jobs:
 #      - name: Run Control plane tests
 #        run: make e2e-tests
       - name: Run Control plane tests v1.29.0 onwards
-        run: make e2e-tests129
+        run: GOPROCS=4 make e2e-tests129
   service-e2e-tests:
     runs-on: ubuntu-latest
     name: E2E service tests
