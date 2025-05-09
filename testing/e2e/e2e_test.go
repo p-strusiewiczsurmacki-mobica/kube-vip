@@ -1311,5 +1311,5 @@ func cleanupCluster(clusterName, tempDirPath string, configMtx *sync.Mutex, stop
 
 	Eventually(provider.Delete(clusterName, ""), "30s", "200ms").Should(Succeed())
 
-	// Expect(os.RemoveAll(tempDirPath)).To(Succeed())
+	Expect(os.RemoveAll(tempDirPath)).To(Succeed())
 }
