@@ -156,6 +156,10 @@ func (d *Deployment) CreateDeployment(ctx context.Context, clientset *kubernetes
 						{
 							Name:  "kube-vip-web",
 							Image: "docker.io/plndr/e2e:0.0.1",
+							// Image: "wbitt/network-multitool",
+							// SecurityContext: &v1.SecurityContext{
+							// 	Privileged: ptr.To(true),
+							// },
 							Ports: []v1.ContainerPort{
 								{
 									Name:          "http",
@@ -297,8 +301,8 @@ func (s *Service) CreateService(ctx context.Context, clientset *kubernetes.Clien
 		// We need to inspect the event and get ResourceVersion out of it
 		switch event.Type {
 		case watch.Added, watch.Modified:
-			// slog.Debugf("Endpoints for service [%s] have been Created or modified", s.service.ServiceName)
 			svc, ok := event.Object.(*v1.Service)
+			// slog.Debugf("Endpoints for service [%s] have been Created or modified", svc.Name)
 			if !ok {
 				slog.Fatalf("unable to parse Kubernetes services from API watcher")
 			}

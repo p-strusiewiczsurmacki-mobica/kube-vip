@@ -35,6 +35,7 @@ require (
 	k8s.io/apimachinery v0.32.3
 	k8s.io/client-go v0.32.3
 	k8s.io/klog/v2 v2.130.1
+	k8s.io/utils v0.0.0-20241210054802-24370beab758
 	sigs.k8s.io/kind v0.27.0
 	sigs.k8s.io/yaml v1.4.0
 )
@@ -131,7 +132,6 @@ require (
 	gopkg.in/yaml.v2 v2.4.0 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 	k8s.io/kube-openapi v0.0.0-20241212222426-2c72e554b1e7 // indirect
-	k8s.io/utils v0.0.0-20241210054802-24370beab758 // indirect
 	modernc.org/cc/v4 v4.24.4 // indirect
 	modernc.org/mathutil v1.7.1 // indirect
 	modernc.org/opt v0.1.4 // indirect
