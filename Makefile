@@ -15,7 +15,7 @@ TARGETOS=linux
 # Use linker flags to provide version/build settings to the target
 LDFLAGS=-ldflags "-s -w -X=main.Version=$(VERSION) -X=main.Build=$(BUILD) -extldflags -static"
 DOCKERTAG ?= $(VERSION)
-REPOSITORY ?= plndr
+REPOSITORY ?= harbor.local/library
 
 .PHONY: all build clean install uninstall simplify check run e2e-tests
 
@@ -58,7 +58,7 @@ dockerx86Iptables:
 
 dockerx86IptablesLocal:
 	@-rm ./kube-vip
-	@docker buildx build  --platform linux/amd64 -f ./Dockerfile_iptables -t $(REPOSITORY)/$(TARGET):$(DOCKERTAG) .
+	@docker buildx build  --platform linux/amd64 -f ./Dockerfile_iptables -t $(REPOSITORY)/$(TARGET)-iptables:$(DOCKERTAG) .
 	@echo New single x86 Architecture Docker image created
 
 dockerx86:
@@ -141,6 +141,9 @@ e2e-tests129-arp:
 e2e-tests129-rt:
 	GOMAXPROCS=4 TEST_MODE=rt V129=true K8S_IMAGE_PATH=kindest/node:v1.29.0 E2E_IMAGE_PATH=$(REPOSITORY)/$(TARGET):$(DOCKERTAG) go run github.com/onsi/ginkgo/v2/ginkgo --tags=e2e -v -p ./testing/e2e
 
+e2e-tests129-bgp:
+	GOMAXPROCS=4 TEST_MODE=bgp V129=true K8S_IMAGE_PATH=kindest/node:v1.29.0 E2E_IMAGE_PATH=$(REPOSITORY)/$(TARGET):$(DOCKERTAG) go run github.com/onsi/ginkgo/v2/ginkgo --tags=e2e -v -p ./testing/e2e
+
 e2e-tests129: e2e-tests129-arp e2e-tests129-rt
 
 service-tests:
@@ -168,3 +171,9 @@ kind-quick:
 kind-reload:
 	kind load docker-image $(REPOSITORY)/$(TARGET):$(DOCKERTAG) --name kube-vip
 	kubectl rollout restart -n kube-system daemonset/kube-vip-ds
+
+get-gobgp:
+	mkdir -p bin
+	wget -nc --directory-prefix=bin https://github.com/osrg/gobgp/releases/download/v3.37.0/gobgp_3.37.0_linux_amd64.tar.gz
+	tar -xvzf bin/gobgp_3.37.0_linux_amd64.tar.gz -C bin
+
