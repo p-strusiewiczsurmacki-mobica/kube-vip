@@ -14,32 +14,47 @@ spec:
     env:
     - name: vip_loglevel
       value: "-4"
+    - name: lb_class_legacy_handling
+      value: "false"
+    - name: lb_class_name
+    - name: prometheus_server
+      value: :2112
+    - name: disable_service_updates
+      value: "false"
     - name: vip_arp
       value: "false"
-    - name: vip_interface
-      value: eth0
+    - name: port
+      value: "6443"
+    - name: vip_cidr
+      value: "32"
     - name: vip_leaderelection
       value: "false"
-    - name: address
-      value: "{{ .ControlPlaneVIP }}"
-    - name: vip_leaseduration
-      value: "5"
-    - name: vip_renewdeadline
+    - name: vip_interface
+      value: lo
+    - name: bgp_enable
+      value: "true"
+    - name: bgp_hold_time
       value: "3"
-    - name: vip_retryperiod
+    - name: bgp_keepalive_interval
       value: "1"
-    - name: cp_enable
-      value: "{{ .ControlPlaneEnable }}"
-    - name: vip_nodename
+    - name: bgp_sourceip
       valueFrom:
         fieldRef:
-          fieldPath: spec.nodeName
-    - name: vip_subnet
-      value: '32,128'
-    - name: cp_namespace
-      value: kube-system
-    - name: vip_routingtable
-      value: 'true'
+          apiVersion: v1
+          fieldPath: status.hostIP
+    - name: bgp_routerid
+      valueFrom:
+        fieldRef:
+          apiVersion: v1
+          fieldPath: status.hostIP
+    - name: bgp_as
+      value: "{{ .GobgpConfig.PeerAS }}"
+    - name: bgp_peers
+      value: {{ .GobgpConfig.RouterID }}:{{ .GobgpConfig.AS }}::false
+    - name: address
+      value: "{{ .ControlPlaneVIP }}"
+    - name: cp_enable
+      value: "{{ .ControlPlaneEnable }}"
     - name: svc_enable
       value: "{{ .SvcEnable }}"
     - name: svc_election

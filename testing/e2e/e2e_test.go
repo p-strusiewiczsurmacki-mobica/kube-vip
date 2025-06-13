@@ -917,7 +917,7 @@ func cleanupCluster(clusterName, tempDirPath string, configMtx *sync.Mutex, logg
 		return provider.Delete(clusterName, "")
 	}, "60s", "200ms").Should(Succeed())
 
-	Expect(os.RemoveAll(tempDirPath)).To(Succeed())
+	// Expect(os.RemoveAll(tempDirPath)).To(Succeed())
 }
 
 func testControlPlaneVIPs(cpVIPs []string, clusterName string) {

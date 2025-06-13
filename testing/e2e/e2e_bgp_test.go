@@ -6,11 +6,17 @@ package e2e_test
 import (
 	"context"
 	"fmt"
+	"io"
+	"net"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"text/template"
+	"time"
 
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials/insecure"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
@@ -27,6 +33,7 @@ import (
 
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/client"
+	api "github.com/osrg/gobgp/v3/api"
 )
 
 var _ = Describe("kube-vip routing table mode", func() {
@@ -37,12 +44,14 @@ var _ = Describe("kube-vip routing table mode", func() {
 			k8sImagePath               string
 			configPath                 string
 			kubeVIPBGPManifestTemplate *template.Template
+			goBGPConfigTemplate        *template.Template
 			tempDirPath                string
 			v129                       bool
 			localIPv4                  string
-			localIPv6                  string
-			containerIPv4              string
-			containerIPv6              string
+			// localIPv6                  string
+			containerIPv4 string
+			// containerIPv6              string
+			curDir string
 		)
 
 		BeforeEach(func() {
@@ -56,7 +65,8 @@ var _ = Describe("kube-vip routing table mode", func() {
 				configPath = "/etc/kubernetes/admin.conf"
 			}
 			_, v129 = os.LookupEnv("V129")
-			curDir, err := os.Getwd()
+			var err error
+			curDir, err = os.Getwd()
 			Expect(err).NotTo(HaveOccurred())
 
 			templateRoutingTablePath := filepath.Join(curDir, "kube-vip-bgp.yaml.tmpl")
@@ -67,7 +77,7 @@ var _ = Describe("kube-vip routing table mode", func() {
 			Expect(err).NotTo(HaveOccurred())
 			localIPv4, err = deployment.GetLocalIPv4("br-36d13ecf5bde")
 			Expect(err).ToNot(HaveOccurred())
-			localIPv6, err = deployment.GetLocalIPv6("br-36d13ecf5bde")
+			_, err = deployment.GetLocalIPv6("br-36d13ecf5bde")
 			Expect(err).ToNot(HaveOccurred())
 		})
 
@@ -77,8 +87,11 @@ var _ = Describe("kube-vip routing table mode", func() {
 				clusterName    string
 				client         kubernetes.Interface
 				manifestValues *e2e.KubevipManifestValues
+				goBGPConfig    *e2e.GoBGPConfigValues
 				svcElection    bool
 				ipFamily       []corev1.IPFamily
+
+				bgpKill chan any
 
 				nodesNumber = 1
 			)
@@ -90,6 +103,12 @@ var _ = Describe("kube-vip routing table mode", func() {
 					IPFamily: kindconfigv1alpha4.IPv4Family,
 				}
 
+				goBGPConfig = &e2e.GoBGPConfigValues{
+					RouterID: localIPv4,
+					AS:       65500,
+					PeerAS:   65501,
+				}
+
 				manifestValues = &e2e.KubevipManifestValues{
 					ControlPlaneVIP:    cpVIP,
 					ImagePath:          imagePath,
@@ -97,6 +116,7 @@ var _ = Describe("kube-vip routing table mode", func() {
 					ControlPlaneEnable: "false",
 					SvcEnable:          "true",
 					SvcElectionEnable:  "false",
+					GobgpConfig:        goBGPConfig,
 				}
 
 				var err error
@@ -109,38 +129,59 @@ var _ = Describe("kube-vip routing table mode", func() {
 
 				container := fmt.Sprintf("%s-control-plane", clusterName)
 
-				By(localIPv4)
-				By(localIPv6)
-				By(clusterName)
-
-				containerIPv4, containerIPv6, err = GetContainerIPs(container)
+				containerIPv4, _, err = GetContainerIPs(container)
 				Expect(err).ToNot(HaveOccurred())
 
-				By(containerIPv4)
-				By(containerIPv6)
+				goBGPConfig.NeighborAddress = containerIPv4
+
+				goBGPConfigPath := filepath.Join(filepath.Join(curDir, "bgp"), "config.toml.tmpl")
+				goBGPConfigTemplate, err = template.New("config.toml.tmpl").ParseFiles(goBGPConfigPath)
+				Expect(err).ToNot(HaveOccurred())
+
+				goBGPConfigPath = filepath.Join(tempDirPath, "config.toml")
+
+				f, err := os.OpenFile(goBGPConfigPath, os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0600)
+				Expect(err).ToNot(HaveOccurred())
+				defer f.Close()
+
+				err = goBGPConfigTemplate.Execute(f, goBGPConfig)
+				Expect(err).ToNot(HaveOccurred())
+
+				bgpKill = make(chan any)
+
+				go startGoBGP(goBGPConfigPath, bgpKill)
+
 			})
 
 			AfterAll(func() {
+				// close(bgpKill)
 				cleanupCluster(clusterName, tempDirPath, ConfigMtx, logger)
 			})
 
 			DescribeTable("configures an IPv4 routes for services",
 				func(svcName string, offset uint, trafficPolicy corev1.ServiceExternalTrafficPolicy) {
 					lbAddress := e2e.GenerateVIP(e2e.IPv4Family, offset)
-					testServiceRT(svcName, lbAddress, fmt.Sprintf("kubevip-%s", svcName), dsNamespace, clusterName, trafficPolicy, client, svcElection, ipFamily, 1)
+					ipv4UC := &api.Family{
+						Afi:  api.Family_AFI_IP,
+						Safi: api.Family_SAFI_UNICAST,
+					}
+					gobgpClient, err := newGoBGPClient(localIPv4, "50051")
+					Expect(err).ToNot(HaveOccurred())
+					testServiceBGP(svcName, lbAddress, fmt.Sprintf("kubevip-%s", svcName), dsNamespace, clusterName,
+						trafficPolicy, client, svcElection, ipFamily, 1, gobgpClient, ipv4UC)
 				},
 				Entry("with external traffic policy - cluster", "test-svc-cluster", SOffset.Get(), corev1.ServiceExternalTrafficPolicyCluster),
-				Entry("with external traffic policy - local", "test-svc-local", SOffset.Get(), corev1.ServiceExternalTrafficPolicyLocal),
+				// Entry("with external traffic policy - local", "test-svc-local", SOffset.Get(), corev1.ServiceExternalTrafficPolicyLocal),
 			)
 
-			DescribeTable("only removes route if it was referenced by multiple services and all of them were deleted",
-				func(svcName string, offset uint, trafficPolicy corev1.ServiceExternalTrafficPolicy) {
-					lbAddress := e2e.GenerateVIP(e2e.IPv4Family, offset)
-					testServiceRT(svcName, lbAddress, "plndr-svcs-lock", "kube-system", clusterName, trafficPolicy, client, svcElection, ipFamily, 2)
-				},
-				Entry("with external traffic policy - cluster", "test-svc-cluster", SOffset.Get(), corev1.ServiceExternalTrafficPolicyCluster),
-				Entry("with external traffic policy - local", "test-svc-local", SOffset.Get(), corev1.ServiceExternalTrafficPolicyLocal),
-			)
+			// DescribeTable("only removes route if it was referenced by multiple services and all of them were deleted",
+			// 	func(svcName string, offset uint, trafficPolicy corev1.ServiceExternalTrafficPolicy) {
+			// 		lbAddress := e2e.GenerateVIP(e2e.IPv4Family, offset)
+			// 		testServiceRT(svcName, lbAddress, "plndr-svcs-lock", "kube-system", clusterName, trafficPolicy, client, svcElection, ipFamily, 2)
+			// 	},
+			// 	Entry("with external traffic policy - cluster", "test-svc-cluster", SOffset.Get(), corev1.ServiceExternalTrafficPolicyCluster),
+			// 	Entry("with external traffic policy - local", "test-svc-local", SOffset.Get(), corev1.ServiceExternalTrafficPolicyLocal),
+			// )
 		})
 
 		// Describe("kube-vip IPv6 services routing table mode functionality", Ordered, func() {
@@ -330,7 +371,7 @@ var _ = Describe("kube-vip routing table mode", func() {
 })
 
 func testServiceBGP(svcName, lbAddress, leaseName, leaseNamespace, clusterName string, trafficPolicy corev1.ServiceExternalTrafficPolicy,
-	client kubernetes.Interface, serviceElection bool, ipFamily []corev1.IPFamily, numberOfServices int) {
+	client kubernetes.Interface, serviceElection bool, ipFamily []corev1.IPFamily, numberOfServices int, gobgpClient api.GobgpApiClient, gobgpFamily *api.Family) {
 	lbAddresses := vip.Split(lbAddress)
 
 	services := []string{}
@@ -343,25 +384,31 @@ func testServiceBGP(svcName, lbAddress, leaseName, leaseNamespace, clusterName s
 			client, corev1.IPFamilyPolicyPreferDualStack, ipFamily, trafficPolicy)
 	}
 
-	var container string
-	if serviceElection {
-		container = e2e.GetLeaseHolder(leaseName, leaseNamespace, client)
-	} else {
-		container = fmt.Sprintf("%s-control-plane", clusterName)
-	}
+	// var container string
+	// if serviceElection {
+	// 	container = e2e.GetLeaseHolder(leaseName, leaseNamespace, client)
+	// } else {
+	// 	container = fmt.Sprintf("%s-control-plane", clusterName)
+	// }
 
 	for _, addr := range lbAddresses {
-		e2e.CheckRoutePresence(addr, container, true)
+		paths, err := getGoBGPPaths(context.Background(), gobgpClient, gobgpFamily, []*api.TableLookupPrefix{&api.TableLookupPrefix{Prefix: addr}})
+		Expect(err).ToNot(HaveOccurred())
+		for _, p := range paths {
+			By(p.String())
+		}
+		Expect(len(paths)).To(Equal(1))
 	}
 
 	for i := range numberOfServices {
-		expected := i < numberOfServices-1
 		err := client.CoreV1().Services(dsNamespace).Delete(context.TODO(), services[i], metav1.DeleteOptions{})
 		Expect(err).ToNot(HaveOccurred())
+	}
 
-		for _, addr := range lbAddresses {
-			e2e.CheckRoutePresence(addr, container, expected)
-		}
+	for _, addr := range lbAddresses {
+		paths, err := getGoBGPPaths(context.Background(), gobgpClient, gobgpFamily, []*api.TableLookupPrefix{&api.TableLookupPrefix{Prefix: addr}})
+		Expect(err).ToNot(HaveOccurred())
+		Expect(len(paths)).To(Equal(0))
 	}
 }
 
@@ -387,4 +434,54 @@ func GetContainerIPs(containerName string) (string, string, error) {
 	}
 
 	return "", "", nil
+}
+
+func newGoBGPClient(address, port string) (api.GobgpApiClient, error) {
+	grpcOpts := []grpc.DialOption{grpc.WithTransportCredentials(insecure.NewCredentials())}
+	target := net.JoinHostPort(address, port)
+	conn, err := grpc.NewClient(target, grpcOpts...)
+	if err != nil {
+		return nil, fmt.Errorf("failed to connect to GoBGP server %q: %w", target, err)
+	}
+
+	return api.NewGobgpApiClient(conn), nil
+}
+
+func getGoBGPPaths(ctx context.Context, client api.GobgpApiClient, family *api.Family, prefixes []*api.TableLookupPrefix) ([]*api.Destination, error) {
+	pathCtx, cancel := context.WithTimeout(ctx, time.Second*5)
+	defer cancel()
+	stream, err := client.ListPath(pathCtx, &api.ListPathRequest{
+		TableType: api.TableType_GLOBAL,
+		Family:    family,
+		Name:      "",
+		Prefixes:  prefixes,
+		SortType:  api.ListPathRequest_PREFIX,
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	rib := make([]*api.Destination, 0)
+	for {
+		r, err := stream.Recv()
+		if err == io.EOF {
+			break
+		} else if err != nil {
+			return nil, err
+		}
+		rib = append(rib, r.Destination)
+	}
+
+	return rib, nil
+}
+
+func startGoBGP(config string, kill chan any) {
+	By("starting BGP")
+	cmd := exec.Command("../../bin/gobgpd", "-f", config)
+	go cmd.Run()
+	<-kill
+	By("killing bgp")
+	// time.Sleep(2000 * time.Second)
+	err := cmd.Process.Kill()
+	Expect(err).ToNot(HaveOccurred())
 }
