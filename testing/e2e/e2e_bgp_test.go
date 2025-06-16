@@ -12,6 +12,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"text/template"
 	"time"
 
@@ -154,7 +155,7 @@ var _ = Describe("kube-vip routing table mode", func() {
 			})
 
 			AfterAll(func() {
-				// close(bgpKill)
+				close(bgpKill)
 				cleanupCluster(clusterName, tempDirPath, ConfigMtx, logger)
 			})
 
@@ -392,12 +393,12 @@ func testServiceBGP(svcName, lbAddress, leaseName, leaseNamespace, clusterName s
 	// }
 
 	for _, addr := range lbAddresses {
-		paths, err := getGoBGPPaths(context.Background(), gobgpClient, gobgpFamily, []*api.TableLookupPrefix{&api.TableLookupPrefix{Prefix: addr}})
-		Expect(err).ToNot(HaveOccurred())
+		paths := checkGoBGPPaths(context.Background(), gobgpClient, gobgpFamily, []*api.TableLookupPrefix{{Prefix: addr}}, 1)
+
 		for _, p := range paths {
 			By(p.String())
 		}
-		Expect(len(paths)).To(Equal(1))
+		Expect(strings.Contains(paths[0].Prefix, lbAddress)).To(BeTrue())
 	}
 
 	for i := range numberOfServices {
@@ -406,9 +407,7 @@ func testServiceBGP(svcName, lbAddress, leaseName, leaseNamespace, clusterName s
 	}
 
 	for _, addr := range lbAddresses {
-		paths, err := getGoBGPPaths(context.Background(), gobgpClient, gobgpFamily, []*api.TableLookupPrefix{&api.TableLookupPrefix{Prefix: addr}})
-		Expect(err).ToNot(HaveOccurred())
-		Expect(len(paths)).To(Equal(0))
+		checkGoBGPPaths(context.Background(), gobgpClient, gobgpFamily, []*api.TableLookupPrefix{{Prefix: addr}}, 0)
 	}
 }
 
@@ -445,6 +444,22 @@ func newGoBGPClient(address, port string) (api.GobgpApiClient, error) {
 	}
 
 	return api.NewGobgpApiClient(conn), nil
+}
+
+func checkGoBGPPaths(ctx context.Context, client api.GobgpApiClient, family *api.Family, prefixes []*api.TableLookupPrefix, expectedPaths int) []*api.Destination {
+	var paths []*api.Destination
+	Eventually(func() error {
+		var err error
+		paths, err = getGoBGPPaths(ctx, client, family, prefixes)
+		if err != nil {
+			return err
+		}
+		if len(paths) != expectedPaths {
+			return fmt.Errorf("expected %d paths, but found %d", expectedPaths, len(paths))
+		}
+		return nil
+	}, "120s").ShouldNot(HaveOccurred())
+	return paths
 }
 
 func getGoBGPPaths(ctx context.Context, client api.GobgpApiClient, family *api.Family, prefixes []*api.TableLookupPrefix) ([]*api.Destination, error) {
