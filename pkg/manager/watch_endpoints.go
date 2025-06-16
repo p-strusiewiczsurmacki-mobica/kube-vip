@@ -7,7 +7,6 @@ import (
 	"strings"
 	"syscall"
 
-	"log/slog"
 	log "log/slog"
 
 	"github.com/kube-vip/kube-vip/pkg/cluster"
