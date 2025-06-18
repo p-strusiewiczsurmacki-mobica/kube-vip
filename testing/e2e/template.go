@@ -11,12 +11,15 @@ type KubevipManifestValues struct {
 	SvcElectionEnable    string
 	EnableEndpointslices string
 	ControlPlaneEnable   string
-	GobgpConfig          *GoBGPConfigValues
+	GobgpConfig          GoBGPConfigValues
 }
 
 type GoBGPConfigValues struct {
 	AS              uint
-	RouterID        string
+	IP              string
+	IPv4            string
+	IPv6            string
 	NeighborAddress string
 	PeerAS          uint
+	Port            uint
 }

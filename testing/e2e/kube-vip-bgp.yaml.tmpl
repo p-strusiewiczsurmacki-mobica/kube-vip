@@ -43,14 +43,11 @@ spec:
           apiVersion: v1
           fieldPath: status.hostIP
     - name: bgp_routerid
-      valueFrom:
-        fieldRef:
-          apiVersion: v1
-          fieldPath: status.hostIP
+      value: "2.2.2.2"
     - name: bgp_as
       value: "{{ .GobgpConfig.PeerAS }}"
     - name: bgp_peers
-      value: {{ .GobgpConfig.RouterID }}:{{ .GobgpConfig.AS }}::false
+      value: "{{ .GobgpConfig.IP }}:{{ .GobgpConfig.AS }}::false"
     - name: address
       value: "{{ .ControlPlaneVIP }}"
     - name: cp_enable
