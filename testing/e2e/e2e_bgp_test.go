@@ -38,8 +38,8 @@ import (
 )
 
 const (
-	GoBGPAS   uint32 = 65500
-	KubeVipAS uint32 = 65501
+	goBGPAS   uint32 = 65500
+	kubevipAS uint32 = 65501
 
 	goBGPPort uint32 = 50051
 )
@@ -94,7 +94,7 @@ var _ = Describe("kube-vip BGP mode", Ordered, func() {
 			Expect(err).ToNot(HaveOccurred())
 
 			goBGPConfig := &e2e.BGPPeerValues{
-				AS: GoBGPAS,
+				AS: goBGPAS,
 			}
 
 			bgpKill = make(chan any)
@@ -260,14 +260,14 @@ func setupEnv(tempDirPath, cpVIP, clusterName *string, manifestValues *e2e.Kubev
 	if addrFamily == e2e.IPv4Family || addrFamily == e2e.DualstackFamily {
 		kvPeers = append(kvPeers, &e2e.BGPPeerValues{
 			IP: localIPv4,
-			AS: GoBGPAS,
+			AS: goBGPAS,
 		})
 	}
 
 	if addrFamily == e2e.IPv6Family || addrFamily == e2e.DualstackFamily {
 		kvPeers = append(kvPeers, &e2e.BGPPeerValues{
 			IP: localIPv6,
-			AS: GoBGPAS,
+			AS: goBGPAS,
 		})
 	}
 
@@ -283,7 +283,7 @@ func setupEnv(tempDirPath, cpVIP, clusterName *string, manifestValues *e2e.Kubev
 		ControlPlaneEnable: "false",
 		SvcEnable:          "true",
 		SvcElectionEnable:  "false",
-		BGPAS:              KubeVipAS,
+		BGPAS:              kubevipAS,
 		BGPPeers:           strings.Join(kvPeersStr, ","),
 	}
 
@@ -299,14 +299,14 @@ func setupEnv(tempDirPath, cpVIP, clusterName *string, manifestValues *e2e.Kubev
 	if addrFamily == e2e.IPv4Family || addrFamily == e2e.DualstackFamily {
 		gobgpPeers = append(gobgpPeers, &e2e.BGPPeerValues{
 			IP: containerIPv4,
-			AS: KubeVipAS,
+			AS: kubevipAS,
 		})
 	}
 
 	if addrFamily == e2e.IPv6Family || addrFamily == e2e.DualstackFamily {
 		gobgpPeers = append(gobgpPeers, &e2e.BGPPeerValues{
 			IP: containerIPv6,
-			AS: KubeVipAS,
+			AS: kubevipAS,
 		})
 	}
 
