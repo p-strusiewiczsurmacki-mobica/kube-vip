@@ -29,8 +29,9 @@ import (
 )
 
 const (
-	IPv4Family = "IPv4"
-	IPv6Family = "IPv6"
+	IPv4Family      = "IPv4"
+	IPv6Family      = "IPv6"
+	DualstackFamily = "DualStack"
 )
 
 func EnsureKindNetwork() {
@@ -70,6 +71,10 @@ func EnsureKindNetwork() {
 }
 
 func GenerateVIP(family string, offset uint) string {
+	if family == DualstackFamily {
+		return fmt.Sprintf("%s,%s", GenerateVIP(IPv4Family, offset), GenerateVIP(IPv6Family, offset))
+	}
+
 	cidrs := getKindNetworkSubnetCIDRs()
 
 	for _, cidr := range cidrs {

@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"text/template"
 	"time"
@@ -36,7 +37,12 @@ import (
 	api "github.com/osrg/gobgp/v3/api"
 )
 
-var goBGPPort uint = 50050
+const (
+	GoBGPAS   uint32 = 65500
+	KubeVipAS uint32 = 65501
+
+	goBGPPort uint32 = 50051
+)
 
 var _ = Describe("kube-vip BGP mode", Ordered, func() {
 	if Mode == ModeBGP {
@@ -54,8 +60,7 @@ var _ = Describe("kube-vip BGP mode", Ordered, func() {
 			curDir                     string
 			networkInterface           string
 
-			goBGPConfig *e2e.GoBGPConfigValues
-			bgpKill     chan any
+			bgpKill chan any
 		)
 
 		BeforeAll(func() {
@@ -88,11 +93,8 @@ var _ = Describe("kube-vip BGP mode", Ordered, func() {
 			localIPv6, err = deployment.GetLocalIPv6(networkInterface)
 			Expect(err).ToNot(HaveOccurred())
 
-			goBGPConfig = &e2e.GoBGPConfigValues{
-				IPv4:   localIPv4,
-				IPv6:   localIPv6,
-				AS:     65500,
-				PeerAS: 65501,
+			goBGPConfig := &e2e.BGPPeerValues{
+				AS: GoBGPAS,
 			}
 
 			bgpKill = make(chan any)
@@ -124,65 +126,24 @@ var _ = Describe("kube-vip BGP mode", Ordered, func() {
 				client         kubernetes.Interface
 				manifestValues *e2e.KubevipManifestValues
 				ipFamily       []corev1.IPFamily
-				containerIPv4  string
 				gobgpClient    api.GobgpApiClient
+				gobgpPeers     []*e2e.BGPPeerValues
 
 				nodesNumber = 1
 			)
 
 			BeforeAll(func() {
-				var err error
-				tempDirPath, err = os.MkdirTemp("", "kube-vip-test")
-				Expect(err).ToNot(HaveOccurred())
-
-				cpVIP = e2e.GenerateVIP(e2e.IPv4Family, SOffset.Get())
-
-				networking := &kindconfigv1alpha4.Networking{
-					IPFamily: kindconfigv1alpha4.IPv4Family,
-				}
-
-				manifestValues = &e2e.KubevipManifestValues{
-					ControlPlaneVIP:    cpVIP,
-					ImagePath:          imagePath,
-					ConfigPath:         configPath,
-					ControlPlaneEnable: "false",
-					SvcEnable:          "true",
-					SvcElectionEnable:  "false",
-					GobgpConfig:        *goBGPConfig,
-				}
-
-				ipFamily = []corev1.IPFamily{corev1.IPv4Protocol}
-				manifestValues.GobgpConfig.IP = manifestValues.GobgpConfig.IPv4
-
-				clusterName, client = prepareCluster(tempDirPath, "bgp-svc-ipv4", k8sImagePath, v129, kubeVIPBGPManifestTemplate, logger, manifestValues, networking, nodesNumber)
-
-				container := fmt.Sprintf("%s-control-plane", clusterName)
-
-				containerIPv4, _, err = GetContainerIPs(container)
-				Expect(err).ToNot(HaveOccurred())
-
-				goBGPConfig.NeighborAddress = containerIPv4
-
-				gobgpClient, err = newGoBGPClient(localIPv4, "50051")
-				Expect(err).ToNot(HaveOccurred())
-
-				_, err = gobgpClient.AddPeer(context.TODO(), &api.AddPeerRequest{
-					Peer: &api.Peer{
-						Conf: &api.PeerConf{
-							NeighborAddress: goBGPConfig.NeighborAddress,
-							PeerAsn:         uint32(goBGPConfig.PeerAS),
-						},
-					},
-				})
-				Expect(err).ToNot(HaveOccurred())
-
+				setupEnv(&tempDirPath, &cpVIP, &clusterName, manifestValues, localIPv4, localIPv6, imagePath, configPath,
+					k8sImagePath, e2e.IPv4Family, ipFamily, &client, gobgpPeers, v129, kubeVIPBGPManifestTemplate, &gobgpClient, logger, nodesNumber)
 			})
 
 			AfterAll(func() {
-				_, err := gobgpClient.DeletePeer(context.TODO(), &api.DeletePeerRequest{
-					Address: goBGPConfig.NeighborAddress,
-				})
-				Expect(err).ToNot(HaveOccurred())
+				for _, n := range gobgpPeers {
+					_, err := gobgpClient.DeletePeer(context.TODO(), &api.DeletePeerRequest{
+						Address: n.IP,
+					})
+					Expect(err).ToNot(HaveOccurred())
+				}
 				cleanupCluster(clusterName, tempDirPath, ConfigMtx, logger)
 			})
 
@@ -220,65 +181,24 @@ var _ = Describe("kube-vip BGP mode", Ordered, func() {
 				client         kubernetes.Interface
 				manifestValues *e2e.KubevipManifestValues
 				ipFamily       []corev1.IPFamily
-				containerIPv6  string
 				gobgpClient    api.GobgpApiClient
+				gobgpPeers     []*e2e.BGPPeerValues
 
 				nodesNumber = 1
 			)
 
 			BeforeAll(func() {
-				var err error
-				tempDirPath, err = os.MkdirTemp("", "kube-vip-test")
-				Expect(err).ToNot(HaveOccurred())
-
-				cpVIP = e2e.GenerateVIP(e2e.IPv6Family, SOffset.Get())
-
-				networking := &kindconfigv1alpha4.Networking{
-					IPFamily: kindconfigv1alpha4.IPv6Family,
-				}
-
-				manifestValues = &e2e.KubevipManifestValues{
-					ControlPlaneVIP:    cpVIP,
-					ImagePath:          imagePath,
-					ConfigPath:         configPath,
-					ControlPlaneEnable: "false",
-					SvcEnable:          "true",
-					SvcElectionEnable:  "false",
-					GobgpConfig:        *goBGPConfig,
-				}
-
-				ipFamily = []corev1.IPFamily{corev1.IPv6Protocol}
-				manifestValues.GobgpConfig.IP = fmt.Sprintf("[%s]", manifestValues.GobgpConfig.IPv6)
-
-				clusterName, client = prepareCluster(tempDirPath, "bgp-svc-ipv6", k8sImagePath, v129, kubeVIPBGPManifestTemplate, logger, manifestValues, networking, nodesNumber)
-
-				container := fmt.Sprintf("%s-control-plane", clusterName)
-
-				_, containerIPv6, err = GetContainerIPs(container)
-				Expect(err).ToNot(HaveOccurred())
-
-				goBGPConfig.NeighborAddress = containerIPv6
-
-				gobgpClient, err = newGoBGPClient(localIPv6, "50051")
-				Expect(err).ToNot(HaveOccurred())
-
-				_, err = gobgpClient.AddPeer(context.TODO(), &api.AddPeerRequest{
-					Peer: &api.Peer{
-						Conf: &api.PeerConf{
-							NeighborAddress: goBGPConfig.NeighborAddress,
-							PeerAsn:         uint32(goBGPConfig.PeerAS),
-						},
-					},
-				})
-				Expect(err).ToNot(HaveOccurred())
-
+				setupEnv(&tempDirPath, &cpVIP, &clusterName, manifestValues, localIPv4, localIPv6, imagePath, configPath,
+					k8sImagePath, e2e.IPv6Family, ipFamily, &client, gobgpPeers, v129, kubeVIPBGPManifestTemplate, &gobgpClient, logger, nodesNumber)
 			})
 
 			AfterAll(func() {
-				_, err := gobgpClient.DeletePeer(context.TODO(), &api.DeletePeerRequest{
-					Address: goBGPConfig.NeighborAddress,
-				})
-				Expect(err).ToNot(HaveOccurred())
+				for _, n := range gobgpPeers {
+					_, err := gobgpClient.DeletePeer(context.TODO(), &api.DeletePeerRequest{
+						Address: n.IP,
+					})
+					Expect(err).ToNot(HaveOccurred())
+				}
 				cleanupCluster(clusterName, tempDirPath, ConfigMtx, logger)
 			})
 
@@ -310,6 +230,110 @@ var _ = Describe("kube-vip BGP mode", Ordered, func() {
 		})
 	}
 })
+
+func setupEnv(tempDirPath, cpVIP, clusterName *string, manifestValues *e2e.KubevipManifestValues,
+	localIPv4, localIPv6, imagePath, configPath, k8sImagePath, addrFamily string, ipFamily []corev1.IPFamily, client *kubernetes.Interface,
+	gobgpPeers []*e2e.BGPPeerValues, v129 bool, kubeVIPBGPManifestTemplate *template.Template, gobgpClient *api.GobgpApiClient,
+	logger log.Logger, nodesNumber int) {
+	var err error
+	*tempDirPath, err = os.MkdirTemp("", "kube-vip-test")
+	Expect(err).ToNot(HaveOccurred())
+
+	*cpVIP = e2e.GenerateVIP(addrFamily, SOffset.Get())
+
+	var clusterIPFamily kindconfigv1alpha4.ClusterIPFamily
+	switch addrFamily {
+	case e2e.IPv6Family:
+		clusterIPFamily = kindconfigv1alpha4.IPv6Family
+	case e2e.DualstackFamily:
+		clusterIPFamily = kindconfigv1alpha4.DualStackFamily
+	default:
+		clusterIPFamily = kindconfigv1alpha4.IPv4Family
+	}
+
+	networking := &kindconfigv1alpha4.Networking{
+		IPFamily: clusterIPFamily,
+	}
+
+	kvPeers := []*e2e.BGPPeerValues{}
+
+	if addrFamily == e2e.IPv4Family || addrFamily == e2e.DualstackFamily {
+		kvPeers = append(kvPeers, &e2e.BGPPeerValues{
+			IP: localIPv4,
+			AS: GoBGPAS,
+		})
+	}
+
+	if addrFamily == e2e.IPv6Family || addrFamily == e2e.DualstackFamily {
+		kvPeers = append(kvPeers, &e2e.BGPPeerValues{
+			IP: localIPv6,
+			AS: GoBGPAS,
+		})
+	}
+
+	kvPeersStr := []string{}
+	for _, p := range kvPeers {
+		kvPeersStr = append(kvPeersStr, p.String())
+	}
+
+	manifestValues = &e2e.KubevipManifestValues{
+		ControlPlaneVIP:    *cpVIP,
+		ImagePath:          imagePath,
+		ConfigPath:         configPath,
+		ControlPlaneEnable: "false",
+		SvcEnable:          "true",
+		SvcElectionEnable:  "false",
+		BGPAS:              KubeVipAS,
+		BGPPeers:           strings.Join(kvPeersStr, ","),
+	}
+
+	ipFamily = []corev1.IPFamily{corev1.IPv4Protocol}
+
+	*clusterName, *client = prepareCluster(*tempDirPath, "bgp-svc-ipv4", k8sImagePath, v129, kubeVIPBGPManifestTemplate, logger, manifestValues, networking, nodesNumber)
+
+	container := fmt.Sprintf("%s-control-plane", *clusterName)
+
+	containerIPv4, containerIPv6, err := GetContainerIPs(container)
+	Expect(err).ToNot(HaveOccurred())
+
+	if addrFamily == e2e.IPv4Family || addrFamily == e2e.DualstackFamily {
+		gobgpPeers = append(gobgpPeers, &e2e.BGPPeerValues{
+			IP: containerIPv4,
+			AS: KubeVipAS,
+		})
+	}
+
+	if addrFamily == e2e.IPv6Family || addrFamily == e2e.DualstackFamily {
+		gobgpPeers = append(gobgpPeers, &e2e.BGPPeerValues{
+			IP: containerIPv6,
+			AS: KubeVipAS,
+		})
+	}
+
+	if addrFamily == e2e.IPv6Family {
+		*gobgpClient, err = newGoBGPClient(localIPv6, goBGPPort)
+	} else {
+		*gobgpClient, err = newGoBGPClient(localIPv4, goBGPPort)
+	}
+	Expect(err).ToNot(HaveOccurred())
+
+	for _, n := range gobgpPeers {
+		_, err = (*gobgpClient).AddPeer(context.TODO(), &api.AddPeerRequest{
+			Peer: &api.Peer{
+				Conf: &api.PeerConf{
+					NeighborAddress: n.IP,
+					PeerAsn:         uint32(n.AS),
+				},
+			},
+		})
+		Expect(err).ToNot(HaveOccurred())
+	}
+}
+
+type BGPPeer struct {
+	IP string
+	AS uint
+}
 
 func testServiceBGP(svcName, lbAddress string, trafficPolicy corev1.ServiceExternalTrafficPolicy,
 	client kubernetes.Interface, ipFamily []corev1.IPFamily, numberOfServices int, gobgpClient api.GobgpApiClient, gobgpFamily *api.Family) {
@@ -370,9 +394,9 @@ func GetContainerIPs(containerName string) (string, string, error) {
 	return "", "", nil
 }
 
-func newGoBGPClient(address, port string) (api.GobgpApiClient, error) {
+func newGoBGPClient(address string, port uint32) (api.GobgpApiClient, error) {
 	grpcOpts := []grpc.DialOption{grpc.WithTransportCredentials(insecure.NewCredentials())}
-	target := net.JoinHostPort(address, port)
+	target := net.JoinHostPort(address, strconv.Itoa(int(port)))
 	conn, err := grpc.NewClient(target, grpcOpts...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to connect to GoBGP server %q: %w", target, err)

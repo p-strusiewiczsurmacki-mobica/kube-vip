@@ -45,9 +45,9 @@ spec:
     - name: bgp_routerid
       value: "2.2.2.2"
     - name: bgp_as
-      value: "{{ .GobgpConfig.PeerAS }}"
+      value: "{{ .BGPAS }}"
     - name: bgp_peers
-      value: "{{ .GobgpConfig.IP }}:{{ .GobgpConfig.AS }}::false"
+      value: "{{ .BGPPeers }}"
     - name: address
       value: "{{ .ControlPlaneVIP }}"
     - name: cp_enable
