@@ -14,7 +14,7 @@ type EndpointWorker interface {
 	GetEndpoints(service *v1.Service, id string) ([]string, error)
 	RemoveEgress(service *v1.Service, lastKnownGoodEndpoint *string)
 	Delete(service *v1.Service, id string) error
-	SetInstanceEndpointsStatus(service *v1.Service, state bool) error
+	SetInstanceEndpointsStatus(service *v1.Service, endpoints []string) error
 }
 
 func NewEndpointWorker(sm *Manager, provider epProvider) EndpointWorker {
@@ -98,6 +98,6 @@ func (g *Generic) Delete(_ *v1.Service, _ string) error {
 	return nil
 }
 
-func (g *Generic) SetInstanceEndpointsStatus(_ *v1.Service, _ bool) error {
+func (g *Generic) SetInstanceEndpointsStatus(_ *v1.Service, _ []string) error {
 	return nil
 }

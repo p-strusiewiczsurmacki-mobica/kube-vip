@@ -40,7 +40,7 @@ func (p *Processor) AddModify(ctx context.Context, event watch.Event, cancel con
 		return false, err
 	}
 
-	if err := p.worker.SetInstanceEndpointsStatus(service, len(endpoints) > 0); err != nil {
+	if err := p.worker.SetInstanceEndpointsStatus(service, endpoints); err != nil {
 		log.Error("updating instance", "err", err)
 	}
 
@@ -64,13 +64,13 @@ func (p *Processor) AddModify(ctx context.Context, event watch.Event, cancel con
 			go startLeaderElection(ctx, p.sm, leaderElectionActive, service)
 		}
 
-		isRouteConfigured, err := isRouteConfigured(service.UID)
-		if err != nil {
-			return false, fmt.Errorf("[%s] error while checking if route is configured: %w", p.provider.getLabel(), err)
-		}
+		// isRouteConfigured, err := isRouteConfigured(service.UID)
+		// if err != nil {
+		// 	return false, fmt.Errorf("[%s] error while checking if route is configured: %w", p.provider.getLabel(), err)
+		// }
 
 		// There are local endpoints available on the node
-		if !p.sm.config.EnableServicesElection && !p.sm.config.EnableLeaderElection && !isRouteConfigured {
+		if !p.sm.config.EnableServicesElection && !p.sm.config.EnableLeaderElection { // && !isRouteConfigured {
 			if err := p.worker.ProcessInstance(ctx, service, leaderElectionActive); err != nil {
 				return false, fmt.Errorf("failed to process non-empty instance: %w", err)
 			}

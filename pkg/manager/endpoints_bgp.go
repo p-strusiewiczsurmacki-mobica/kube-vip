@@ -5,6 +5,7 @@ import (
 	"fmt"
 	log "log/slog"
 
+	"github.com/kube-vip/kube-vip/pkg/cluster"
 	v1 "k8s.io/api/core/v1"
 )
 
@@ -22,14 +23,11 @@ func NewBGP(sm *Manager, provider epProvider) EndpointWorker {
 }
 
 func (b *BGP) ProcessInstance(ctx context.Context, service *v1.Service, leaderElectionActive *bool) error {
-	instance, err := b.sm.findServiceInstanceWithTimeout(ctx, service)
-	if err != nil {
-		log.Error("error finding instance", "service", service.UID, "provider", b.provider.getLabel(), "err", err)
-	}
+	instance := b.sm.findServiceInstance(service)
 	if instance != nil {
-		for _, cluster := range instance.clusters {
+		for _, cluster := range instance.Clusters {
 			for i := range cluster.Network {
-				address := fmt.Sprintf("%s/%s", cluster.Network[i].IP(), b.sm.config.VIPCIDR)
+				address := fmt.Sprintf("%s/%s", cluster.Network[i].IP(), b.sm.config.VIPSubnet)
 				log.Debug("attempting to advertise BGP service", "provider", b.provider.getLabel(), "ip", address)
 				err := b.sm.bgpServer.AddHost(address)
 				if err != nil {
@@ -37,7 +35,7 @@ func (b *BGP) ProcessInstance(ctx context.Context, service *v1.Service, leaderEl
 				} else {
 					log.Info("added BGP host", "provider",
 						b.provider.getLabel(), "ip", address, "service name", service.Name, "namespace", service.Namespace)
-					configuredLocalRoutes.Store(string(service.UID), true)
+					// configuredLocalRoutes.Store(string(service.UID), true)
 					*leaderElectionActive = true
 				}
 			}
@@ -50,16 +48,16 @@ func (b *BGP) Clear(lastKnownGoodEndpoint *string, service *v1.Service, cancel c
 	if !b.sm.config.EnableServicesElection && !b.sm.config.EnableLeaderElection {
 		// If BGP mode is enabled - routes should be deleted
 		if instance := b.sm.findServiceInstance(service); instance != nil {
-			for _, cluster := range instance.clusters {
+			for _, cluster := range instance.Clusters {
 				for i := range cluster.Network {
-					address := fmt.Sprintf("%s/%s", cluster.Network[i].IP(), b.sm.config.VIPCIDR)
+					address := fmt.Sprintf("%s/%s", cluster.Network[i].IP(), b.sm.config.VIPSubnet)
 					err := b.sm.bgpServer.DelHost(address)
 					if err != nil {
 						log.Error("deleting BGP host", "provider", b.provider.getLabel(), "ip", address, "err", err)
 					} else {
 						log.Info("deleted BGP host", "provider",
 							b.provider.getLabel(), "ip", address, "service name", service.Name, "namespace", service.Namespace)
-						configuredLocalRoutes.Store(string(service.UID), false)
+						// configuredLocalRoutes.Store(string(service.UID), false)
 						*leaderElectionActive = false
 					}
 				}
@@ -99,21 +97,25 @@ func (b *BGP) deleteAction(service *v1.Service) {
 
 func (sm *Manager) ClearBGPHosts(service *v1.Service) {
 	if instance := sm.findServiceInstance(service); instance != nil {
-		for _, cluster := range instance.clusters {
-			for i := range cluster.Network {
-				address := fmt.Sprintf("%s/%s", cluster.Network[i].IP(), sm.config.VIPCIDR)
-				err := sm.bgpServer.DelHost(address)
-				if err != nil {
-					log.Error("[endpoint] error deleting BGP host", "err", err)
-				} else {
-					log.Debug("[endpoint] deleted BGP host", "ip",
-						address, "service name", service.Name, "namespace", service.Namespace)
-				}
+		sm.clearBGPHostsByInstance(instance)
+	}
+}
+
+func (sm *Manager) clearBGPHostsByInstance(instance *cluster.Instance) {
+	for _, cluster := range instance.Clusters {
+		for i := range cluster.Network {
+			address := fmt.Sprintf("%s/%s", cluster.Network[i].IP(), sm.config.VIPSubnet)
+			err := sm.bgpServer.DelHost(address)
+			if err != nil {
+				log.Error("[endpoint] error deleting BGP host", "err", err)
+			} else {
+				log.Debug("[endpoint] deleted BGP host", "ip",
+					address, "service name", instance.ServiceSnapshot.Name, "namespace", instance.ServiceSnapshot.Namespace)
 			}
 		}
 	}
 }
 
-func (b *BGP) SetInstanceEndpointsStatus(_ *v1.Service, _ bool) error {
+func (b *BGP) SetInstanceEndpointsStatus(_ *v1.Service, _ []string) error {
 	return nil
 }

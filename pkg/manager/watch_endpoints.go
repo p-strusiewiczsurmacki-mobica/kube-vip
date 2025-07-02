@@ -3,17 +3,12 @@ package manager
 import (
 	"context"
 	"fmt"
-	"net"
 	"strings"
-	"syscall"
 
 	log "log/slog"
 
-	"github.com/kube-vip/kube-vip/pkg/cluster"
 	"github.com/kube-vip/kube-vip/pkg/kubevip"
-	"github.com/pkg/errors"
 	v1 "k8s.io/api/core/v1"
-	discoveryv1 "k8s.io/api/discovery/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/fields"
@@ -147,14 +142,12 @@ func (ep *endpointsProvider) getProtocol() string {
 func (sm *Manager) watchEndpoint(svcCtx *serviceContext, id string, service *v1.Service, provider epProvider) error {
 	log.Info("watching", "provider", provider.getLabel(), "service_name", service.Name, "namespace", service.Namespace)
 	// Use a restartable watcher, as this should help in the event of etcd or timeout issues
-	leaderContext, cancel := context.WithCancel(svcCtx.ctx)
-	defer cancel()
 
 	var leaderElectionActive bool
 
-	rw, err := provider.createRetryWatcher(leaderContext, sm, service)
+	rw, err := provider.createRetryWatcher(svcCtx.ctx, sm, service)
 	if err != nil {
-		cancel()
+		svcCtx.cancel()
 		return fmt.Errorf("[%s] error watching endpoints: %w", provider.getLabel(), err)
 	}
 
@@ -166,21 +159,20 @@ func (sm *Manager) watchEndpoint(svcCtx *serviceContext, id string, service *v1.
 			// Stop the retry watcher
 			rw.Stop()
 			// Cancel the context, which will in turn cancel the leadership
-			cancel()
 			return
 		case <-sm.shutdownChan:
 			log.Debug("shutdown called", "provider", provider.getLabel())
 			// Stop the retry watcher
 			rw.Stop()
 			// Cancel the context, which will in turn cancel the leadership
-			cancel()
+			svcCtx.cancel()
 			return
 		case <-exitFunction:
 			log.Debug("function ending", "provider", provider.getLabel())
 			// Stop the retry watcher
 			rw.Stop()
 			// Cancel the context, which will in turn cancel the leadership
-			cancel()
+			svcCtx.cancel()
 			return
 		}
 	}()
@@ -191,12 +183,11 @@ func (sm *Manager) watchEndpoint(svcCtx *serviceContext, id string, service *v1.
 
 	var lastKnownGoodEndpoint string
 	for event := range ch {
-		activeEndpointAnnotation := activeEndpoint
 		// We need to inspect the event and get ResourceVersion out of it
 		switch event.Type {
 
 		case watch.Added, watch.Modified:
-			restart, err := epProcessor.AddModify(ctx, event, cancel, &lastKnownGoodEndpoint, service, id, &leaderElectionActive)
+			restart, err := epProcessor.AddModify(svcCtx.ctx, event, svcCtx.cancel, &lastKnownGoodEndpoint, service, id, &leaderElectionActive)
 			if restart {
 				continue
 			} else if err != nil {
@@ -222,14 +213,6 @@ func (sm *Manager) watchEndpoint(svcCtx *serviceContext, id string, service *v1.
 	close(exitFunction)
 	log.Info("stopping watching", "provider", provider.getLabel(), "service name", service.Name, "namespace", service.Namespace)
 	return nil //nolint:govet
-}
-
-func storeConfiguredNetwork(svcUID string, network vip.Network) {
-	if _, exists := configuredNetworks[svcUID]; !exists {
-		configuredNetworks[svcUID] = make(map[string]vip.Network)
-	}
-
-	configuredNetworks[svcUID][network.IP()] = network
 }
 
 func (svcCtx *serviceContext) isNetworkConfigured(ip string) bool {
