@@ -22,21 +22,22 @@ func NewBGP(sm *Manager, provider epProvider) EndpointWorker {
 	}
 }
 
-func (b *BGP) ProcessInstance(ctx context.Context, service *v1.Service, leaderElectionActive *bool) error {
-	instance := b.sm.findServiceInstance(service)
-	if instance != nil {
+func (b *BGP) ProcessInstance(svcCtx *serviceContext, service *v1.Service, leaderElectionActive *bool) error {
+	if instance := b.sm.findServiceInstance(service); instance != nil {
 		for _, cluster := range instance.Clusters {
 			for i := range cluster.Network {
-				address := fmt.Sprintf("%s/%s", cluster.Network[i].IP(), b.sm.config.VIPSubnet)
-				log.Debug("attempting to advertise BGP service", "provider", b.provider.getLabel(), "ip", address)
-				err := b.sm.bgpServer.AddHost(address)
-				if err != nil {
-					log.Error("error adding BGP host", "provider", b.provider.getLabel(), "err", err)
-				} else {
-					log.Info("added BGP host", "provider",
-						b.provider.getLabel(), "ip", address, "service name", service.Name, "namespace", service.Namespace)
-					// configuredLocalRoutes.Store(string(service.UID), true)
-					*leaderElectionActive = true
+				if !svcCtx.isNetworkConfigured(cluster.Network[i].IP()) {
+					network := cluster.Network[i]
+					log.Debug("attempting to advertise BGP service", "provider", b.provider.getLabel(), "ip", network.CIDR())
+					err := b.sm.bgpServer.AddHost(network.CIDR())
+					if err != nil {
+						log.Error("error adding BGP host", "provider", b.provider.getLabel(), "err", err)
+					} else {
+						log.Info("added BGP host", "provider",
+							b.provider.getLabel(), "ip", network.CIDR(), "service name", service.Name, "namespace", service.Namespace)
+						svcCtx.configuredNetworks.Store(cluster.Network[i].IP(), cluster.Network[i])
+						*leaderElectionActive = true
+					}
 				}
 			}
 		}
@@ -44,25 +45,25 @@ func (b *BGP) ProcessInstance(ctx context.Context, service *v1.Service, leaderEl
 	return nil
 }
 
-func (b *BGP) Clear(lastKnownGoodEndpoint *string, service *v1.Service, cancel context.CancelFunc, leaderElectionActive *bool) {
+func (b *BGP) Clear(svcCtx *serviceContext, lastKnownGoodEndpoint *string, service *v1.Service, cancel context.CancelFunc, leaderElectionActive *bool) {
 	if !b.sm.config.EnableServicesElection && !b.sm.config.EnableLeaderElection {
 		// If BGP mode is enabled - routes should be deleted
 		if instance := b.sm.findServiceInstance(service); instance != nil {
 			for _, cluster := range instance.Clusters {
 				for i := range cluster.Network {
-					address := fmt.Sprintf("%s/%s", cluster.Network[i].IP(), b.sm.config.VIPSubnet)
-					err := b.sm.bgpServer.DelHost(address)
+					network := cluster.Network[i]
+					err := b.sm.bgpServer.DelHost(network.CIDR())
 					if err != nil {
-						log.Error("deleting BGP host", "provider", b.provider.getLabel(), "ip", address, "err", err)
+						log.Error("[endpoint] deleting BGP host", "provider", b.provider.getLabel(), "ip", network.CIDR(), "err", err)
 					} else {
-						log.Info("deleted BGP host", "provider",
-							b.provider.getLabel(), "ip", address, "service name", service.Name, "namespace", service.Namespace)
-						// configuredLocalRoutes.Store(string(service.UID), false)
+						log.Info("[endpoint] deleted BGP host", "provider",
+							b.provider.getLabel(), "ip", network.CIDR(), "service name", service.Name, "namespace", service.Namespace)
+
+						svcCtx.configuredNetworks.Delete(cluster.Network[i].IP())
 						*leaderElectionActive = false
 					}
 				}
 			}
-
 		}
 	}
 

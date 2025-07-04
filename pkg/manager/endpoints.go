@@ -25,11 +25,11 @@ func NewEndpointProcessor(sm *Manager, provider epProvider) *Processor {
 	}
 }
 
-func (p *Processor) AddModify(ctx context.Context, event watch.Event, cancel context.CancelFunc,
+func (p *Processor) AddModify(svcCtx *serviceContext, event watch.Event,
 	lastKnownGoodEndpoint *string, service *v1.Service, id string, leaderElectionActive *bool) (bool, error) {
 
 	var err error
-	if err = p.provider.loadObject(event.Object, cancel); err != nil {
+	if err = p.provider.loadObject(event.Object, svcCtx.cancel); err != nil {
 		return false, fmt.Errorf("[%s] error loading k8s object: %w", p.provider.getLabel(), err)
 	}
 
@@ -57,11 +57,11 @@ func (p *Processor) AddModify(ctx context.Context, event watch.Event, cancel con
 			return true, nil
 		}
 
-		p.updateLastKnownGoodEndpoint(lastKnownGoodEndpoint, endpoints, service, leaderElectionActive, cancel)
+		p.updateLastKnownGoodEndpoint(lastKnownGoodEndpoint, endpoints, service, leaderElectionActive, svcCtx.cancel)
 
 		// start leader election if it's enabled and not already started
 		if !*leaderElectionActive && p.sm.config.EnableServicesElection {
-			go startLeaderElection(ctx, p.sm, leaderElectionActive, service)
+			go startLeaderElection(svcCtx.ctx, p.sm, leaderElectionActive, service)
 		}
 
 		// isRouteConfigured, err := isRouteConfigured(service.UID)
@@ -71,13 +71,13 @@ func (p *Processor) AddModify(ctx context.Context, event watch.Event, cancel con
 
 		// There are local endpoints available on the node
 		if !p.sm.config.EnableServicesElection && !p.sm.config.EnableLeaderElection { // && !isRouteConfigured {
-			if err := p.worker.ProcessInstance(ctx, service, leaderElectionActive); err != nil {
+			if err := p.worker.ProcessInstance(svcCtx, service, leaderElectionActive); err != nil {
 				return false, fmt.Errorf("failed to process non-empty instance: %w", err)
 			}
 		}
 	} else {
 		// There are no local endpoints
-		p.worker.Clear(lastKnownGoodEndpoint, service, cancel, leaderElectionActive)
+		p.worker.Clear(svcCtx, lastKnownGoodEndpoint, service, svcCtx.cancel, leaderElectionActive)
 	}
 
 	// Set the service accordingly

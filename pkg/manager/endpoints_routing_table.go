@@ -25,31 +25,41 @@ func NewRoutingTable(sm *Manager, provider epProvider) EndpointWorker {
 	}
 }
 
-func (rt *RoutingTable) ProcessInstance(ctx context.Context, service *v1.Service, leaderElectionActive *bool) error {
+func (rt *RoutingTable) ProcessInstance(svcCtx *serviceContext, service *v1.Service, leaderElectionActive *bool) error {
 	instance := rt.sm.findServiceInstance(service)
 	if instance != nil {
 		for _, cluster := range instance.Clusters {
 			for i := range cluster.Network {
-				err := cluster.Network[i].AddRoute(false)
-				if err != nil {
-					if errors.Is(err, syscall.EEXIST) {
-						// If route exists try to update it if necessary
-						isUpdated, err := cluster.Network[i].UpdateRoutes()
-						if err != nil {
-							return fmt.Errorf("[%s] error updating existing routes: %w", rt.provider.getLabel(), err)
-						}
-						if isUpdated {
-							log.Debug("updated route", "provider", rt.provider.getLabel(), "ip", cluster.Network[i].IP())
+				if !svcCtx.isNetworkConfigured(cluster.Network[i].IP()) && cluster.Network[i].HasEndpoints() {
+					err := cluster.Network[i].AddRoute(false)
+					if err != nil {
+						if errors.Is(err, syscall.EEXIST) {
+							// If route exists, but protocol is not set (e.g. the route was created by the older version
+							// of kube-vip) try to update it if necessary
+							isUpdated, err := cluster.Network[i].UpdateRoutes()
+							if err != nil {
+								return fmt.Errorf("[%s] error updating existing routes: %w", rt.provider.getLabel(), err)
+							}
+							if isUpdated {
+								log.Info("updated route", "provider",
+									rt.provider.getLabel(), "ip", cluster.Network[i].IP(), "service name", service.Name, "namespace",
+									service.Namespace, "interface", cluster.Network[i].Interface(), "tableID", rt.sm.config.RoutingTableID)
+							} else {
+								log.Info("route already present", "provider",
+									rt.provider.getLabel(), "ip", cluster.Network[i].IP(), "service name", service.Name, "namespace",
+									service.Namespace, "interface", cluster.Network[i].Interface(), "tableID", rt.sm.config.RoutingTableID)
+							}
+						} else {
+							// If other error occurs, return error
+							return fmt.Errorf("[%s] error adding route: %s", rt.provider.getLabel(), err.Error())
 						}
 					} else {
-						// If other error occurs, return error
-						return fmt.Errorf("[%s] error adding route: %s", rt.provider.getLabel(), err.Error())
+						log.Info("added route", "provider",
+							rt.provider.getLabel(), "ip", cluster.Network[i].IP(), "service name", service.Name, "namespace",
+							service.Namespace, "interface", cluster.Network[i].Interface(), "tableID", rt.sm.config.RoutingTableID)
+						svcCtx.configuredNetworks.Store(cluster.Network[i].IP(), cluster.Network[i])
+						*leaderElectionActive = true
 					}
-				} else {
-					log.Info("added route", "provider",
-						rt.provider.getLabel(), "ip", cluster.Network[i].IP(), "service name", service.Name, "namespace", service.Namespace, "interface", cluster.Network[i].Interface(), "tableID", rt.sm.config.RoutingTableID)
-					// configuredLocalRoutes.Store(string(service.UID), true)
-					*leaderElectionActive = true
 				}
 			}
 		}
@@ -58,11 +68,10 @@ func (rt *RoutingTable) ProcessInstance(ctx context.Context, service *v1.Service
 	return nil
 }
 
-func (rt *RoutingTable) Clear(lastKnownGoodEndpoint *string, service *v1.Service, cancel context.CancelFunc, leaderElectionActive *bool) {
+func (rt *RoutingTable) Clear(svcCtx *serviceContext, lastKnownGoodEndpoint *string, service *v1.Service, cancel context.CancelFunc, leaderElectionActive *bool) {
 	if !rt.sm.config.EnableServicesElection && !rt.sm.config.EnableLeaderElection {
-		// If routing table mode is enabled - routes should be deleted
 		if errs := rt.sm.clearRoutes(service); len(errs) == 0 {
-			// configuredLocalRoutes.Store(string(service.UID), false)
+			svcCtx.configuredNetworks.Clear()
 		} else {
 			for _, err := range errs {
 				log.Error("error while clearing routes", "err", err)

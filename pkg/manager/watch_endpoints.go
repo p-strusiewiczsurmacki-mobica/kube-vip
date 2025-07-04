@@ -187,7 +187,7 @@ func (sm *Manager) watchEndpoint(svcCtx *serviceContext, id string, service *v1.
 		switch event.Type {
 
 		case watch.Added, watch.Modified:
-			restart, err := epProcessor.AddModify(svcCtx.ctx, event, svcCtx.cancel, &lastKnownGoodEndpoint, service, id, &leaderElectionActive)
+			restart, err := epProcessor.AddModify(svcCtx, event, &lastKnownGoodEndpoint, service, id, &leaderElectionActive)
 			if restart {
 				continue
 			} else if err != nil {
