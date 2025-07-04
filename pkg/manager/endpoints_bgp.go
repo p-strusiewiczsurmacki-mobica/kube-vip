@@ -105,13 +105,13 @@ func (sm *Manager) ClearBGPHosts(service *v1.Service) {
 func (sm *Manager) clearBGPHostsByInstance(instance *cluster.Instance) {
 	for _, cluster := range instance.Clusters {
 		for i := range cluster.Network {
-			address := fmt.Sprintf("%s/%s", cluster.Network[i].IP(), sm.config.VIPSubnet)
-			err := sm.bgpServer.DelHost(address)
+			// address := fmt.Sprintf("%s/%s", cluster.Network[i].IP(), sm.config.VIPSubnet)
+			err := sm.bgpServer.DelHost(cluster.Network[i].CIDR())
 			if err != nil {
 				log.Error("[endpoint] error deleting BGP host", "err", err)
 			} else {
 				log.Debug("[endpoint] deleted BGP host", "ip",
-					address, "service name", instance.ServiceSnapshot.Name, "namespace", instance.ServiceSnapshot.Namespace)
+					cluster.Network[i].CIDR(), "service name", instance.ServiceSnapshot.Name, "namespace", instance.ServiceSnapshot.Namespace)
 			}
 		}
 	}
