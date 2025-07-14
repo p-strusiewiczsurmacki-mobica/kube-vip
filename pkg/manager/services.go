@@ -17,10 +17,10 @@ import (
 	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/client-go/util/retry"
 
-	"github.com/kube-vip/kube-vip/pkg/cluster"
 	"github.com/kube-vip/kube-vip/pkg/endpoints/providers"
 	"github.com/kube-vip/kube-vip/pkg/kubevip"
 	"github.com/kube-vip/kube-vip/pkg/services"
+	svcs "github.com/kube-vip/kube-vip/pkg/services"
 	"github.com/kube-vip/kube-vip/pkg/upnp"
 	"github.com/kube-vip/kube-vip/pkg/vip"
 )
@@ -59,8 +59,8 @@ func (sm *Manager) syncServices(ctx context.Context, svc *v1.Service) error {
 
 func (sm *Manager) getServiceInstanceAction(svc *v1.Service) ServiceInstanceAction {
 	// protect against multiple calls
-	addresses := cluster.FetchServiceAddresses(svc)
-	ingressIPs := cluster.FetchLoadBalancerIngressAddresses(svc)
+	addresses := svcs.FetchServiceAddresses(svc)
+	ingressIPs := svcs.FetchLoadBalancerIngressAddresses(svc)
 	sm.mutex.Lock()
 	defer sm.mutex.Unlock()
 
@@ -122,14 +122,14 @@ func (sm *Manager) addService(ctx context.Context, svc *v1.Service) error {
 
 	startTime := time.Now()
 
-	newService, err := services.NewInstance(svc, sm.config)
+	newService, err := svcs.NewInstance(svc, sm.config, sm.intfMgr, sm.arpMgr)
 	if err != nil {
 		return err
 	}
 
 	for x := range newService.VIPConfigs {
 		log.Debug("starting loadbalancer for service", "name", svc.Name, "namespace", svc.Namespace)
-		newService.Clusters[x].StartLoadBalancerService(newService.VIPConfigs[x], sm.bgpServer, svc.Name, &sm.serviceInstances)
+		newService.Clusters[x].StartLoadBalancerService(newService.VIPConfigs[x], sm.bgpServer, svc.Name, sm.countRouteReferences)
 	}
 
 	sm.upnpMap(ctx, newService)
@@ -159,17 +159,17 @@ func (sm *Manager) addService(ctx context.Context, svc *v1.Service) error {
 		}
 	}
 
-	serviceIPs := services.FetchServiceAddresses(svc)
+	serviceIPs := svcs.FetchServiceAddresses(svc)
 	// Check if we need to flush any conntrack connections (due to some dangling conntrack connections)
-	if svc.Annotations[flushContrack] == "true" {
+	if svc.Annotations[kubevip.FlushContrack] == "true" {
 
 		log.Debug("[service] Flushing conntrack rules", "service", svc.Name, "namespace", svc.Namespace)
 		for _, serviceIP := range serviceIPs {
-			err = vip.DeleteExistingSessions(serviceIP, false, svc.Annotations[egressDestinationPorts], svc.Annotations[egressSourcePorts])
+			err = vip.DeleteExistingSessions(serviceIP, false, svc.Annotations[kubevip.EgressDestinationPorts], svc.Annotations[kubevip.EgressSourcePorts])
 			if err != nil {
 				log.Error("[service] flushing any remaining egress connections", "service", svc.Name, "namespace", svc.Namespace, "err", err)
 			}
-			err = vip.DeleteExistingSessions(serviceIP, true, svc.Annotations[egressDestinationPorts], svc.Annotations[egressSourcePorts])
+			err = vip.DeleteExistingSessions(serviceIP, true, svc.Annotations[kubevip.EgressDestinationPorts], svc.Annotations[kubevip.EgressSourcePorts])
 			if err != nil {
 				log.Error("[service] flushing any remaining ingress connections", "service", svc.Name, "namespace", svc.Namespace, "err", err)
 			}
@@ -317,7 +317,7 @@ func (sm *Manager) deleteService(uid types.UID) error {
 		if serviceInstance.ServiceSnapshot.Annotations[kubevip.Egress] == "true" {
 			if serviceInstance.ServiceSnapshot.Annotations[kubevip.ActiveEndpoint] != "" {
 				log.Info("egress re-write enabled", "service", serviceInstance.ServiceSnapshot.Name)
-				err := sm.TeardownEgress(serviceInstance.ServiceSnapshot.Annotations[activeEndpoint], serviceInstance.ServiceSnapshot.Spec.LoadBalancerIP, serviceInstance.ServiceSnapshot.Namespace, serviceInstance.ServiceSnapshot.Annotations)
+				err := services.TeardownEgress(serviceInstance.ServiceSnapshot.Annotations[kubevip.ActiveEndpoint], serviceInstance.ServiceSnapshot.Spec.LoadBalancerIP, serviceInstance.ServiceSnapshot.Namespace, serviceInstance.ServiceSnapshot.Annotations, sm.config.EgressWithNftables)
 				if err != nil {
 					log.Error("egress teardown", "err", err)
 				}
@@ -422,8 +422,8 @@ func (sm *Manager) updateStatus(i *services.Instance) error {
 			currentServiceCopy.Annotations[kubevip.VipHost] = sm.config.NodeName
 		}
 		if i.DHCPInterfaceHwaddr != "" || i.DHCPInterfaceIP != "" {
-			currentServiceCopy.Annotations[kubevip.HwAddrKey] = i.DhcpInterfaceHwaddr
-			currentServiceCopy.Annotations[kubevip.RequestedIP] = i.DhcpInterfaceIP
+			currentServiceCopy.Annotations[kubevip.HwAddrKey] = i.DHCPInterfaceHwaddr
+			currentServiceCopy.Annotations[kubevip.RequestedIP] = i.DHCPInterfaceIP
 		}
 
 		if currentService.Annotations["development.kube-vip.io/synthetic-api-server-error-on-update"] == "true" {

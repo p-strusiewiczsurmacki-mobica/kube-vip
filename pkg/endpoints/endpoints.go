@@ -1,10 +1,9 @@
-package manager
+package endpoints
 
 import (
 	"context"
 	"fmt"
 	"net"
-	"sync"
 
 	log "log/slog"
 
@@ -14,47 +13,45 @@ import (
 	"github.com/kube-vip/kube-vip/pkg/services"
 	v1 "k8s.io/api/core/v1"
 	discoveryv1 "k8s.io/api/discovery/v1"
-	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/watch"
 )
 
 type Processor struct {
-	config                *kubevip.Config
-	provider              providers.Provider
-	bgpServer             *bgp.Server
-	worker                endpointWorker
-	instances             *[]*services.Instance
-	configuredLocalRoutes *sync.Map
+	config    *kubevip.Config
+	provider  providers.Provider
+	bgpServer *bgp.Server
+	worker    endpointWorker
+	instances *[]*services.Instance
 }
 
 func NewEndpointProcessor(config *kubevip.Config, provider providers.Provider, bgpServer *bgp.Server,
-	instances *[]*services.Instance, configuredLocalRoutes *sync.Map) *Processor {
+	instances *[]*services.Instance) *Processor {
 	return &Processor{
-		config:                config,
-		provider:              provider,
-		bgpServer:             bgpServer,
-		instances:             instances,
-		configuredLocalRoutes: configuredLocalRoutes,
-		worker:                newEndpointWorker(config, provider, bgpServer, instances, configuredLocalRoutes),
+		config:    config,
+		provider:  provider,
+		bgpServer: bgpServer,
+		instances: instances,
+		worker:    newEndpointWorker(config, provider, bgpServer, instances),
 	}
 }
 
-func (p *Processor) AddOrModify(ctx context.Context, event watch.Event, cancel context.CancelFunc,
+func (p *Processor) AddOrModify(ctx *services.Context, event watch.Event,
 	lastKnownGoodEndpoint *string, service *v1.Service, id string, leaderElectionActive *bool,
 	serviceFunc func(context.Context, *v1.Service) error,
-	leaderCtx *context.Context, cancel *context.CancelFunc)) (bool, error) {
+	leaderCtx *context.Context, cancel *context.CancelFunc) (bool, error) {
 
 	var err error
 	if err = p.provider.LoadObject(event.Object, *cancel); err != nil {
-		return false, fmt.Errorf("[%s] error loading k8s object: %w", p.provider.getLabel(), err)
+		return false, fmt.Errorf("[%s] error loading k8s object: %w", p.provider.GetLabel(), err)
 	}
 
 	endpoints, err := p.worker.getEndpoints(service, id)
 	if err != nil {
 		return false, err
 	}
+	log.Info("GOT ENDPOINTS", "endpoints", endpoints)
 
-	if err := p.worker.setInstanceEndpointsStatus(service, len(endpoints) > 0); err != nil {
+	if err := p.worker.setInstanceEndpointsStatus(service, endpoints); err != nil {
 		log.Error("updating instance", "err", err)
 	}
 
@@ -66,35 +63,34 @@ func (p *Processor) AddOrModify(ctx context.Context, event watch.Event, cancel c
 
 	// Check that we have local endpoints
 	if len(endpoints) != 0 {
+		log.Info("THERE ARE ENDPOINTs, LOL")
 		// Ignore IPv4
 		if service.Annotations[kubevip.EgressIPv6] == "true" && net.ParseIP(endpoints[0]).To4() != nil {
+			log.Info("Something")
 			return true, nil
 		}
 
 		p.updateLastKnownGoodEndpoint(lastKnownGoodEndpoint, endpoints, service, leaderElectionActive, *cancel)
+		log.Info("updateLastKnownGoodEndpoint executed")
 		// start leader election if it's enabled and not already started
-		if !*leaderElectionActive && p.sm.config.EnableServicesElection {
+		if !*leaderElectionActive && p.config.EnableServicesElection {
 			go func() {
-				*leaderCtx, *cancel = context.WithCancel(svcCtx.ctx)
+				log.Info("starting leader election")
+				*leaderCtx, *cancel = context.WithCancel(ctx.Ctx)
 				startLeaderElection(*leaderCtx, leaderElectionActive, service, serviceFunc)
-		}
 			}()
 		}
 
-		isRouteConfigured, err := isRouteConfigured(service.UID, p.configuredLocalRoutes)
-		if err != nil {
-			return false, fmt.Errorf("[%s] error while checking if route is configured: %w", p.provider.GetLabel(), err)
-		}
-
 		// There are local endpoints available on the node
-		if !p.config.EnableServicesElection && !p.config.EnableLeaderElection && !isRouteConfigured {
-			if err := p.worker.processInstance(svcCtx, service, leaderElectionActive); err != nil {
+		if !p.config.EnableServicesElection && !p.config.EnableLeaderElection {
+			log.Info("processing instance")
+			if err := p.worker.processInstance(ctx, service, leaderElectionActive); err != nil {
 				return false, fmt.Errorf("failed to process non-empty instance: %w", err)
 			}
 		}
 	} else {
 		// There are no local endpoints
-		p.worker.clear(lastKnownGoodEndpoint, service, cancel, leaderElectionActive)
+		p.worker.clear(ctx, lastKnownGoodEndpoint, service, *cancel, leaderElectionActive)
 	}
 
 	// Set the service accordingly
@@ -171,17 +167,4 @@ func startLeaderElection(ctx context.Context, leaderElectionActive *bool, servic
 			break
 		}
 	}
-}
-
-func isRouteConfigured(serviceUID types.UID, configuredLocalRoutes *sync.Map) (bool, error) {
-	isConfigured := false
-	value, ok := configuredLocalRoutes.Load(string(serviceUID))
-	if ok {
-		isConfigured, ok = value.(bool)
-		if !ok {
-			return false, fmt.Errorf("error converting configuredLocalRoute item to boolean value")
-		}
-	}
-
-	return isConfigured, nil
 }

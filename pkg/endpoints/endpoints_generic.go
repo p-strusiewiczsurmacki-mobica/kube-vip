@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	log "log/slog"
-	"sync"
 
 	"github.com/kube-vip/kube-vip/pkg/bgp"
 	"github.com/kube-vip/kube-vip/pkg/endpoints/providers"
@@ -14,18 +13,19 @@ import (
 )
 
 type endpointWorker interface {
-	processInstance(ctx context.Context, service *v1.Service, leaderElectionActive *bool) error
-	clear(lastKnownGoodEndpoint *string, service *v1.Service, cancel context.CancelFunc, leaderElectionActive *bool)
+	processInstance(svcCtx *services.Context, service *v1.Service, leaderElectionActive *bool) error
+	clear(svcCtx *services.Context, lastKnownGoodEndpoint *string, service *v1.Service, cancel context.CancelFunc, leaderElectionActive *bool)
 	getEndpoints(service *v1.Service, id string) ([]string, error)
 	removeEgress(service *v1.Service, lastKnownGoodEndpoint *string)
 	delete(service *v1.Service, id string) error
-	setInstanceEndpointsStatus(service *v1.Service, state bool) error
+	setInstanceEndpointsStatus(service *v1.Service, endpoints []string) error
 }
 
-func newEndpointWorker(config *kubevip.Config, provider providers.Provider, bgpServer *bgp.Server, instances *[]*services.Instance, configuredLocalRoutes *sync.Map) endpointWorker {
-	generic := newGeneric(config, provider, instances, configuredLocalRoutes)
+func newEndpointWorker(config *kubevip.Config, provider providers.Provider, bgpServer *bgp.Server, instances *[]*services.Instance) endpointWorker {
+	generic := newGeneric(config, provider, instances)
 
 	if config.EnableRoutingTable {
+		log.Info("WORKER newRoutingTable")
 		return newRoutingTable(generic)
 	}
 	if config.EnableBGP {
@@ -36,26 +36,25 @@ func newEndpointWorker(config *kubevip.Config, provider providers.Provider, bgpS
 }
 
 type generic struct {
-	config                *kubevip.Config
-	provider              providers.Provider
-	instances             *[]*services.Instance
-	configuredLocalRoutes *sync.Map
+	config    *kubevip.Config
+	provider  providers.Provider
+	instances *[]*services.Instance
+	svcCtx    *services.Context
 }
 
-func newGeneric(config *kubevip.Config, provider providers.Provider, instances *[]*services.Instance, configuredLocalRoutes *sync.Map) generic {
+func newGeneric(config *kubevip.Config, provider providers.Provider, instances *[]*services.Instance) generic {
 	return generic{
-		config:                config,
-		provider:              provider,
-		instances:             instances,
-		configuredLocalRoutes: configuredLocalRoutes,
+		config:    config,
+		provider:  provider,
+		instances: instances,
 	}
 }
 
-func (g *generic) processInstance(_ context.Context, _ *v1.Service, _ *bool) error {
+func (g *generic) processInstance(_ *services.Context, _ *v1.Service, _ *bool) error {
 	return nil
 }
 
-func (g *generic) clear(lastKnownGoodEndpoint *string, service *v1.Service, cancel context.CancelFunc, leaderElectionActive *bool) {
+func (g *generic) clear(_ *services.Context, lastKnownGoodEndpoint *string, service *v1.Service, cancel context.CancelFunc, leaderElectionActive *bool) {
 	g.clearEgress(lastKnownGoodEndpoint, service, cancel, leaderElectionActive)
 }
 
@@ -95,6 +94,7 @@ func (g *generic) getAllEndpoints(service *v1.Service, id string) ([]string, err
 	var endpoints []string
 	if !g.config.EnableLeaderElection && !g.config.EnableServicesElection &&
 		service.Spec.ExternalTrafficPolicy == v1.ServiceExternalTrafficPolicyTypeCluster {
+		log.Info("Getting ALL endpoints (cluster)")
 		if endpoints, err = g.provider.GetAllEndpoints(); err != nil {
 			return nil, fmt.Errorf("[%s] error getting all endpoints: %w", g.provider.GetLabel(), err)
 		}
@@ -114,6 +114,6 @@ func (g *generic) delete(_ *v1.Service, _ string) error {
 	return nil
 }
 
-func (g *generic) setInstanceEndpointsStatus(_ *v1.Service, _ bool) error {
+func (g *generic) setInstanceEndpointsStatus(_ *v1.Service, _ []string) error {
 	return nil
 }

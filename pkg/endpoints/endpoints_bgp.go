@@ -22,15 +22,12 @@ func newBGP(generic generic, bgpServer *bgp.Server) endpointWorker {
 	}
 }
 
-func (b *BGP) processInstance(ctx context.Context, service *v1.Service, leaderElectionActive *bool) error {
-	instance, err := services.FindServiceInstanceWithTimeout(ctx, service, *b.instances)
-	if err != nil {
-		log.Error("error finding instance", "service", service.UID, "provider", b.provider.GetLabel(), "err", err)
-	}
+func (b *BGP) processInstance(ctx *services.Context, service *v1.Service, leaderElectionActive *bool) error {
+	instance := services.FindServiceInstance(service, *b.instances)
 	if instance != nil {
 		for _, cluster := range instance.Clusters {
 			for i := range cluster.Network {
-				address := fmt.Sprintf("%s/%s", cluster.Network[i].IP(), b.config.VIPCIDR)
+				address := fmt.Sprintf("%s/%s", cluster.Network[i].IP(), b.config.VIPSubnet)
 				log.Debug("attempting to advertise BGP service", "provider", b.provider.GetLabel(), "ip", address)
 				err := b.bgpServer.AddHost(address)
 				if err != nil {
@@ -38,7 +35,7 @@ func (b *BGP) processInstance(ctx context.Context, service *v1.Service, leaderEl
 				} else {
 					log.Info("added BGP host", "provider",
 						b.provider.GetLabel(), "ip", address, "service name", service.Name, "namespace", service.Namespace)
-					b.configuredLocalRoutes.Store(string(service.UID), true)
+					ctx.ConfiguredNetworks.Store(address, true)
 					*leaderElectionActive = true
 				}
 			}
@@ -47,20 +44,20 @@ func (b *BGP) processInstance(ctx context.Context, service *v1.Service, leaderEl
 	return nil
 }
 
-func (b *BGP) clear(lastKnownGoodEndpoint *string, service *v1.Service, cancel context.CancelFunc, leaderElectionActive *bool) {
+func (b *BGP) clear(ctx *services.Context, lastKnownGoodEndpoint *string, service *v1.Service, cancel context.CancelFunc, leaderElectionActive *bool) {
 	if !b.config.EnableServicesElection && !b.config.EnableLeaderElection {
 		// If BGP mode is enabled - routes should be deleted
 		if instance := services.FindServiceInstance(service, *b.instances); instance != nil {
 			for _, cluster := range instance.Clusters {
 				for i := range cluster.Network {
-					address := fmt.Sprintf("%s/%s", cluster.Network[i].IP(), b.config.VIPCIDR)
+					address := fmt.Sprintf("%s/%s", cluster.Network[i].IP(), b.config.VIPSubnet)
 					err := b.bgpServer.DelHost(address)
 					if err != nil {
 						log.Error("deleting BGP host", "provider", b.provider.GetLabel(), "ip", address, "err", err)
 					} else {
 						log.Info("deleted BGP host", "provider",
 							b.provider.GetLabel(), "ip", address, "service name", service.Name, "namespace", service.Namespace)
-						b.configuredLocalRoutes.Store(string(service.UID), false)
+						ctx.ConfiguredNetworks.Store(address, false)
 						*leaderElectionActive = false
 					}
 				}
@@ -102,7 +99,7 @@ func (b *BGP) ClearBGPHosts(service *v1.Service) {
 	if instance := services.FindServiceInstance(service, *b.instances); instance != nil {
 		for _, cluster := range instance.Clusters {
 			for i := range cluster.Network {
-				address := fmt.Sprintf("%s/%s", cluster.Network[i].IP(), b.config.VIPCIDR)
+				address := fmt.Sprintf("%s/%s", cluster.Network[i].IP(), b.config.VIPSubnet)
 				err := b.bgpServer.DelHost(address)
 				if err != nil {
 					log.Error("[endpoint] error deleting BGP host", "err", err)
@@ -115,6 +112,6 @@ func (b *BGP) ClearBGPHosts(service *v1.Service) {
 	}
 }
 
-func (b *BGP) setInstanceEndpointsStatus(_ *v1.Service, _ bool) error {
+func (b *BGP) setInstanceEndpointsStatus(_ *v1.Service, _ []string) error {
 	return nil
 }

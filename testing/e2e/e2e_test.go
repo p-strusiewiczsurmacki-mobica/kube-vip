@@ -34,7 +34,7 @@ import (
 	"github.com/onsi/gomega/format"
 	"github.com/onsi/gomega/gexec"
 
-	kvcluster "github.com/kube-vip/kube-vip/pkg/cluster"
+	"github.com/kube-vip/kube-vip/pkg/kubevip"
 	"github.com/kube-vip/kube-vip/pkg/vip"
 	"github.com/kube-vip/kube-vip/testing/e2e"
 )
@@ -792,7 +792,7 @@ func createTestDS(name, namespace string, client kubernetes.Interface) {
 
 func createTestService(name, namespace, target, lbAddress string, client kubernetes.Interface, ipfPolicy corev1.IPFamilyPolicy, ipFamiles []corev1.IPFamily, externalPolicy corev1.ServiceExternalTrafficPolicy) {
 	svcAnnotations := make(map[string]string)
-	svcAnnotations[kvcluster.LoadbalancerIPAnnotation] = lbAddress
+	svcAnnotations[kubevip.LoadbalancerIPAnnotation] = lbAddress
 
 	labels := make(map[string]string)
 	labels["app"] = target
