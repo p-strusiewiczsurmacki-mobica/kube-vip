@@ -23,20 +23,20 @@ func newBGP(generic generic, bgpServer *bgp.Server) endpointWorker {
 }
 
 func (b *BGP) processInstance(ctx *services.Context, service *v1.Service, leaderElectionActive *bool) error {
-	instance := services.FindServiceInstance(service, *b.instances)
-	if instance != nil {
+	if instance := services.FindServiceInstance(service, *b.instances); instance != nil {
 		for _, cluster := range instance.Clusters {
 			for i := range cluster.Network {
-				address := fmt.Sprintf("%s/%s", cluster.Network[i].IP(), b.config.VIPSubnet)
-				log.Debug("attempting to advertise BGP service", "provider", b.provider.GetLabel(), "ip", address)
-				err := b.bgpServer.AddHost(address)
-				if err != nil {
-					log.Error("error adding BGP host", "provider", b.provider.GetLabel(), "err", err)
-				} else {
-					log.Info("added BGP host", "provider",
-						b.provider.GetLabel(), "ip", address, "service name", service.Name, "namespace", service.Namespace)
-					ctx.ConfiguredNetworks.Store(address, true)
-					*leaderElectionActive = true
+				if !ctx.IsNetworkConfigured(cluster.Network[i].IP()) {
+					log.Debug("attempting to advertise BGP service", "provider", b.provider.GetLabel(), "ip", cluster.Network[i].IP())
+					err := b.bgpServer.AddHost(cluster.Network[i].CIDR())
+					if err != nil {
+						log.Error("error adding BGP host", "provider", b.provider.GetLabel(), "err", err)
+					} else {
+						log.Info("added BGP host", "provider",
+							b.provider.GetLabel(), "ip", cluster.Network[i].CIDR(), "service name", service.Name, "namespace", service.Namespace)
+						ctx.ConfiguredNetworks.Store(cluster.Network[i].IP(), true)
+						*leaderElectionActive = true
+					}
 				}
 			}
 		}
@@ -50,14 +50,13 @@ func (b *BGP) clear(ctx *services.Context, lastKnownGoodEndpoint *string, servic
 		if instance := services.FindServiceInstance(service, *b.instances); instance != nil {
 			for _, cluster := range instance.Clusters {
 				for i := range cluster.Network {
-					address := fmt.Sprintf("%s/%s", cluster.Network[i].IP(), b.config.VIPSubnet)
-					err := b.bgpServer.DelHost(address)
+					err := b.bgpServer.DelHost(cluster.Network[i].CIDR())
 					if err != nil {
-						log.Error("deleting BGP host", "provider", b.provider.GetLabel(), "ip", address, "err", err)
+						log.Error("deleting BGP host", "provider", b.provider.GetLabel(), "ip", cluster.Network[i].IP(), "err", err)
 					} else {
 						log.Info("deleted BGP host", "provider",
-							b.provider.GetLabel(), "ip", address, "service name", service.Name, "namespace", service.Namespace)
-						ctx.ConfiguredNetworks.Store(address, false)
+							b.provider.GetLabel(), "ip", cluster.Network[i].IP(), "service name", service.Name, "namespace", service.Namespace)
+						ctx.ConfiguredNetworks.Delete(cluster.Network[i])
 						*leaderElectionActive = false
 					}
 				}
