@@ -129,7 +129,7 @@ func (sm *Manager) addService(ctx context.Context, svc *v1.Service) error {
 
 	for x := range newService.VIPConfigs {
 		log.Debug("starting loadbalancer for service", "name", svc.Name, "namespace", svc.Namespace)
-		newService.Clusters[x].StartLoadBalancerService(newService.VIPConfigs[x], sm.bgpServer, svc.Name, sm.countRouteReferences)
+		newService.Clusters[x].StartLoadBalancerService(ctx, newService.VIPConfigs[x], sm.bgpServer, svc.Name, sm.countRouteReferences)
 	}
 
 	sm.upnpMap(ctx, newService)

@@ -257,11 +257,11 @@ func getNodeIPs(ctx context.Context, nodename string, client *kubernetes.Clients
 }
 
 // StartLoadBalancerService will start a VIP instance and leave it for kube-proxy to handle
-func (cluster *Cluster) StartLoadBalancerService(c *kubevip.Config, bgp *bgp.Server, name string, CountRouteReferences func(*netlink.Route) int) {
+func (cluster *Cluster) StartLoadBalancerService(ctx context.Context, c *kubevip.Config, bgp *bgp.Server, name string, CountRouteReferences func(*netlink.Route) int) {
 	// use a Go context so we can tell the arp loop code when we
 	// want to step down
 	//nolint
-	ctxArp, cancelArp := context.WithCancel(context.Background())
+	ctxArp, cancelArp := context.WithCancel(ctx)
 
 	cluster.stop = make(chan bool, 1)
 	cluster.completed = make(chan bool, 1)
