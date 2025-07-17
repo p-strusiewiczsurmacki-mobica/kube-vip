@@ -7,7 +7,6 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -15,14 +14,15 @@ import (
 
 	log "log/slog"
 
+	"github.com/kube-vip/kube-vip/pkg/arp"
 	"github.com/kube-vip/kube-vip/pkg/bgp"
 	"github.com/kube-vip/kube-vip/pkg/k8s"
 	"github.com/kube-vip/kube-vip/pkg/kubevip"
-	"github.com/kube-vip/kube-vip/pkg/trafficmirror"
+	"github.com/kube-vip/kube-vip/pkg/networkinterface"
+	"github.com/kube-vip/kube-vip/pkg/services"
 	"github.com/kube-vip/kube-vip/pkg/upnp"
 	"github.com/kube-vip/kube-vip/pkg/utils"
 	"github.com/prometheus/client_golang/prometheus"
-	v1 "k8s.io/api/core/v1"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 )
@@ -171,8 +171,6 @@ func New(configMap string, config *kubevip.Config) (*Manager, error) {
 	// 	}
 	// }
 
-	vvar bgpServer *bgp.Server
-
 	// listen for interrupts or the Linux SIGTERM signal and cancel
 	// our context, which the leader election code will observe and
 	// step down
@@ -185,6 +183,11 @@ func New(configMap string, config *kubevip.Config) (*Manager, error) {
 
 	// All watchers and other goroutines should have an additional goroutine that blocks on this, to shut things down
 	shutdownChan := make(chan struct{})
+
+	intfMgr := networkinterface.NewManager()
+	arpMgr := arp.NewManager(config)
+
+	svcProcessor := services.NewServicesProcessor(config, bgpServer, clientset, rwClientSet, shutdownChan, intfMgr, arpMgr)
 
 	return &Manager{
 		clientSet:   clientset,
@@ -205,7 +208,9 @@ func New(configMap string, config *kubevip.Config) (*Manager, error) {
 		}, []string{"state", "peer"}),
 		signalChan:   signalChan,
 		shutdownChan: shutdownChan,
-		svcProcessor: svcProcessor
+		svcProcessor: svcProcessor,
+		intfMgr:      intfMgr,
+		arpMgr:       arpMgr,
 	}, nil
 }
 

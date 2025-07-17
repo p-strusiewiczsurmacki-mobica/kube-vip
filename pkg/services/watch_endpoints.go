@@ -8,29 +8,30 @@ import (
 
 	"github.com/kube-vip/kube-vip/pkg/endpoints"
 	"github.com/kube-vip/kube-vip/pkg/endpoints/providers"
+	"github.com/kube-vip/kube-vip/pkg/servicecontext"
 	v1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/watch"
 )
 
-func (p *Processor) watchEndpoint(ctx context.Context, id string, service *v1.Service, provider providers.Provider) error {
+func (p *Processor) watchEndpoint(svcCtx *servicecontext.Context, id string, service *v1.Service, provider providers.Provider) error {
 	log.Info("watching", "provider", provider.GetLabel(), "service_name", service.Name, "namespace", service.Namespace)
 	// Use a restartable watcher, as this should help in the event of etcd or timeout issues
-	leaderContext, cancel := context.WithCancel(ctx)
+
+	leaderCtx, cancel := context.WithCancel(svcCtx.Ctx)
 	defer cancel()
 
 	var leaderElectionActive bool
 
-	rw, err := provider.CreateRetryWatcher(leaderContext, p.rwClientSet, service)
+	rw, err := provider.CreateRetryWatcher(leaderCtx, p.rwClientSet, service)
 	if err != nil {
-		cancel()
 		return fmt.Errorf("[%s] error watching endpoints: %w", provider.GetLabel(), err)
 	}
 
 	exitFunction := make(chan struct{})
 	go func() {
 		select {
-		case <-ctx.Done():
+		case <-svcCtx.Ctx.Done():
 			log.Debug("context cancelled", "provider", provider.GetLabel())
 			// Stop the retry watcher
 			rw.Stop()
@@ -56,7 +57,7 @@ func (p *Processor) watchEndpoint(ctx context.Context, id string, service *v1.Se
 
 	ch := rw.ResultChan()
 
-	epProcessor := endpoints.NewEndpointProcessor(p.config, provider, p.bgpServer, &p.ServiceInstances, &p.configuredLocalRoutes)
+	epProcessor := endpoints.NewEndpointProcessor(p.config, provider, p.bgpServer, &p.ServiceInstances)
 
 	var lastKnownGoodEndpoint string
 	for event := range ch {
@@ -64,7 +65,7 @@ func (p *Processor) watchEndpoint(ctx context.Context, id string, service *v1.Se
 		switch event.Type {
 
 		case watch.Added, watch.Modified:
-			restart, err := epProcessor.AddOrModify(ctx, event, cancel, &lastKnownGoodEndpoint, service, id, &leaderElectionActive, p.StartServicesLeaderElection)
+			restart, err := epProcessor.AddOrModify(svcCtx, event, &lastKnownGoodEndpoint, service, id, &leaderElectionActive, p.StartServicesLeaderElection, &leaderCtx, &cancel)
 			if restart {
 				continue
 			} else if err != nil {

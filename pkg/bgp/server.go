@@ -9,11 +9,10 @@ import (
 
 	api "github.com/osrg/gobgp/v3/api"
 	gobgp "github.com/osrg/gobgp/v3/pkg/server"
-	"github.com/prometheus/client_golang/prometheus"
 )
 
 // NewBGPServer takes a configuration and returns a running BGP server instance
-func NewBGPServer(c *Config) (b *Server, err error) {
+func NewBGPServer(c *Config, peerStateChangeCallback func(*api.WatchEventResponse_PeerEvent)) (b *Server, err error) {
 	if c.AS == 0 {
 		return nil, fmt.Errorf("you need to provide AS")
 	}
@@ -29,25 +28,13 @@ func NewBGPServer(c *Config) (b *Server, err error) {
 	b = &Server{
 		s: gobgp.NewBgpServer(),
 		c: c,
-		BGPSessionInfoGauge: prometheus.NewGaugeVec(prometheus.GaugeOpts{
-			Namespace: "kube_vip",
-			Subsystem: "manager",
-			Name:      "bgp_session_info",
-			Help:      "Display state of session by setting metric for label value with current state to 1",
-		}, []string{"state", "peer"}),
 	}
-
-	return
-}
-
-// NewBGPServer takes a configuration and returns a running BGP server instance
-func (b *Server) Start(peerStateChangeCallback func(*api.WatchEventResponse_PeerEvent)) (err error) {
 	go b.s.Serve()
 
 	if err = b.s.StartBgp(context.Background(), &api.StartBgpRequest{
 		Global: &api.Global{
-			Asn:        b.c.AS,
-			RouterId:   b.c.RouterID,
+			Asn:        c.AS,
+			RouterId:   c.RouterID,
 			ListenPort: -1,
 		},
 	}); err != nil {
@@ -65,7 +52,7 @@ func (b *Server) Start(peerStateChangeCallback func(*api.WatchEventResponse_Peer
 		return
 	}
 
-	for _, p := range b.c.Peers {
+	for _, p := range c.Peers {
 		if err = b.AddPeer(p); err != nil {
 			return
 		}

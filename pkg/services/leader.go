@@ -1,4 +1,4 @@
-package manager
+package services
 
 import (
 	"context"
@@ -69,7 +69,7 @@ func (p *Processor) StartServicesLeaderElection(ctx context.Context, service *v1
 	svcLocks[serviceLease].Lock()
 	defer svcLocks[serviceLease].Unlock()
 
-	svcCtx, err := getServiceContext(service.UID)
+	svcCtx, err := p.getServiceContext(service.UID)
 	if err != nil {
 		return fmt.Errorf("failed to get context for service %q with UID %q: %w", service.Name, service.UID, err)
 	}

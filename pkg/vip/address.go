@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"math"
 	"net"
-	"os"
 	"slices"
 	"strconv"
 	"strings"
@@ -80,14 +79,6 @@ type network struct {
 	ipvsEnabled bool
 
 	hasEndpoints bool
-}
-
-func netlinkParse(addr string) (*netlink.Addr, error) {
-	mask, err := GetFullMask(addr)
-	if err != nil {
-		return nil, err
-	}
-	return netlink.ParseAddr(addr + mask)
 }
 
 // NewConfig will attempt to provide an interface to the kernel network configuration
@@ -323,7 +314,7 @@ func (configurator *network) AddIP(precheck bool) (bool, error) {
 	exists := false
 	var err error
 	if precheck {
-		if exists, err = configurator.isSet(); err != nil {
+		if exists, err = configurator.IsSet(); err != nil {
 			return false, errors.Wrap(err, "could not check if address exists")
 		}
 	}
@@ -361,7 +352,7 @@ func (configurator *network) configureIPTables() error {
 }
 
 func (configurator *network) addressExists() (bool, error) {
-	addrs, err := netlink.AddrList(configurator.link, netlink.FAMILY_ALL)
+	addrs, err := netlink.AddrList(configurator.link.Intf, netlink.FAMILY_ALL)
 	if err != nil {
 		return false, errors.Wrap(err, "could not list addresses")
 	}
@@ -508,7 +499,7 @@ func (configurator *network) DeleteIP() (bool, error) {
 	configurator.link.Lock.Lock()
 	defer configurator.link.Lock.Unlock()
 
-	result, err := configurator.isSet()
+	result, err := configurator.IsSet()
 	if err != nil {
 		return false, errors.Wrap(err, "ip check in DeleteIP failed")
 	}
@@ -518,13 +509,13 @@ func (configurator *network) DeleteIP() (bool, error) {
 		return false, nil
 	}
 
-	if err = netlink.AddrDel(configurator.link, configurator.address); err != nil {
-		return errors.Wrap(err, "could not delete ip")
+	if err = netlink.AddrDel(configurator.link.Intf, configurator.address); err != nil {
+		return false, errors.Wrap(err, "could not delete ip")
 	}
 
 	if configurator.enableSecurity && !configurator.ignoreSecurity {
 		if err := configurator.removeIptablesRuleToLimitTrafficPorts(); err != nil {
-			return errors.Wrap(err, "could not remove iptables rules to limit traffic ports")
+			return true, errors.Wrap(err, "could not remove iptables rules to limit traffic ports")
 		}
 	}
 
@@ -629,7 +620,7 @@ func addressHasDADFAILEDFlag(address netlink.Addr) bool {
 }
 
 // isSet - Check to see if VIP is set
-func (configurator *network) isSet() (result bool, err error) {
+func (configurator *network) IsSet() (result bool, err error) {
 	var addresses []netlink.Addr
 
 	if configurator.address == nil {

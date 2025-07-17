@@ -49,7 +49,7 @@ func (p *Processor) iptablesCheck() error {
 	return nil
 }
 
-func (sm *Manager) nftablesCheck() error {
+func (p *Processor) nftablesCheck() error {
 	file, err := os.Open("/proc/modules")
 	if err != nil {
 		return err

@@ -20,13 +20,7 @@ func (sm *Manager) startBGP() error {
 	var err error
 
 	log.Info("Starting the BGP server to advertise VIP routes to BGP peers")
-
-	sm.bgpServer, err = bgp.NewBGPServer(&sm.config.BGPConfig)
-	if err != nil {
-		return fmt.Errorf("creating BGP server: %w", err)
-	}
-
-	if err := sm.bgpServer.Start(func(p *api.WatchEventResponse_PeerEvent) {
+	sm.bgpServer, err = bgp.NewBGPServer(&sm.config.BGPConfig, func(p *api.WatchEventResponse_PeerEvent) {
 		ipaddr := p.GetPeer().GetState().GetNeighborAddress()
 		port := uint64(179)
 		peerDescription := fmt.Sprintf("%s:%d", ipaddr, port)
@@ -37,12 +31,13 @@ func (sm *Manager) startBGP() error {
 				metricValue = 1
 			}
 
-			sm.bgpServer.BGPSessionInfoGauge.With(prometheus.Labels{
+			sm.bgpSessionInfoGauge.With(prometheus.Labels{
 				"state": stateName,
 				"peer":  peerDescription,
 			}).Set(metricValue)
 		}
-	}); err != nil {
+	})
+	if err != nil {
 		return err
 	}
 

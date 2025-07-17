@@ -3,8 +3,6 @@ package manager
 import (
 	"context"
 	"fmt"
-	"os"
-	"strconv"
 	"syscall"
 	"time"
 
@@ -148,7 +146,7 @@ func (sm *Manager) startTableMode(id string) error {
 			})
 		} else {
 			log.Info("beginning watching services without leader election")
-			err = sm.servicesWatcher(ctx, sm.syncServices)
+			err = sm.svcProcessor.ServicesWatcher(ctx, sm.svcProcessor.SyncServices)
 			if err != nil {
 				log.Error("Cannot watch services", "err", err)
 			}

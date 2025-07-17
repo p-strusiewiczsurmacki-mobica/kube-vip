@@ -2,7 +2,6 @@ package manager
 
 import (
 	"context"
-	"os"
 	"syscall"
 	"time"
 
