@@ -187,6 +187,14 @@ func New(configMap string, config *kubevip.Config) (*Manager, error) {
 	intfMgr := networkinterface.NewManager()
 	arpMgr := arp.NewManager(config)
 
+	var bgpServer *bgp.Server
+	if config.EnableBGP {
+		bgpServer, err = bgp.NewBGPServer(&config.BGPConfig)
+		if err != nil {
+			return nil, fmt.Errorf("creating BGP server: %w", err)
+		}
+	}
+
 	svcProcessor := services.NewServicesProcessor(config, bgpServer, clientset, rwClientSet, shutdownChan, intfMgr, arpMgr)
 
 	return &Manager{
@@ -211,6 +219,7 @@ func New(configMap string, config *kubevip.Config) (*Manager, error) {
 		svcProcessor: svcProcessor,
 		intfMgr:      intfMgr,
 		arpMgr:       arpMgr,
+		bgpServer:    bgpServer,
 	}, nil
 }
 
