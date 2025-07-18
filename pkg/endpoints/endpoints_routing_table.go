@@ -163,9 +163,9 @@ func ClearRoutes(service *v1.Service, instances *[]*instance.Instance) []error {
 func CountRouteReferences(route *netlink.Route, instances *[]*instance.Instance) int {
 	cnt := 0
 	for _, instance := range *instances {
-		if instance.HasEndpoints {
-			for _, cluster := range instance.Clusters {
-				for n := range cluster.Network {
+		for _, cluster := range instance.Clusters {
+			for n := range cluster.Network {
+				if cluster.Network[n].HasEndpoints() {
 					r := cluster.Network[n].PrepareRoute()
 					if r.Dst.String() == route.Dst.String() {
 						cnt++

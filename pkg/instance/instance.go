@@ -51,8 +51,6 @@ type Instance struct {
 
 	// Kubernetes service mapping
 	ServiceSnapshot *v1.Service
-
-	HasEndpoints bool
 }
 
 type Port struct {
