@@ -1,4 +1,4 @@
-package services
+package servicecontext
 
 import (
 	"context"
@@ -13,7 +13,7 @@ type Context struct {
 	ConfiguredNetworks sync.Map
 }
 
-func NewContext(ctx context.Context) *Context {
+func New(ctx context.Context) *Context {
 	svcCtx, svcCancel := context.WithCancel(ctx)
 	return &Context{
 		Ctx:    svcCtx,
