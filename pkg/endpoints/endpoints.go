@@ -92,7 +92,7 @@ func (p *Processor) AddOrModify(ctx *servicecontext.Context, event watch.Event,
 	p.updateAnnotations(service, lastKnownGoodEndpoint)
 
 	log.Debug("watcher", "provider",
-		p.provider.GetLabel(), "service name", service.Name, "namespace", service.Namespace, "endpoints", len(endpoints), "last endpoint", lastKnownGoodEndpoint, "active leader election", leaderElectionActive)
+		p.provider.GetLabel(), "service name", service.Name, "namespace", service.Namespace, "endpoints", len(endpoints), "last endpoint", *lastKnownGoodEndpoint, "active leader election", *leaderElectionActive)
 
 	return false, nil
 }

@@ -9,6 +9,7 @@ import (
 
 	api "github.com/osrg/gobgp/v3/api"
 	gobgp "github.com/osrg/gobgp/v3/pkg/server"
+	"github.com/prometheus/client_golang/prometheus"
 )
 
 // NewBGPServer takes a configuration and returns a running BGP server instance
@@ -28,6 +29,13 @@ func NewBGPServer(c *Config) (b *Server, err error) {
 	b = &Server{
 		s: gobgp.NewBgpServer(),
 		c: c,
+
+		BGPSessionInfoGauge: prometheus.NewGaugeVec(prometheus.GaugeOpts{
+			Namespace: "kube_vip",
+			Subsystem: "manager",
+			Name:      "bgp_session_info",
+			Help:      "Display state of session by setting metric for label value with current state to 1",
+		}, []string{"state", "peer"}),
 	}
 	return
 }
