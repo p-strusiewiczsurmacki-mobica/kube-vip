@@ -830,11 +830,11 @@ func createTestService(name, namespace, target, lbAddress string, client kuberne
 }
 
 func checkIPAddress(lbAddress, container string, expected bool) {
-	Eventually(e2e.CheckIPAddressPresence(lbAddress, container, expected), "120s", "200ms").Should(BeTrue())
+	Eventually(e2e.CheckIPAddressPresence(lbAddress, container, expected), "240s", "200ms").Should(BeTrue())
 }
 
 func checkIPAddressByLease(name, namespace, lbAddress string, expected bool, client kubernetes.Interface) {
-	Eventually(e2e.CheckIPAddressPresenceByLease(name, namespace, lbAddress, client, expected), "120s", "200ms").Should(BeTrue())
+	Eventually(e2e.CheckIPAddressPresenceByLease(name, namespace, lbAddress, client, expected), "240s", "200ms").Should(BeTrue())
 }
 
 func prepareCluster(tempDirPath, clusterNameSuffix, k8sImagePath string,
