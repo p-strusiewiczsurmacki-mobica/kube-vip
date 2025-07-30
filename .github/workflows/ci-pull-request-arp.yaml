@@ -1,4 +1,4 @@
-name: For each PR
+name: ARP For each PR
 on:
   pull_request:
 jobs:

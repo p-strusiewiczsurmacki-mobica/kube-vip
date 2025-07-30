@@ -1,4 +1,4 @@
-name: NEW For each PR
+name: RT For each PR
 on:
   pull_request:
 jobs:
