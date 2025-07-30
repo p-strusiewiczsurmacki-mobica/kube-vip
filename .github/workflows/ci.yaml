@@ -60,3 +60,13 @@ jobs:
           ignore-unfixed: true
           vuln-type: "os,library"
           severity: "CRITICAL,HIGH"
+  manifest-test:
+    runs-on: ubuntu-latest
+    name: Manifest generation test
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      - name: Build image locally
+        run: make dockerx86Local
+      - name: Run Manifest generation tests
+        run: make manifest-test
