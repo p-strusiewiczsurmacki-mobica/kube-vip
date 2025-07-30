@@ -1,6 +1,5 @@
 name: For each commit
 on:
-  push:
   pull_request:
 jobs:
   validation:
