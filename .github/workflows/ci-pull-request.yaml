@@ -40,6 +40,7 @@ jobs:
         with:
           name: e2e-test-logs
           path: /tmp/kube-vip-test*
+        if: always()
   service-e2e-tests:
     runs-on: ubuntu-latest
     name: E2E service tests
