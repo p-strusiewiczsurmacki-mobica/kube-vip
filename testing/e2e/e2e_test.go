@@ -124,7 +124,7 @@ var _ = Describe("kube-vip ARP/NDP broadcast neighbor", func() {
 				By("AfterEach")
 				Eventually(func() error {
 					return getLogs(context.Background(), client, tempDirPath)
-				}, "20s", "200ms").Should(Succeed())
+				}, "60s", "5s").Should(Succeed())
 			})
 
 			It(clusterName+" provides an IPv4 VIP address for the Kubernetes control plane nodes", func() {
@@ -167,7 +167,7 @@ var _ = Describe("kube-vip ARP/NDP broadcast neighbor", func() {
 				By("AfterEach")
 				Eventually(func() error {
 					return getLogs(context.Background(), client, tempDirPath)
-				}, "20s", "200ms").Should(Succeed())
+				}, "60s", "5s").Should(Succeed())
 			})
 
 			DescribeTable(clusterName+" configures an IPv4 VIP address for service",
@@ -224,7 +224,7 @@ var _ = Describe("kube-vip ARP/NDP broadcast neighbor", func() {
 				By("AfterEach")
 				Eventually(func() error {
 					return getLogs(context.Background(), client, tempDirPath)
-				}, "20s", "200ms").Should(Succeed())
+				}, "60s", "5s").Should(Succeed())
 			})
 
 			DescribeTable(clusterName+" configures an IPv4 VIP address for service",
@@ -272,7 +272,7 @@ var _ = Describe("kube-vip ARP/NDP broadcast neighbor", func() {
 				By("AfterEach")
 				Eventually(func() error {
 					return getLogs(context.Background(), client, tempDirPath)
-				}, "20s", "200ms").Should(Succeed())
+				}, "60s", "5s").Should(Succeed())
 			})
 
 			It(clusterName+"provides an IPv6 VIP address for the Kubernetes control plane nodes", func() {
@@ -315,7 +315,7 @@ var _ = Describe("kube-vip ARP/NDP broadcast neighbor", func() {
 				By("AfterEach")
 				Eventually(func() error {
 					return getLogs(context.Background(), client, tempDirPath)
-				}, "20s", "200ms").Should(Succeed())
+				}, "60s", "5s").Should(Succeed())
 			})
 
 			DescribeTable(clusterName+" configures an IPv6 VIP address for service",
@@ -372,7 +372,7 @@ var _ = Describe("kube-vip ARP/NDP broadcast neighbor", func() {
 				By("AfterEach")
 				Eventually(func() error {
 					return getLogs(context.Background(), client, tempDirPath)
-				}, "20s", "200ms").Should(Succeed())
+				}, "60s", "5s").Should(Succeed())
 			})
 
 			DescribeTable(clusterName+" configures an IPv6 VIP address for service",
@@ -420,7 +420,7 @@ var _ = Describe("kube-vip ARP/NDP broadcast neighbor", func() {
 				By("AfterEach")
 				Eventually(func() error {
 					return getLogs(context.Background(), client, tempDirPath)
-				}, "20s", "200ms").Should(Succeed())
+				}, "60s", "5s").Should(Succeed())
 			})
 
 			It(clusterName+" provides a DualStack VIP addresses for the Kubernetes control plane nodes", func() {
@@ -463,7 +463,7 @@ var _ = Describe("kube-vip ARP/NDP broadcast neighbor", func() {
 				By("AfterEach")
 				Eventually(func() error {
 					return getLogs(context.Background(), client, tempDirPath)
-				}, "20s", "200ms").Should(Succeed())
+				}, "60s", "5s").Should(Succeed())
 			})
 
 			DescribeTable(clusterName+" configures an IPv4 and IPv6 VIP addresses for service",
@@ -520,7 +520,7 @@ var _ = Describe("kube-vip ARP/NDP broadcast neighbor", func() {
 				By("AfterEach")
 				Eventually(func() error {
 					return getLogs(context.Background(), client, tempDirPath)
-				}, "20s", "200ms").Should(Succeed())
+				}, "60s", "5s").Should(Succeed())
 			})
 
 			DescribeTable(clusterName+" configures an IPv4 and IPv6 VIP addresses for service",
@@ -570,7 +570,7 @@ var _ = Describe("kube-vip ARP/NDP broadcast neighbor", func() {
 				By("AfterEach")
 				Eventually(func() error {
 					return getLogs(context.Background(), client, tempDirPath)
-				}, "20s", "200ms").Should(Succeed())
+				}, "60s", "5s").Should(Succeed())
 			})
 
 			It(clusterName+" provides a DualStack VIP addresses for the Kubernetes control plane nodes", func() {
@@ -615,7 +615,7 @@ var _ = Describe("kube-vip ARP/NDP broadcast neighbor", func() {
 				By("AfterEach")
 				Eventually(func() error {
 					return getLogs(context.Background(), client, tempDirPath)
-				}, "20s", "200ms").Should(Succeed())
+				}, "60s", "5s").Should(Succeed())
 			})
 
 			DescribeTable(clusterName+" configures an IPv4 and IPv6 VIP addresses for service",
@@ -674,7 +674,7 @@ var _ = Describe("kube-vip ARP/NDP broadcast neighbor", func() {
 				By("AfterEach")
 				Eventually(func() error {
 					return getLogs(context.Background(), client, tempDirPath)
-				}, "20s", "200ms").Should(Succeed())
+				}, "60s", "5s").Should(Succeed())
 			})
 
 			DescribeTable(clusterName+" configures an IPv6 VIP address for service",
@@ -722,7 +722,7 @@ var _ = Describe("kube-vip ARP/NDP broadcast neighbor", func() {
 				By("AfterEach")
 				Eventually(func() error {
 					return getLogs(context.Background(), client, tempDirPath)
-				}, "20s", "200ms").Should(Succeed())
+				}, "60s", "5s").Should(Succeed())
 			})
 
 			It(clusterName+" uses hostname fallback while providing an IPv4 VIP address for the Kubernetes control plane nodes", func() {
@@ -1057,7 +1057,10 @@ func getLogs(ctx context.Context, client kubernetes.Interface, tempDirPath strin
 		LabelSelector: "app=kube-vip",
 	}
 
-	pods, err := client.CoreV1().Pods("kube-system").List(context.Background(), listOptions)
+	intCtx, cancel := context.WithTimeout(ctx, time.Second*4)
+	defer cancel()
+
+	pods, err := client.CoreV1().Pods("kube-system").List(intCtx, listOptions)
 	if err != nil {
 		return fmt.Errorf("failed to list pods: %w", err)
 	}
@@ -1067,7 +1070,7 @@ func getLogs(ctx context.Context, client kubernetes.Interface, tempDirPath strin
 
 	for _, pod := range pods.Items {
 		req := client.CoreV1().Pods("kube-system").GetLogs(pod.Name, &corev1.PodLogOptions{})
-		podLogs, err := req.Stream(ctx)
+		podLogs, err := req.Stream(intCtx)
 		if err != nil {
 			return fmt.Errorf("reading request stream: %w", err)
 		}
