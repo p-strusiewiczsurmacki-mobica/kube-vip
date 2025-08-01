@@ -1052,6 +1052,7 @@ func cleanupCluster(clusterName, tempDirPath string, configMtx *sync.Mutex, logg
 }
 
 func getLogs(ctx context.Context, client kubernetes.Interface, tempDirPath string) error {
+	defer By("exited getLogs")
 	listOptions := metav1.ListOptions{
 		LabelSelector: "app=kube-vip",
 	}
