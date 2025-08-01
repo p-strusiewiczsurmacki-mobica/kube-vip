@@ -150,7 +150,12 @@ var _ = Describe("kube-vip BGP mode", Ordered, func() {
 					})
 					Expect(err).ToNot(HaveOccurred())
 				}
-				cleanupCluster(clusterName, tempDirPath, ConfigMtx, logger)
+				cleanupCluster(clusterName, tempDirPath, ConfigMtx, logger, client)
+			})
+
+			AfterEach(func() {
+				err := getLogs(context.Background(), client, tempDirPath)
+				Expect(err).ToNot(HaveOccurred())
 			})
 
 			DescribeTable("advertise IPv4 routes for services",
@@ -195,7 +200,12 @@ var _ = Describe("kube-vip BGP mode", Ordered, func() {
 					})
 					Expect(err).ToNot(HaveOccurred())
 				}
-				cleanupCluster(clusterName, tempDirPath, ConfigMtx, logger)
+				cleanupCluster(clusterName, tempDirPath, ConfigMtx, logger, client)
+			})
+
+			AfterEach(func() {
+				err := getLogs(context.Background(), client, tempDirPath)
+				Expect(err).ToNot(HaveOccurred())
 			})
 
 			DescribeTable("advertise IPv6 routes for services",
@@ -240,7 +250,12 @@ var _ = Describe("kube-vip BGP mode", Ordered, func() {
 					})
 					Expect(err).ToNot(HaveOccurred())
 				}
-				cleanupCluster(clusterName, tempDirPath, ConfigMtx, logger)
+				cleanupCluster(clusterName, tempDirPath, ConfigMtx, logger, client)
+			})
+
+			AfterEach(func() {
+				err := getLogs(context.Background(), client, tempDirPath)
+				Expect(err).ToNot(HaveOccurred())
 			})
 
 			DescribeTable("advertise IPv6 routes over IPv4 session",
@@ -285,7 +300,12 @@ var _ = Describe("kube-vip BGP mode", Ordered, func() {
 					})
 					Expect(err).ToNot(HaveOccurred())
 				}
-				cleanupCluster(clusterName, tempDirPath, ConfigMtx, logger)
+				cleanupCluster(clusterName, tempDirPath, ConfigMtx, logger, client)
+			})
+
+			AfterEach(func() {
+				err := getLogs(context.Background(), client, tempDirPath)
+				Expect(err).ToNot(HaveOccurred())
 			})
 
 			DescribeTable("advertise IPv4 routes over IPv6 session",
@@ -331,7 +351,12 @@ var _ = Describe("kube-vip BGP mode", Ordered, func() {
 					})
 					Expect(err).ToNot(HaveOccurred())
 				}
-				cleanupCluster(clusterName, tempDirPath, ConfigMtx, logger)
+				cleanupCluster(clusterName, tempDirPath, ConfigMtx, logger, client)
+			})
+
+			AfterEach(func() {
+				err := getLogs(context.Background(), client, tempDirPath)
+				Expect(err).ToNot(HaveOccurred())
 			})
 
 			DescribeTable("advertise IPv6 routes over IPv4 session",
@@ -377,7 +402,12 @@ var _ = Describe("kube-vip BGP mode", Ordered, func() {
 					})
 					Expect(err).ToNot(HaveOccurred())
 				}
-				cleanupCluster(clusterName, tempDirPath, ConfigMtx, logger)
+				cleanupCluster(clusterName, tempDirPath, ConfigMtx, logger, client)
+			})
+
+			AfterEach(func() {
+				err := getLogs(context.Background(), client, tempDirPath)
+				Expect(err).ToNot(HaveOccurred())
 			})
 
 			DescribeTable("advertise IPv4 routes over IPv6 session",
