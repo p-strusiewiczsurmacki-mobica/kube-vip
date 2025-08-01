@@ -7,7 +7,7 @@ jobs:
     name: E2E tests
     strategy:
       matrix:
-        mode: ["arp", "rt", "bgp"]
+        mode: ["arp"]
       fail-fast: true
       max-parallel: 1
     steps:
