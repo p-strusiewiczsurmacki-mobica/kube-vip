@@ -11,6 +11,7 @@ import (
 	"github.com/kube-vip/kube-vip/pkg/endpoints/providers"
 	"github.com/kube-vip/kube-vip/pkg/instance"
 	"github.com/kube-vip/kube-vip/pkg/kubevip"
+	"github.com/kube-vip/kube-vip/pkg/lease"
 	"github.com/kube-vip/kube-vip/pkg/servicecontext"
 	v1 "k8s.io/api/core/v1"
 	discoveryv1 "k8s.io/api/discovery/v1"
@@ -23,26 +24,27 @@ type Processor struct {
 	bgpServer *bgp.Server
 	worker    endpointWorker
 	instances *[]*instance.Instance
+	leaseMgr  *lease.Manager
 }
 
 func NewEndpointProcessor(config *kubevip.Config, provider providers.Provider, bgpServer *bgp.Server,
-	instances *[]*instance.Instance) *Processor {
+	instances *[]*instance.Instance, leaseMgr *lease.Manager) *Processor {
 	return &Processor{
 		config:    config,
 		provider:  provider,
 		bgpServer: bgpServer,
 		instances: instances,
-		worker:    newEndpointWorker(config, provider, bgpServer, instances),
+		worker:    newEndpointWorker(config, provider, bgpServer, instances, leaseMgr),
+		leaseMgr:  leaseMgr,
 	}
 }
 
 func (p *Processor) AddOrModify(ctx *servicecontext.Context, event watch.Event,
 	lastKnownGoodEndpoint *string, service *v1.Service, id string, leaderElectionActive *bool,
-	serviceFunc func(context.Context, *v1.Service) error,
-	leaderCtx *context.Context, cancel *context.CancelFunc) (bool, error) {
+	serviceFunc func(context.Context, *v1.Service) error) (bool, error) {
 
 	var err error
-	if err = p.provider.LoadObject(event.Object, *cancel); err != nil {
+	if err = p.provider.LoadObject(event.Object); err != nil {
 		return false, fmt.Errorf("[%s] error loading k8s object: %w", p.provider.GetLabel(), err)
 	}
 
@@ -68,12 +70,11 @@ func (p *Processor) AddOrModify(ctx *servicecontext.Context, event watch.Event,
 			return true, nil
 		}
 
-		p.updateLastKnownGoodEndpoint(lastKnownGoodEndpoint, endpoints, service, leaderElectionActive, *cancel)
+		p.updateLastKnownGoodEndpoint(lastKnownGoodEndpoint, endpoints, service, leaderElectionActive)
 		// start leader election if it's enabled and not already started
 		if !*leaderElectionActive && p.config.EnableServicesElection {
 			go func() {
-				*leaderCtx, *cancel = context.WithCancel(ctx.Ctx)
-				startLeaderElection(*leaderCtx, leaderElectionActive, service, serviceFunc)
+				p.startLeaderElection(leaderElectionActive, service, serviceFunc)
 			}()
 		}
 
@@ -85,7 +86,7 @@ func (p *Processor) AddOrModify(ctx *servicecontext.Context, event watch.Event,
 		}
 	} else {
 		// There are no local endpoints
-		p.worker.clear(ctx, lastKnownGoodEndpoint, service, *cancel, leaderElectionActive)
+		p.worker.clear(ctx, lastKnownGoodEndpoint, service, leaderElectionActive)
 	}
 
 	// Set the service accordingly
@@ -104,7 +105,7 @@ func (p *Processor) Delete(service *v1.Service, id string) error {
 	return nil
 }
 
-func (p *Processor) updateLastKnownGoodEndpoint(lastKnownGoodEndpoint *string, endpoints []string, service *v1.Service, leaderElectionActive *bool, cancel context.CancelFunc) {
+func (p *Processor) updateLastKnownGoodEndpoint(lastKnownGoodEndpoint *string, endpoints []string, service *v1.Service, leaderElectionActive *bool) {
 	// if we haven't populated one, then do so
 	if *lastKnownGoodEndpoint == "" {
 		*lastKnownGoodEndpoint = endpoints[0]
@@ -125,7 +126,7 @@ func (p *Processor) updateLastKnownGoodEndpoint(lastKnownGoodEndpoint *string, e
 		if *leaderElectionActive && (p.config.EnableServicesElection || p.config.EnableLeaderElection) {
 			log.Warn("existing endpoint has been removed, restarting leaderElection", "provider", p.provider.GetLabel(), "endpoint", *lastKnownGoodEndpoint)
 			// Stop the existing leaderElection
-			cancel()
+			p.leaseMgr.Delete(service)
 			// disable last leaderElection flag
 			*leaderElectionActive = false
 		}
@@ -146,20 +147,31 @@ func (p *Processor) updateAnnotations(service *v1.Service, lastKnownGoodEndpoint
 	}
 }
 
-func startLeaderElection(ctx context.Context, leaderElectionActive *bool, service *v1.Service, serviceFunc func(context.Context, *v1.Service) error) {
+func (p *Processor) startLeaderElection(leaderElectionActive *bool, service *v1.Service, serviceFunc func(context.Context, *v1.Service) error) {
 	// This is a blocking function, that will restart (in the event of failure)
 	for {
+		lease := p.leaseMgr.Get(service)
 		// if the context isn't cancelled restart
-		if ctx.Err() != context.Canceled {
+		if lease == nil {
 			*leaderElectionActive = true
-			err := serviceFunc(ctx, service)
+			err := serviceFunc(nil, service)
 			if err != nil {
 				log.Error(err.Error())
 			}
 			*leaderElectionActive = false
 		} else {
-			*leaderElectionActive = false
-			break
+			if lease.Ctx.Err() != context.Canceled {
+				*leaderElectionActive = true
+				err := serviceFunc(lease.Ctx, service)
+				if err != nil {
+					log.Error(err.Error())
+				}
+				*leaderElectionActive = false
+			} else {
+				*leaderElectionActive = false
+				break
+			}
 		}
+
 	}
 }

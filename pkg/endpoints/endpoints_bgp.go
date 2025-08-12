@@ -1,7 +1,6 @@
 package endpoints
 
 import (
-	"context"
 	"fmt"
 	log "log/slog"
 
@@ -45,7 +44,7 @@ func (b *BGP) processInstance(ctx *servicecontext.Context, service *v1.Service, 
 	return nil
 }
 
-func (b *BGP) clear(ctx *servicecontext.Context, lastKnownGoodEndpoint *string, service *v1.Service, cancel context.CancelFunc, leaderElectionActive *bool) {
+func (b *BGP) clear(ctx *servicecontext.Context, lastKnownGoodEndpoint *string, service *v1.Service, leaderElectionActive *bool) {
 	if !b.config.EnableServicesElection && !b.config.EnableLeaderElection {
 		// If BGP mode is enabled - routes should be deleted
 		if instance := instance.FindServiceInstance(service, *b.instances); instance != nil {
@@ -66,7 +65,7 @@ func (b *BGP) clear(ctx *servicecontext.Context, lastKnownGoodEndpoint *string, 
 		}
 	}
 
-	b.clearEgress(lastKnownGoodEndpoint, service, cancel, leaderElectionActive)
+	b.clearEgress(lastKnownGoodEndpoint, service, leaderElectionActive)
 }
 
 func (b *BGP) getEndpoints(service *v1.Service, id string) ([]string, error) {

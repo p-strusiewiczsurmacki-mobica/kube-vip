@@ -50,11 +50,10 @@ func (ep *Endpoints) CreateRetryWatcher(ctx context.Context, clientSet *kubernet
 	return rw, nil
 }
 
-func (ep *Endpoints) LoadObject(endpoints runtime.Object, cancel context.CancelFunc) error {
+func (ep *Endpoints) LoadObject(endpoints runtime.Object) error {
 	//nolint:staticcheck // SA1019 endpoints have to be explicitly requested now
 	eps, ok := endpoints.(*v1.Endpoints)
 	if !ok {
-		cancel()
 		return fmt.Errorf("[%s] unable to parse Kubernetes services from API watcher", ep.GetLabel())
 	}
 	ep.endpoints = eps
