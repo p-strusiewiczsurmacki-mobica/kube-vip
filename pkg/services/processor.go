@@ -149,6 +149,7 @@ func (p *Processor) AddOrModify(ctx context.Context, event watch.Event, serviceF
 						svcCtx.Cancel()
 						log.Warn("(svcs) waiting for load balancer to finish")
 						<-svcCtx.Ctx.Done()
+						p.leaseMgr.Delete(svc)
 					}
 
 					err = p.deleteService(svc.UID)
@@ -307,6 +308,7 @@ func (p *Processor) Delete(event watch.Event) (bool, error) {
 		svcCtx.Cancel()
 		log.Warn("(svcs) waiting for load balancer to finish")
 		<-svcCtx.Ctx.Done()
+		p.leaseMgr.Delete(svc)
 		p.svcMap.Delete(svc.UID)
 	}
 
