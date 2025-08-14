@@ -3,24 +3,16 @@ package services
 import (
 	"context"
 	"fmt"
-	"sync"
 	"time"
 
 	log "log/slog"
 
+	"github.com/kube-vip/kube-vip/pkg/lease"
 	v1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/tools/leaderelection"
 	"k8s.io/client-go/tools/leaderelection/resourcelock"
 )
-
-var (
-	svcLocks map[string]*sync.Mutex
-)
-
-func init() {
-	svcLocks = make(map[string]*sync.Mutex)
-}
 
 // The StartServicesWatchForLeaderElection function will start a services watcher, the
 func (p *Processor) StartServicesWatchForLeaderElection(ctx context.Context) error {
@@ -44,14 +36,14 @@ func (p *Processor) StartServicesWatchForLeaderElection(ctx context.Context) err
 }
 
 // The startServicesWatchForLeaderElection function will start a services watcher, the
-func (p *Processor) StartServicesLeaderElection(ctx context.Context, service *v1.Service) error {
-	serviceLease := fmt.Sprintf("kubevip-%s", service.Name)
-	log.Info("new leader election", "service", service.Name, "namespace", service.Namespace, "lock_name", serviceLease, "host_id", p.config.NodeName)
+func (p *Processor) StartServicesLeaderElection(_ context.Context, service *v1.Service) error {
+	leaseName := lease.GetName(service)
+	log.Info("new leader election", "service", service.Name, "namespace", service.Namespace, "lock_name", leaseName, "host_id", p.config.NodeName)
 	// we use the Lease lock type since edits to Leases are less common
 	// and fewer objects in the cluster watch "all Leases".
 	lock := &resourcelock.LeaseLock{
 		LeaseMeta: metav1.ObjectMeta{
-			Name:      serviceLease,
+			Name:      leaseName,
 			Namespace: service.Namespace,
 		},
 		Client: p.clientSet.CoordinationV1(),
@@ -59,15 +51,18 @@ func (p *Processor) StartServicesLeaderElection(ctx context.Context, service *v1
 			Identity: p.config.NodeName,
 		},
 	}
-	childCtx, childCancel := context.WithCancel(ctx)
-	defer childCancel()
 
-	if _, ok := svcLocks[serviceLease]; !ok {
-		svcLocks[serviceLease] = new(sync.Mutex)
+	if isNew := p.leaseMgr.Add(service); !isNew {
+		return nil
 	}
 
-	svcLocks[serviceLease].Lock()
-	defer svcLocks[serviceLease].Unlock()
+	svcLease := p.leaseMgr.Get(service)
+	if svcLease == nil {
+		return fmt.Errorf("failed to find lease for service %s/%s", service.Namespace, service.Name)
+	}
+
+	svcLease.Lock.Lock()
+	defer svcLease.Lock.Unlock()
 
 	svcCtx, err := p.getServiceContext(service.UID)
 	if err != nil {
@@ -80,7 +75,7 @@ func (p *Processor) StartServicesLeaderElection(ctx context.Context, service *v1
 	svcCtx.IsActive = true
 
 	// start the leader election code loop
-	leaderelection.RunOrDie(childCtx, leaderelection.LeaderElectionConfig{
+	leaderelection.RunOrDie(svcLease.Ctx, leaderelection.LeaderElectionConfig{
 		Lock: lock,
 		// IMPORTANT: you MUST ensure that any code you have that
 		// is protected by the lease must terminate **before**
@@ -98,7 +93,7 @@ func (p *Processor) StartServicesLeaderElection(ctx context.Context, service *v1
 				// we run this in background as it's blocking
 				if err := p.SyncServices(ctx, service); err != nil {
 					log.Error("service sync", "err", err)
-					childCancel()
+					p.leaseMgr.Delete(service)
 				}
 			},
 			OnStoppedLeading: func() {
