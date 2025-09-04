@@ -17,6 +17,6 @@ type Provider interface {
 	GetLocalEndpoints(string, *kubevip.Config) ([]string, error)
 	GetLabel() string
 	UpdateServiceAnnotation(string, string, *v1.Service, *kubernetes.Clientset) error
-	LoadObject(runtime.Object, context.CancelFunc) error
+	LoadObject(runtime.Object) error
 	GetProtocol() string
 }

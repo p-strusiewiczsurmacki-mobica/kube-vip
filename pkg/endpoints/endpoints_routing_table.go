@@ -1,7 +1,6 @@
 package endpoints
 
 import (
-	"context"
 	"errors"
 	"fmt"
 	"net"
@@ -69,7 +68,7 @@ func (rt *RoutingTable) processInstance(ctx *servicecontext.Context, service *v1
 	return nil
 }
 
-func (rt *RoutingTable) clear(svcCtx *servicecontext.Context, lastKnownGoodEndpoint *string, service *v1.Service, cancel context.CancelFunc, leaderElectionActive *bool) {
+func (rt *RoutingTable) clear(svcCtx *servicecontext.Context, lastKnownGoodEndpoint *string, service *v1.Service, leaderElectionActive *bool) {
 	if !rt.config.EnableServicesElection && !rt.config.EnableLeaderElection {
 		if errs := ClearRoutes(service, rt.instances); len(errs) == 0 {
 			svcCtx.ConfiguredNetworks.Clear()
@@ -80,7 +79,7 @@ func (rt *RoutingTable) clear(svcCtx *servicecontext.Context, lastKnownGoodEndpo
 		}
 	}
 
-	rt.clearEgress(lastKnownGoodEndpoint, service, cancel, leaderElectionActive)
+	rt.clearEgress(lastKnownGoodEndpoint, service, leaderElectionActive)
 }
 
 func (rt *RoutingTable) getEndpoints(service *v1.Service, id string) ([]string, error) {

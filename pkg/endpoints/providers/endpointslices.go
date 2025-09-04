@@ -50,10 +50,9 @@ func (ep *Endpointslices) CreateRetryWatcher(ctx context.Context, clientSet *kub
 	return rw, nil
 }
 
-func (ep *Endpointslices) LoadObject(endpoints runtime.Object, cancel context.CancelFunc) error {
+func (ep *Endpointslices) LoadObject(endpoints runtime.Object) error {
 	eps, ok := endpoints.(*discoveryv1.EndpointSlice)
 	if !ok {
-		cancel()
 		return fmt.Errorf("[%s] error casting endpoints to v1.Endpoints struct", ep.label)
 	}
 	ep.endpoints = eps
