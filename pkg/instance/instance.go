@@ -103,6 +103,7 @@ func NewInstance(svc *v1.Service, config *kubevip.Config, intfMgr *networkinterf
 			}
 		}
 
+		log.Debug("splitting", "subnet", config.VIPSubnet)
 		cidrs := vip.Split(config.VIPSubnet)
 
 		ipv4AutoSubnet := false
@@ -464,7 +465,7 @@ func FetchServiceAddresses(s *v1.Service) ([]string, []string) {
 	if lbIP := net.ParseIP(s.Spec.LoadBalancerIP); lbIP != nil && len(lbStatusAddresses) > 0 {
 		isLbIPv4 := utils.IsIPv4(s.Spec.LoadBalancerIP)
 		for _, a := range lbStatusAddresses {
-			if lbStatusIP := net.ParseIP(a); lbStatusIP != nil && lbIP != nil && utils.IsIPv4(a) == isLbIPv4 && !lbIP.Equal(lbStatusIP) {
+			if lbStatusIP := net.ParseIP(a); lbStatusIP != nil && utils.IsIPv4(a) == isLbIPv4 && !lbIP.Equal(lbStatusIP) {
 				return []string{s.Spec.LoadBalancerIP}, []string{}
 			}
 		}

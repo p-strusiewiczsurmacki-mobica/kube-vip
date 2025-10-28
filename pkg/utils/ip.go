@@ -2,6 +2,7 @@ package utils
 
 import (
 	"fmt"
+	log "log/slog"
 	"net"
 )
 
@@ -25,10 +26,13 @@ func IsIP(address string) bool {
 
 // IsIPv4 returns true only if address is a valid IPv4 address
 func IsIPv4(address string) bool {
+	log.Debug("ISIPv4", "address", address)
 	ip := net.ParseIP(address)
 	if ip == nil {
+		log.Debug("ip is nil")
 		return false
 	}
+	log.Debug("checking", "ip", ip.String())
 	return ip.To4() != nil
 }
 

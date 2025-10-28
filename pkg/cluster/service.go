@@ -44,15 +44,20 @@ func (cluster *Cluster) vipService(ctxArp, ctxDNS context.Context, c *kubevip.Co
 
 	var arpWG sync.WaitGroup
 
+	log.Debug("info", "subnet", c.VIPSubnet)
+
 	for i := range cluster.Network {
 		network := cluster.Network[i]
+
+		log.Debug("setmask", "subnet", c.VIPSubnet)
 		if err := network.SetMask(c.VIPSubnet); err != nil {
 			log.Error("failed to set mask", "subnet", c.VIPSubnet, "err", err)
 			panic("")
 		}
+
 		if network.IsDDNS() {
-			if err := cluster.StartDDNS(ctxDNS); err != nil {
-				log.Error(err.Error())
+			if err := cluster.StartDDNS(ctxDNS, cluster.Network[i]); err != nil {
+				log.Error("failed to start DDNS", "err", err)
 			}
 		}
 
@@ -276,6 +281,7 @@ func (cluster *Cluster) StartLoadBalancerService(ctx context.Context, c *kubevip
 	for i := range cluster.Network {
 		network := cluster.Network[i]
 		log.Debug("current ip to process", "ip", network.IP())
+		log.Debug("setMask lb", "subnet", c.VIPSubnet)
 		if err := network.SetMask(c.VIPSubnet); err != nil {
 			log.Error("failed to set mask", "subnet", c.VIPSubnet, "err", err)
 			panic("")

@@ -2,6 +2,7 @@ package cluster
 
 import (
 	"context"
+	log "log/slog"
 
 	"github.com/kube-vip/kube-vip/pkg/vip"
 )
@@ -12,16 +13,19 @@ import (
 // during runtime if IP changes, startDDNS don't have to do reconfigure because
 // dnsUpdater already have the functionality to keep trying resolve the IP
 // and update the VIP configuration if it changes
-func (cluster *Cluster) StartDDNS(ctx context.Context) error {
-	for i := range cluster.Network {
-		ddnsMgr := vip.NewDDNSManager(ctx, cluster.Network[i])
-		ip, err := ddnsMgr.Start()
-		if err != nil {
-			return err
-		}
-		if err = cluster.Network[i].SetIP(ip); err != nil {
-			return err
-		}
+func (cluster *Cluster) StartDDNS(ctx context.Context, network vip.Network) error {
+	log.Debug("processig DDNS net")
+	ddnsMgr := vip.NewDDNSManager(ctx, network)
+	log.Debug("starting DDNS manager")
+	ip, err := ddnsMgr.Start()
+	if err != nil {
+		log.Debug("ddnsMgr start", "err", err)
+		return err
+	}
+	log.Debug("ddnsMgr got", "ip", ip)
+	if err = network.SetIP(ip); err != nil {
+		log.Debug("ddnsMgr set ip", "err", err)
+		return err
 	}
 
 	return nil

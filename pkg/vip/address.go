@@ -95,6 +95,8 @@ func NewConfig(address string, iface string, loGlobalScope bool, subnet string, 
 
 	networkLink := intfMgr.Get(link)
 
+	log.Debug("SUBNET LOL", "value", subnet)
+
 	if utils.IsIP(address) {
 		result := &network{
 			link:             networkLink,
@@ -110,16 +112,20 @@ func NewConfig(address string, iface string, loGlobalScope bool, subnet string, 
 		if err != nil {
 			return networks, fmt.Errorf("unable to select subnet for IP %q from %q: %w", address, subnet, err)
 		}
+		log.Debug("selected", "subnet", subnet, "address", address)
 
 		// Check if the subnet needs overriding
 		cidr, err := utils.FormatIPWithSubnetMask(address, subnet)
 		if err != nil {
 			return networks, errors.Wrapf(err, "could not format address '%s' with subnetMask '%s'", address, subnet)
 		}
+		log.Debug("parsed", "cidr", cidr)
 		result.address, err = netlink.ParseAddr(cidr)
 		if err != nil {
 			return networks, errors.Wrapf(err, "could not parse address '%s'", address)
 		}
+
+		log.Debug("result", "address", result.address)
 
 		// set address as deprecated so it isn't used as source address according to RFC 3484
 		result.address.PreferedLft = 0
@@ -135,11 +141,13 @@ func NewConfig(address string, iface string, loGlobalScope bool, subnet string, 
 		networks = append(networks, result)
 	} else {
 		// try to resolve the address
+		log.Debug("looking up host", "address", address, "dnsMode", dnsMode)
 		ips, err := utils.LookupHost(address, dnsMode)
 		if err != nil {
 			// return early for ddns if no IP is allocated for the domain
 			// when leader starts, should do get IP from DHCP for the domain
 			if isDDNS {
+				log.Debug("is DDNS")
 				result := &network{
 					link:             networkLink,
 					routeTable:       tableID,
@@ -151,15 +159,46 @@ func NewConfig(address string, iface string, loGlobalScope bool, subnet string, 
 					dnsName:          address,
 					ipvsEnabled:      ipvsEnabled,
 					enableSecurity:   enableSecurity,
+					address:          &netlink.Addr{},
 				}
+
+				subnetVal, err := strconv.ParseInt(subnet, 10, 8)
+				if err != nil {
+					return nil, fmt.Errorf("failed to parse subnet %q: %w", subnet, err)
+				}
+
+				addr := "127.0.0.1"
+				if subnetVal > 32 {
+					addr = "::"
+				}
+
+				cidr, err := utils.FormatIPWithSubnetMask(addr, subnet)
+				if err != nil {
+					return networks, errors.Wrapf(err, "could not format address '%s' with subnetMask '%s'", address, subnet)
+				}
+				log.Debug("parsed", "cidr", cidr)
+				result.address, err = netlink.ParseAddr(cidr)
+				if err != nil {
+					return networks, errors.Wrapf(err, "could not parse address '%s'", address)
+				}
+
+				log.Debug("result", "address", result.address)
+
+				// set address as deprecated so it isn't used as source address according to RFC 3484
+				result.address.PreferedLft = 0
+
+				// Also set ValidLft so the netlink library actually sets them
+				result.address.ValidLft = math.MaxInt
 
 				networks = append(networks, result)
 				return networks, nil
 			}
+			log.Debug("returning error", "Err", err)
 			return nil, err
 		}
 
 		for _, ip := range ips {
+			log.Debug("processing ip", "ip", ip, "subnet", subnet)
 			result := &network{
 				link:             networkLink,
 				routeTable:       tableID,
@@ -175,7 +214,14 @@ func NewConfig(address string, iface string, loGlobalScope bool, subnet string, 
 
 			// we're able to resolve store this as the initial IP
 
-			if result.address, err = netlink.ParseAddr(fmt.Sprintf("%s/%s", ip, subnet)); err != nil {
+			subnets := Split(subnet)
+
+			s := subnet
+			if len(subnets) > 1 {
+				s = selectSubnet(ip, subnets)
+			}
+
+			if result.address, err = netlink.ParseAddr(fmt.Sprintf("%s/%s", ip, s)); err != nil {
 				return networks, err
 			}
 			// set ValidLft so that the VIP expires if the DNS entry is updated, otherwise it'll be refreshed by the DNS prober
@@ -610,6 +656,12 @@ func (configurator *network) IsSet() (result bool, err error) {
 	var addresses []netlink.Addr
 
 	if configurator.address == nil {
+		log.Debug("IsSet configurator address nil")
+		return false, nil
+	}
+
+	if configurator.address.Mask == nil {
+		log.Debug("IsSet configurator address mask nil")
 		return false, nil
 	}
 
@@ -640,6 +692,7 @@ func (configurator *network) SetIP(ip string) error {
 	if strings.Contains("/", ip) {
 		return fmt.Errorf("ip should not contain CIDR notation got: %s", ip)
 	}
+
 	ones, _ := configurator.address.Mask.Size()
 	cidr, err := utils.FormatIPWithSubnetMask(ip, strconv.Itoa(ones))
 	if err != nil {
@@ -678,12 +731,20 @@ func (configurator *network) IP() string {
 	configurator.mu.Lock()
 	defer configurator.mu.Unlock()
 
+	if configurator.address == nil || configurator.address.IP == nil {
+		return ""
+	}
+
 	return configurator.address.IP.String()
 }
 
 func (configurator *network) CIDR() string {
 	configurator.mu.Lock()
 	defer configurator.mu.Unlock()
+
+	if configurator.address == nil || configurator.address.IPNet == nil {
+		return ""
+	}
 
 	return configurator.address.IPNet.String()
 }
@@ -758,9 +819,14 @@ func GarbageCollect(adapter, address string, intfMgr *networkinterface.Manager) 
 }
 
 func (configurator *network) SetMask(mask string) error {
-	selectedMask, err := SelectSubnet(configurator.IP(), mask)
-	if err != nil {
-		return fmt.Errorf("failed to select mask %q: %w", mask, err)
+	selectedMask := mask
+	var err error
+
+	if configurator.IP() != "" {
+		selectedMask, err = SelectSubnet(configurator.IP(), mask)
+		if err != nil {
+			return fmt.Errorf("failed to select mask %q: %w", mask, err)
+		}
 	}
 
 	m, err := strconv.Atoi(selectedMask)
@@ -771,13 +837,16 @@ func (configurator *network) SetMask(mask string) error {
 	size := 32
 	family := "IPv4"
 
-	if utils.IsIPv6(configurator.IP()) {
-		size = 128
-		family = "IPv6"
-	}
+	if configurator.IP() != "" {
+		if utils.IsIPv6(configurator.IP()) {
+			size = 128
+			family = "IPv6"
+		}
 
-	if m > size {
-		return fmt.Errorf("provided CIDR mask '%d' is greater than the highest mask value for the %s family (%d)", m, family, size)
+		if m > size {
+			return fmt.Errorf("provided CIDR mask '%d' is greater than the highest mask value for the %s family (%d)", m, family, size)
+		}
+
 	}
 
 	toSet := net.CIDRMask(m, size)

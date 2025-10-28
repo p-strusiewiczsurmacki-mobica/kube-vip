@@ -5,7 +5,7 @@ TARGET := kube-vip
 .DEFAULT_GOAL := $(TARGET)
 
 # These will be provided to the target
-VERSION := v1.0.1
+VERSION := v1.0.2
 
 BUILD := `git rev-parse HEAD`
 
@@ -15,7 +15,7 @@ TARGETOS=linux
 # Use linker flags to provide version/build settings to the target
 LDFLAGS=-ldflags "-s -w -X=main.Version=$(VERSION) -X=main.Build=$(BUILD) -extldflags -static"
 DOCKERTAG ?= $(VERSION)
-REPOSITORY ?= docker.io/plndr
+REPOSITORY ?= harbor.local/library
 
 .PHONY: all build clean install uninstall simplify check run e2e-tests
 
