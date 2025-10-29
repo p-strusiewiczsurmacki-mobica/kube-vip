@@ -159,27 +159,10 @@ func NewConfig(address string, iface string, loGlobalScope bool, subnet string, 
 					dnsName:          address,
 					ipvsEnabled:      ipvsEnabled,
 					enableSecurity:   enableSecurity,
-					address:          &netlink.Addr{},
-				}
-
-				subnetVal, err := strconv.ParseInt(subnet, 10, 8)
-				if err != nil {
-					return nil, fmt.Errorf("failed to parse subnet %q: %w", subnet, err)
-				}
-
-				addr := "127.0.0.1"
-				if subnetVal > 32 {
-					addr = "::"
-				}
-
-				cidr, err := utils.FormatIPWithSubnetMask(addr, subnet)
-				if err != nil {
-					return networks, errors.Wrapf(err, "could not format address '%s' with subnetMask '%s'", address, subnet)
-				}
-				log.Debug("parsed", "cidr", cidr)
-				result.address, err = netlink.ParseAddr(cidr)
-				if err != nil {
-					return networks, errors.Wrapf(err, "could not parse address '%s'", address)
+					address: &netlink.Addr{ // create placeholder for the address
+						IPNet: &net.IPNet{}, // that will be added later in the process
+						Peer:  &net.IPNet{},
+					},
 				}
 
 				log.Debug("result", "address", result.address)

@@ -49,16 +49,17 @@ func (cluster *Cluster) vipService(ctxArp, ctxDNS context.Context, c *kubevip.Co
 	for i := range cluster.Network {
 		network := cluster.Network[i]
 
+		if network.IsDDNS() {
+			log.Debug("starting ddns", "network", i)
+			if err := cluster.StartDDNS(ctxDNS, cluster.Network[i]); err != nil {
+				log.Error("failed to start DDNS", "err", err)
+			}
+		}
+
 		log.Debug("setmask", "subnet", c.VIPSubnet)
 		if err := network.SetMask(c.VIPSubnet); err != nil {
 			log.Error("failed to set mask", "subnet", c.VIPSubnet, "err", err)
 			panic("")
-		}
-
-		if network.IsDDNS() {
-			if err := cluster.StartDDNS(ctxDNS, cluster.Network[i]); err != nil {
-				log.Error("failed to start DDNS", "err", err)
-			}
 		}
 
 		// start the dns updater if address is dns
