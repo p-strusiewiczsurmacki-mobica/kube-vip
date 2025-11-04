@@ -145,21 +145,29 @@ func GetNonLinkLocalIP(iface *netlink.Link, family int) (string, error) {
 	return "", fmt.Errorf("failed to find non-local IP on interface: %s", (*iface).Attrs().Name)
 }
 
-func selectSubnet(address string, subnets []string) string {
+func selectSubnet(address string, subnets []string) (string, error) {
 	subnet := ""
 	if utils.IsIPv4(address) {
 		if subnets[0] != "" {
 			subnet = subnets[0]
 		} else {
-			subnet = strconv.Itoa(defaultMaskIPv4)
+			subnet = strconv.Itoa(DefaultMaskIPv4)
 		}
 	} else {
 		if len(subnets) > 1 && subnets[1] != "" {
 			subnet = subnets[1]
 		} else {
-			subnet = strconv.Itoa(defaultMaskIPv6)
+			subnet = strconv.Itoa(DefaultMaskIPv6)
 		}
 	}
 
-	return subnet
+	s, err := strconv.Atoi(subnet)
+	if err != nil {
+		return "", fmt.Errorf("failed to parse subnet %q: %w", subnet, err)
+	}
+	if (utils.IsIPv4(address) && s > DefaultMaskIPv4) || (utils.IsIPv6(address) && s > DefaultMaskIPv6) {
+		return "", fmt.Errorf("invalid subnet %q for address %q", subnet, address)
+	}
+
+	return subnet, nil
 }
