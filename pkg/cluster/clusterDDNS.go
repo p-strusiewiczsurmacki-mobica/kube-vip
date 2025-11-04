@@ -2,6 +2,7 @@ package cluster
 
 import (
 	"context"
+	log "log/slog"
 
 	"github.com/kube-vip/kube-vip/pkg/vip"
 )
@@ -18,6 +19,7 @@ func (cluster *Cluster) StartDDNS(ctx context.Context, network vip.Network) erro
 	if err != nil {
 		return err
 	}
+	log.Debug("ddns for", "address", network.DNSName(), "ip", ip)
 	if err = network.SetIP(ip); err != nil {
 		return err
 	}

@@ -15,7 +15,7 @@ TARGETOS=linux
 # Use linker flags to provide version/build settings to the target
 LDFLAGS=-ldflags "-s -w -X=main.Version=$(VERSION) -X=main.Build=$(BUILD) -extldflags -static"
 DOCKERTAG ?= $(VERSION)
-REPOSITORY ?= docker.io/plndr
+REPOSITORY ?= harbor.local/library
 
 .PHONY: all build clean install uninstall simplify check run e2e-tests
 

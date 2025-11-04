@@ -43,6 +43,8 @@ type Instance struct {
 
 	// Kubernetes service mapping
 	ServiceSnapshot *v1.Service
+
+	dnsAddresses []string
 }
 
 type Port struct {
@@ -51,11 +53,13 @@ type Port struct {
 }
 
 func NewInstance(svc *v1.Service, config *kubevip.Config, intfMgr *networkinterface.Manager, arpMgr *arp.Manager) (*Instance, error) {
-	instanceAddresses, _ := FetchServiceAddresses(svc)
+	instanceAddresses, instanceHostnames := FetchServiceAddresses(svc)
+	log.Info("NewInstance used", "instanceAddresses", instanceAddresses, "instanceHostnames", instanceHostnames)
 
 	var newVips []*kubevip.Config
 	var link netlink.Link
 	var err error
+	var dnsAddresses []string
 
 	for _, address := range instanceAddresses {
 		// Detect if we're using a specific interface for services
@@ -131,7 +135,7 @@ func NewInstance(svc *v1.Service, config *kubevip.Config, intfMgr *networkinterf
 				if cidrs[0] != "" && cidrs[0] != kubevip.Auto {
 					subnet = cidrs[0]
 				} else {
-					subnet = "32"
+					subnet = strconv.Itoa(vip.DefaultMaskIPv4)
 				}
 			}
 		} else {
@@ -144,7 +148,7 @@ func NewInstance(svc *v1.Service, config *kubevip.Config, intfMgr *networkinterf
 				if len(cidrs) > 1 && cidrs[1] != "" && cidrs[1] != kubevip.Auto {
 					subnet = cidrs[1]
 				} else {
-					subnet = "128"
+					subnet = strconv.Itoa(vip.DefaultMaskIPv6)
 				}
 			}
 		}
@@ -173,11 +177,62 @@ func NewInstance(svc *v1.Service, config *kubevip.Config, intfMgr *networkinterf
 		})
 	}
 
+	for _, hostname := range instanceHostnames {
+		log.Info("hostname", "addr", hostname)
+		// Detect if we're using a specific interface for services
+		var svcInterface string
+		svcInterface = svc.Annotations[kubevip.ServiceInterface] // If the service has a specific interface defined, then use it
+
+		// If it is still blank then use the
+		if svcInterface == "" {
+			switch config.ServicesInterface {
+			case "":
+				svcInterface = config.Interface
+			default:
+				svcInterface = config.ServicesInterface
+			}
+		}
+
+		if link == nil {
+			if link, err = netlink.LinkByName(svcInterface); err != nil {
+				return nil, fmt.Errorf("failed to get interface %s: %w", svcInterface, err)
+			}
+			if link == nil {
+				return nil, fmt.Errorf("failed to get interface %s", svcInterface)
+			}
+		}
+
+		// Generate new Virtual IP configuration
+		newVips = append(newVips, &kubevip.Config{
+			VIP:                    hostname,
+			Interface:              svcInterface,
+			SingleNode:             true,
+			EnableARP:              config.EnableARP,
+			EnableBGP:              config.EnableBGP,
+			VIPSubnet:              config.VIPSubnet,
+			EnableRoutingTable:     config.EnableRoutingTable,
+			RoutingTableID:         config.RoutingTableID,
+			RoutingTableType:       config.RoutingTableType,
+			RoutingProtocol:        config.RoutingProtocol,
+			ArpBroadcastRate:       config.ArpBroadcastRate,
+			EnableServiceSecurity:  config.EnableServiceSecurity,
+			DNSMode:                config.DNSMode,
+			DisableServiceUpdates:  config.DisableServiceUpdates,
+			EnableServicesElection: config.EnableServicesElection,
+			KubernetesLeaderElection: kubevip.KubernetesLeaderElection{
+				EnableLeaderElection: config.EnableLeaderElection,
+			},
+		})
+	}
+
+	log.Info("1")
+
 	// Create new service
 	instance := &Instance{
 		//UID:             instanceUID,
 		//VIPs:            instanceAddresses,
 		ServiceSnapshot: svc,
+		dnsAddresses:    dnsAddresses,
 	}
 	// for _, port := range svc.Spec.Ports {
 	// 	instance.ExternalPorts = append(instance.ExternalPorts, Port{
@@ -199,6 +254,9 @@ func NewInstance(svc *v1.Service, config *kubevip.Config, intfMgr *networkinterf
 			Port: int(p.Port),
 		})
 	}
+
+	log.Info("2")
+
 	// Generate Load Balancer config
 	newLB := kubevip.LoadBalancer{
 		Name:      fmt.Sprintf("%s-load-balancer", svc.Name),
@@ -212,10 +270,12 @@ func NewInstance(svc *v1.Service, config *kubevip.Config, intfMgr *networkinterf
 	// Create Add configuration to the new service
 	instance.VIPConfigs = newVips
 
+	log.Info("3")
 	// If this was purposely created with the address 0.0.0.0,
 	// we will create a macvlan on the main interface and a DHCP client
 	// TODO: Consider how best to handle DHCP with multiple addresses
 	if len(instanceAddresses) == 1 && instanceAddresses[0] == "0.0.0.0" {
+		log.Info("4")
 		err := instance.startDHCP()
 		if err != nil {
 			return nil, err
@@ -231,10 +291,14 @@ func NewInstance(svc *v1.Service, config *kubevip.Config, intfMgr *networkinterf
 		}
 	}
 
+	log.Info("5")
+
 	for _, vipConfig := range instance.VIPConfigs {
+		log.Info("6")
+
 		c, err := cluster.InitCluster(vipConfig, false, intfMgr, arpMgr)
 		if err != nil {
-			log.Error("Failed to add Service %s/%s", svc.Namespace, svc.Name)
+			log.Error("Failed to add service", "err", err)
 			return nil, err
 		}
 
@@ -242,9 +306,13 @@ func NewInstance(svc *v1.Service, config *kubevip.Config, intfMgr *networkinterf
 			c.Network[i].SetServicePorts(svc)
 		}
 
+		log.Info("7")
+
 		instance.Clusters = append(instance.Clusters, c)
 		log.Info("(svcs) adding VIP", "ip", vipConfig.VIP, "interface", vipConfig.Interface, "namespace", svc.Namespace, "name", svc.Name)
 	}
+
+	log.Info("8")
 
 	return instance, nil
 }

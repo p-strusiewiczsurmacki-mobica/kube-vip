@@ -116,7 +116,7 @@ func (p *Processor) AddOrModify(ctx context.Context, event watch.Event, serviceF
 	svcAddresses, svcHostnames := instance.FetchServiceAddresses(svc)
 
 	// We only care about LoadBalancer services that have been allocated an address
-	if len(svcAddresses) <= 0 {
+	if len(svcAddresses) <= 0 && len(svcHostnames) <= 0 {
 		return true, nil
 	}
 
