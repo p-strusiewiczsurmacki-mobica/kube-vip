@@ -94,12 +94,11 @@ func (p *Processor) StartServicesLeaderElection(ctx context.Context, service *v1
 					log.Error("service deletion", "err", err)
 				}
 			}
+			// wait for leaderelection to be finished
+			<-svcLease.Ctx.Done()
+			// Mark this service is inactive
+			svcCtx.IsActive = false
 		}
-
-		// wait for leaderelection to be finished
-		<-svcLease.Ctx.Done()
-		// Mark this service is inactive
-		svcCtx.IsActive = false
 		return nil
 	}
 	// start the leader election code loop
