@@ -57,6 +57,7 @@ type Network interface {
 	SetHasEndpoints(value bool)
 	HasEndpoints() bool
 	ARPName() string
+	GetPossibleSubnets() string
 }
 
 // network - This allows network configuration
@@ -83,6 +84,8 @@ type network struct {
 	ipvsEnabled bool
 
 	hasEndpoints bool
+
+	possibleSubnets string
 }
 
 // NewConfig will attempt to provide an interface to the kernel network configuration
@@ -107,6 +110,7 @@ func NewConfig(address string, iface string, loGlobalScope bool, subnet string, 
 			forwardMethod:    forwardMethod,
 			iptablesBackend:  iptablesBackend,
 			ipvsEnabled:      ipvsEnabled,
+			possibleSubnets:  subnet,
 		}
 
 		subnet, err = SelectSubnet(address, subnet)
@@ -140,9 +144,11 @@ func NewConfig(address string, iface string, loGlobalScope bool, subnet string, 
 		// try to resolve the address
 		ips, err := utils.LookupHost(address, dnsMode)
 		if err != nil {
+			log.Info("DDNS REQUEST", "isDDNS", isDDNS, "subnet", subnet, "err", err.Error())
 			// return early for ddns if no IP is allocated for the domain
 			// when leader starts, should do get IP from DHCP for the domain
 			if isDDNS {
+				log.Info("isDDNS true")
 				result := &network{
 					link:             networkLink,
 					routeTable:       tableID,
@@ -154,6 +160,7 @@ func NewConfig(address string, iface string, loGlobalScope bool, subnet string, 
 					dnsName:          address,
 					ipvsEnabled:      ipvsEnabled,
 					enableSecurity:   enableSecurity,
+					possibleSubnets:  subnet,
 				}
 
 				networks = append(networks, result)
@@ -174,10 +181,10 @@ func NewConfig(address string, iface string, loGlobalScope bool, subnet string, 
 				dnsName:          address,
 				ipvsEnabled:      ipvsEnabled,
 				enableSecurity:   enableSecurity,
+				possibleSubnets:  subnet,
 			}
 
-			subnets := Split(subnet)
-			s, err := selectSubnet(ip, subnets)
+			s, err := SelectSubnet(ip, subnet)
 			if err != nil {
 				return nil, fmt.Errorf("failed to select subnet: %w", err)
 			}
@@ -503,6 +510,8 @@ func (configurator *network) DeleteIP() (bool, error) {
 	configurator.link.Lock.Lock()
 	defer configurator.link.Lock.Unlock()
 
+	log.Info("DELETING IP", "address", configurator.IP())
+
 	result, err := configurator.IsSet()
 	if err != nil {
 		return false, errors.Wrap(err, "ip check in DeleteIP failed")
@@ -658,6 +667,24 @@ func (configurator *network) SetIP(ip string) error {
 	if strings.Contains("/", ip) {
 		return fmt.Errorf("ip should not contain CIDR notation got: %s", ip)
 	}
+
+	if configurator.address == nil {
+		subnet, err := SelectSubnet(ip, configurator.possibleSubnets)
+		if err != nil {
+			return fmt.Errorf("unable to select subnet for IP %q from %q: %w", ip, subnet, err)
+		}
+
+		// Check if the subnet needs overriding
+		cidr, err := utils.FormatIPWithSubnetMask(ip, subnet)
+		if err != nil {
+			return errors.Wrapf(err, "could not format address %q with subnetMask %q", ip, subnet)
+		}
+		configurator.address, err = netlink.ParseAddr(cidr)
+		if err != nil {
+			return errors.Wrapf(err, "could not parse address %q", cidr)
+		}
+	}
+
 	ones, _ := configurator.address.Mask.Size()
 	cidr, err := utils.FormatIPWithSubnetMask(ip, strconv.Itoa(ones))
 	if err != nil {
@@ -695,6 +722,10 @@ func (configurator *network) SetServicePorts(service *v1.Service) {
 func (configurator *network) IP() string {
 	configurator.mu.Lock()
 	defer configurator.mu.Unlock()
+
+	if configurator.address == nil {
+		return ""
+	}
 
 	return configurator.address.IP.String()
 }
@@ -830,6 +861,10 @@ func (configurator *network) HasEndpoints() bool {
 
 func (configurator *network) ARPName() string {
 	return fmt.Sprintf("%s-%s", configurator.CIDR(), configurator.Interface())
+}
+
+func (configurator *network) GetPossibleSubnets() string {
+	return configurator.possibleSubnets
 }
 
 // SelectSubnet formats an IP address with the appropriate CIDR based on the input.

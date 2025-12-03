@@ -279,6 +279,25 @@ func (cluster *Cluster) StartLoadBalancerService(ctx context.Context, c *kubevip
 	log.Debug("StartLoadBalancerService")
 	for i := range cluster.Network {
 		network := cluster.Network[i]
+
+		if network.IsDDNS() {
+			ddnsReady := make(chan struct{})
+			go func() {
+				ctxDDNS, ddnsCancel := context.WithCancel(ctx)
+				defer ddnsCancel()
+
+				// start the DDNS if requested
+				log.Debug("(svcs) start DDNS", "address", network.DNSName())
+				if err := cluster.StartDDNS(ctxDDNS, cluster.Network[i]); err != nil {
+					log.Error("failed to start DDNS", "err", err)
+				}
+
+				close(ddnsReady)
+				<-cluster.stop
+			}()
+			<-ddnsReady
+		}
+
 		log.Debug("current ip to process", "ip", network.IP(), "mask", c.VIPSubnet)
 		if err := network.SetMask(c.VIPSubnet); err != nil {
 			log.Error("failed to set mask", "subnet", c.VIPSubnet, "err", err)
@@ -328,17 +347,17 @@ func (cluster *Cluster) StartLoadBalancerService(ctx context.Context, c *kubevip
 			ctxDNS, dnsCancel := context.WithCancel(ctx)
 			defer dnsCancel()
 
-			// start the DDNS if requested
-			if network.IsDDNS() {
-				log.Debug("(svcs) start DDNS", "address", network.DNSName())
-				if err := cluster.StartDDNS(ctxDNS, cluster.Network[i]); err != nil {
-					log.Error("failed to start DDNS", "err", err)
-				}
-			}
+			// // start the DDNS if requested
+			// if network.IsDDNS() {
+			// 	log.Debug("(svcs) start DDNS", "address", network.DNSName())
+			// 	if err := cluster.StartDDNS(ctxDNS, cluster.Network[i]); err != nil {
+			// 		log.Error("failed to start DDNS", "err", err)
+			// 	}
+			// }
 
 			// start the dns updater if address is dns
 			if network.IsDNS() {
-				log.Info("(svcs) starting the DNS updater", "address", network.DNSName())
+				log.Info("(svcs) starting the DNS updater", "i", i, "address", network.DNSName(), "ip", network.IP())
 				ipUpdater := vip.NewIPUpdater(network)
 				ipUpdater.Run(ctxDNS)
 			}

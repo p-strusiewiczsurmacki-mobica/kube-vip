@@ -294,7 +294,16 @@ func NewInstance(svc *v1.Service, config *kubevip.Config, intfMgr *networkinterf
 	log.Info("5")
 
 	for _, vipConfig := range instance.VIPConfigs {
-		log.Info("6")
+		ddnsAnnotation, exists := svc.Annotations[kubevip.ServiceDDNS]
+		if exists {
+			log.Info("DDNS annotation present")
+			vipConfig.DDNS, err = strconv.ParseBool(ddnsAnnotation)
+			if err != nil {
+				log.Error("Failed to add service", "err", err)
+				return nil, err
+			}
+		}
+		log.Info("6", "ddns", vipConfig.DDNS)
 
 		c, err := cluster.InitCluster(vipConfig, false, intfMgr, arpMgr)
 		if err != nil {

@@ -52,7 +52,7 @@ func (d *ipUpdater) Run(ctx context.Context) {
 				}
 
 				// Normal VIP addition for DNS, use skipDAD=false for normal DAD process
-				if _, err := d.vip.AddIP(false, false); err != nil {
+				if _, err := d.vip.AddIP(true, false); err != nil {
 					log.Error("error adding virtual IP", "err", err)
 				}
 
