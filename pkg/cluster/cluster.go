@@ -26,6 +26,7 @@ func InitCluster(c *kubevip.Config, disableVIP bool, intfMgr *networkinterface.M
 	var err error
 
 	if !disableVIP {
+		log.Info("starting networking")
 		// Start the Virtual IP Networking configuration
 		networks, err = startNetworking(c, intfMgr)
 		if err != nil {
@@ -53,7 +54,8 @@ func startNetworking(c *kubevip.Config, intfMgr *networkinterface.Manager) ([]vi
 	addresses := vip.Split(address)
 
 	networks := []vip.Network{}
-	for _, addr := range addresses {
+	for i, addr := range addresses {
+		log.Debug("startNetworking", "i", i, "address", addr, "ddns", c.DDNS, "c.VIPSubnet", c.VIPSubnet)
 		network, err := vip.NewConfig(addr, c.Interface, c.LoInterfaceGlobalScope, c.VIPSubnet, c.DDNS, c.RoutingTableID,
 			c.RoutingTableType, c.RoutingProtocol, c.DNSMode, c.LoadBalancerForwardingMethod, c.IptablesBackend,
 			c.EnableLoadBalancer, c.EnableServiceSecurity, intfMgr)

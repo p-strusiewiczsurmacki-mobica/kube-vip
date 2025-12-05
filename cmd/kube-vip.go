@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -490,16 +491,16 @@ func GenerateCidrRange(address string, dnsMode string) (string, error) {
 			for _, addr := range ips {
 				ip = net.ParseIP(addr)
 				if ip.To4() != nil {
-					cidrs = append(cidrs, "32")
+					cidrs = append(cidrs, strconv.Itoa(vip.DefaultMaskIPv4))
 				} else {
-					cidrs = append(cidrs, "128")
+					cidrs = append(cidrs, strconv.Itoa(vip.DefaultMaskIPv6))
 				}
 			}
 		} else {
 			if ip.To4() != nil {
-				cidrs = append(cidrs, "32")
+				cidrs = append(cidrs, strconv.Itoa(vip.DefaultMaskIPv4))
 			} else {
-				cidrs = append(cidrs, "128")
+				cidrs = append(cidrs, strconv.Itoa(vip.DefaultMaskIPv6))
 			}
 		}
 	}

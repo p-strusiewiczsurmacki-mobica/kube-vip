@@ -17,7 +17,7 @@ import (
 	"golang.org/x/sys/unix"
 	v1 "k8s.io/api/core/v1"
 
-	"github.com/kube-vip/kube-vip/pkg/iptables"
+	iptables "github.com/kube-vip/kube-vip/pkg/iptables"
 	"github.com/kube-vip/kube-vip/pkg/kubevip"
 	"github.com/kube-vip/kube-vip/pkg/utils"
 
@@ -28,8 +28,9 @@ const (
 	defaultValidLft         = 60
 	iptablesComment         = "%s kube-vip load balancer IP"
 	iptablesCommentMarkRule = "kube-vip load balancer IP set mark for masquerade"
-	defaultMaskIPv6         = 128
-	defaultMaskIPv4         = 32
+
+	DefaultMaskIPv4 = 32
+	DefaultMaskIPv6 = 128
 )
 
 // Network is an interface that enable managing operations for a given IP
@@ -56,6 +57,7 @@ type Network interface {
 	SetHasEndpoints(value bool)
 	HasEndpoints() bool
 	ARPName() string
+	GetPossibleSubnets() string
 }
 
 // network - This allows network configuration
@@ -82,6 +84,8 @@ type network struct {
 	ipvsEnabled bool
 
 	hasEndpoints bool
+
+	possibleSubnets string
 }
 
 // NewConfig will attempt to provide an interface to the kernel network configuration
@@ -106,6 +110,7 @@ func NewConfig(address string, iface string, loGlobalScope bool, subnet string, 
 			forwardMethod:    forwardMethod,
 			iptablesBackend:  iptablesBackend,
 			ipvsEnabled:      ipvsEnabled,
+			possibleSubnets:  subnet,
 		}
 
 		subnet, err = SelectSubnet(address, subnet)
@@ -137,12 +142,13 @@ func NewConfig(address string, iface string, loGlobalScope bool, subnet string, 
 		networks = append(networks, result)
 	} else {
 		// try to resolve the address
-		log.Debug("looking up host", "address", address, "dnsMode", dnsMode)
 		ips, err := utils.LookupHost(address, dnsMode)
 		if err != nil {
+			log.Info("DDNS REQUEST", "isDDNS", isDDNS, "subnet", subnet, "err", err.Error())
 			// return early for ddns if no IP is allocated for the domain
 			// when leader starts, should do get IP from DHCP for the domain
 			if isDDNS {
+				log.Info("isDDNS true")
 				result := &network{
 					link:             networkLink,
 					routeTable:       tableID,
@@ -154,17 +160,8 @@ func NewConfig(address string, iface string, loGlobalScope bool, subnet string, 
 					dnsName:          address,
 					ipvsEnabled:      ipvsEnabled,
 					enableSecurity:   enableSecurity,
-					address: &netlink.Addr{ // create placeholder for the address
-						IPNet: &net.IPNet{}, // that will be added later in the process
-						Peer:  &net.IPNet{},
-					},
+					possibleSubnets:  subnet,
 				}
-
-				// set address as deprecated so it isn't used as source address according to RFC 3484
-				result.address.PreferedLft = 0
-
-				// Also set ValidLft so the netlink library actually sets them
-				result.address.ValidLft = math.MaxInt
 
 				networks = append(networks, result)
 				return networks, nil
@@ -184,15 +181,12 @@ func NewConfig(address string, iface string, loGlobalScope bool, subnet string, 
 				dnsName:          address,
 				ipvsEnabled:      ipvsEnabled,
 				enableSecurity:   enableSecurity,
+				possibleSubnets:  subnet,
 			}
 
-			// we're able to resolve store this as the initial IP
-
-			subnets := Split(subnet)
-
-			s := subnet
-			if len(subnets) > 1 {
-				s = selectSubnet(ip, subnets)
+			s, err := SelectSubnet(ip, subnet)
+			if err != nil {
+				return nil, fmt.Errorf("failed to select subnet: %w", err)
 			}
 
 			if result.address, err = netlink.ParseAddr(fmt.Sprintf("%s/%s", ip, s)); err != nil {
@@ -516,6 +510,8 @@ func (configurator *network) DeleteIP() (bool, error) {
 	configurator.link.Lock.Lock()
 	defer configurator.link.Lock.Unlock()
 
+	log.Info("DELETING IP", "address", configurator.IP())
+
 	result, err := configurator.IsSet()
 	if err != nil {
 		return false, errors.Wrap(err, "ip check in DeleteIP failed")
@@ -644,10 +640,6 @@ func (configurator *network) IsSet() (result bool, err error) {
 		return false, nil
 	}
 
-	if configurator.address.Mask == nil {
-		return false, nil
-	}
-
 	addresses, err = netlink.AddrList(configurator.link.Intf, 0)
 	if err != nil {
 		err = errors.Wrap(err, "could not list addresses")
@@ -675,6 +667,24 @@ func (configurator *network) SetIP(ip string) error {
 	if strings.Contains("/", ip) {
 		return fmt.Errorf("ip should not contain CIDR notation got: %s", ip)
 	}
+
+	if configurator.address == nil {
+		subnet, err := SelectSubnet(ip, configurator.possibleSubnets)
+		if err != nil {
+			return fmt.Errorf("unable to select subnet for IP %q from %q: %w", ip, subnet, err)
+		}
+
+		// Check if the subnet needs overriding
+		cidr, err := utils.FormatIPWithSubnetMask(ip, subnet)
+		if err != nil {
+			return errors.Wrapf(err, "could not format address %q with subnetMask %q", ip, subnet)
+		}
+		configurator.address, err = netlink.ParseAddr(cidr)
+		if err != nil {
+			return errors.Wrapf(err, "could not parse address %q", cidr)
+		}
+	}
+
 	ones, _ := configurator.address.Mask.Size()
 	cidr, err := utils.FormatIPWithSubnetMask(ip, strconv.Itoa(ones))
 	if err != nil {
@@ -713,7 +723,7 @@ func (configurator *network) IP() string {
 	configurator.mu.Lock()
 	defer configurator.mu.Unlock()
 
-	if configurator.address == nil || configurator.address.IP == nil {
+	if configurator.address == nil {
 		return ""
 	}
 
@@ -723,10 +733,6 @@ func (configurator *network) IP() string {
 func (configurator *network) CIDR() string {
 	configurator.mu.Lock()
 	defer configurator.mu.Unlock()
-
-	if configurator.address == nil || configurator.address.IPNet == nil {
-		return ""
-	}
 
 	return configurator.address.IPNet.String()
 }
@@ -816,12 +822,12 @@ func (configurator *network) SetMask(mask string) error {
 		return err
 	}
 
-	size := defaultMaskIPv4
+	size := DefaultMaskIPv4
 	family := utils.IPv4Family
 
 	if configurator.IP() != "" {
 		if utils.IsIPv6(configurator.IP()) {
-			size = defaultMaskIPv6
+			size = DefaultMaskIPv6
 			family = utils.IPv6Family
 		}
 
@@ -855,6 +861,10 @@ func (configurator *network) HasEndpoints() bool {
 
 func (configurator *network) ARPName() string {
 	return fmt.Sprintf("%s-%s", configurator.CIDR(), configurator.Interface())
+}
+
+func (configurator *network) GetPossibleSubnets() string {
+	return configurator.possibleSubnets
 }
 
 // SelectSubnet formats an IP address with the appropriate CIDR based on the input.
