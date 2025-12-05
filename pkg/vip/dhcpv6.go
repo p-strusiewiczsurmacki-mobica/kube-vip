@@ -1,13 +1,15 @@
 package vip
 
 import (
+	"context"
 	"fmt"
 	log "log/slog"
 	"net"
 	"time"
 
 	"github.com/insomniacslk/dhcp/dhcpv6"
-	"github.com/insomniacslk/dhcp/dhcpv6/client6"
+	"github.com/insomniacslk/dhcp/dhcpv6/nclient6"
+	"github.com/insomniacslk/dhcp/iana"
 	"github.com/jpillora/backoff"
 )
 
@@ -20,13 +22,16 @@ type DHCPv6Client struct {
 	releasedChan   chan struct{} // indicate that the IP has been released
 	errorChan      chan error    // indicates there was an error on the IP request
 	ipChan         chan string
-	client         *client6.Client
+	client         *nclient6.Client
 	addr           *dhcpv6.OptIAAddress
 }
 
-// NewDHCPClient returns a new DHCP Client.
+// NewDHCP6Client returns a new DHCP6 Client.
 func NewDHCP6Client(iface *net.Interface, initRebootFlag bool, requestedIP string) (*DHCPv6Client, error) {
-	client := client6.NewClient()
+	client, err := nclient6.New(iface.Name)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create DHCPv6 client: %w", err)
+	}
 
 	return &DHCPv6Client{
 		iface:          iface,
@@ -62,10 +67,12 @@ func (c *DHCPv6Client) ErrorChannel() chan error {
 	return c.errorChan
 }
 
-func (c *DHCPv6Client) Start() error {
-	// REQUEST WITH BACKOFF ACTION
+func (c *DHCPv6Client) Start(ctx context.Context) error {
+	dhcpContext, cancel := context.WithCancel(ctx)
+	defer cancel()
 
-	addr, err := c.requestWithBackoff()
+	// REQUEST WITH BACKOFF ACTION
+	addr, err := c.requestWithBackoff(dhcpContext)
 
 	if err != nil {
 		return fmt.Errorf("DHCPv6 client failed: %w", err)
@@ -92,7 +99,7 @@ func (c *DHCPv6Client) Start() error {
 
 			// RENEW ACTION
 
-			addr, err := c.renew()
+			addr, err := c.renew(dhcpContext)
 			if err == nil {
 				c.addr = addr
 				log.Info("renew", "addr", addr.IPv6Addr.String())
@@ -103,16 +110,14 @@ func (c *DHCPv6Client) Start() error {
 		case <-t2.C:
 			// rebind is just like a request, but forcing to provide a new IP address
 
-			// REQUEST ACTION
-
-			addr, err := c.request(true)
+			addr, err := c.request(dhcpContext, true)
 			if err == nil {
 				c.addr = addr
 				log.Info("rebind", "lease", addr)
 			} else {
 				log.Warn("ip may have changed", "ip", addr.IPv6Addr.String(), "err", err)
 				c.initRebootFlag = false
-				c.addr, err = c.requestWithBackoff()
+				c.addr, err = c.requestWithBackoff(dhcpContext)
 				if err != nil {
 					return fmt.Errorf("DHCPv6 rebind failed: %w", err)
 				}
@@ -121,25 +126,22 @@ func (c *DHCPv6Client) Start() error {
 			t2.Reset(t2Timeout)
 
 		case <-c.stopChan:
-			// release is a unicast request of the IP release.
+			// IP address release.
+			if err := c.release(dhcpContext); err != nil {
+				log.Error("release failed", "err", err)
+			} else {
+				log.Info("released", "address", c.addr.String())
+			}
+			t1.Stop()
+			t2.Stop()
 
-			// RELEASE ACTION
-
-			// if err := c.release(); err != nil {
-			// 	log.Error("release lease failed", "lease", lease, "err", err)
-			// } else {
-			// 	log.Info("release", "lease", lease)
-			// }
-			// t1.Stop()
-			// t2.Stop()
-
-			// close(c.releasedChan)
-			// return
+			close(c.releasedChan)
+			return nil
 		}
 	}
 }
 
-func (c *DHCPv6Client) requestWithBackoff() (*dhcpv6.OptIAAddress, error) {
+func (c *DHCPv6Client) requestWithBackoff(ctx context.Context) (*dhcpv6.OptIAAddress, error) {
 	backoff := backoff.Backoff{
 		Factor: 2,
 		Jitter: true,
@@ -153,7 +155,7 @@ func (c *DHCPv6Client) requestWithBackoff() (*dhcpv6.OptIAAddress, error) {
 	for {
 		log.Debug("trying to get a new IP", "attempt", backoff.Attempt())
 
-		addr, err = c.request(false)
+		addr, err = c.request(ctx, false)
 
 		if err != nil {
 			dur := backoff.Duration()
@@ -180,49 +182,126 @@ func (c *DHCPv6Client) requestWithBackoff() (*dhcpv6.OptIAAddress, error) {
 	return addr, nil
 }
 
-// type leasev6 struct {
-// 	address string
-// 	t1      time.Duration
-// 	t2      time.Duration
-// }
-
-func (c *DHCPv6Client) request(rebind bool) (*dhcpv6.OptIAAddress, error) {
+func (c *DHCPv6Client) request(ctx context.Context, rebind bool) (*dhcpv6.OptIAAddress, error) {
 	modifiers := []dhcpv6.Modifier{}
 	modifiers = append(modifiers, dhcpv6.WithClientID(&dhcpv6.DUIDEN{EnterpriseNumber: 1, EnterpriseIdentifier: []byte(c.ddnsHostName)}))
 	modifiers = append(modifiers, dhcpv6.WithFQDN(4, c.ddnsHostName))
 
-	if rebind {
+	// if initRebootFlag is set, this means we have an IP already set on c.requestedIP that should be used
+	if c.initRebootFlag {
+		log.Debug("DHCPv6 init-reboot", "ip", c.requestedIP)
+		addr := dhcpv6.OptIAAddress{
+			IPv6Addr: c.requestedIP,
+		}
+		modifiers = append(modifiers, dhcpv6.WithIANA(addr))
+	} else if rebind {
+		if c.addr == nil {
+			return nil, fmt.Errorf("unable to rebind - current IP unknown")
+		}
+		log.Debug("DHCPv6 rebinding", "ip", c.addr.IPv6Addr)
 		modifiers = append(modifiers, dhcpv6.WithIANA(*c.addr))
 	}
 
-	conversation, err := c.client.Exchange(c.iface.Name, modifiers...)
+	var reply *dhcpv6.Message
+	if rebind || c.initRebootFlag {
+		request, err := dhcpv6.NewMessage(modifiers...)
+		if err != nil {
+			return nil, fmt.Errorf("failed to create rebind message: %w", err)
+		}
 
-	if err != nil {
-		return nil, fmt.Errorf("DHCPv6 request failed: %w", err)
-	}
+		request.MessageType = dhcpv6.MessageTypeRebind
 
-	for _, msg := range conversation {
-		if msg.Type() == dhcpv6.MessageTypeReply {
-			reply, err := dhcpv6.MessageFromBytes(msg.ToBytes())
-			if err != nil {
-				return nil, fmt.Errorf("reply conversion failed: %w", err)
-			}
+		reply, err = c.client.SendAndRead(ctx, c.client.RemoteAddr(), request, nil)
+		if err != nil {
+			return nil, fmt.Errorf("rebind error: %w", err)
+		}
+	} else {
+		adv, err := c.client.Solicit(ctx, modifiers...)
+		if err != nil {
+			return nil, fmt.Errorf("solicit error: %w", err)
+		}
 
-			if len(reply.Options.IANA()) < 1 {
-				return nil, fmt.Errorf("failed to get IANA")
-			}
+		request, err := dhcpv6.NewRequestFromAdvertise(adv)
+		if err != nil {
+			return nil, fmt.Errorf("unable to create request message: %w", err)
+		}
 
-			if len(reply.Options.IANA()[0].Options.Addresses()) < 1 {
-				return nil, fmt.Errorf("failed to get addresses data")
-			}
-
-			return reply.Options.IANA()[0].Options.Addresses()[0], nil
+		reply, err = c.client.Request(ctx, request)
+		if err != nil {
+			return nil, fmt.Errorf("request error: %w", err)
 		}
 	}
 
-	return nil, fmt.Errorf("no data available")
+	if reply == nil {
+		return nil, fmt.Errorf("invalid request")
+	}
+
+	return getAddress(reply.Options.IANA())
 }
 
-func (c *DHCPv6Client) renew() (*dhcpv6.OptIAAddress, error) {
-	return c.request(false)
+func (c *DHCPv6Client) renew(ctx context.Context) (*dhcpv6.OptIAAddress, error) {
+	modifiers := []dhcpv6.Modifier{}
+	modifiers = append(modifiers, dhcpv6.WithClientID(&dhcpv6.DUIDEN{EnterpriseNumber: 1, EnterpriseIdentifier: []byte(c.ddnsHostName)}))
+	modifiers = append(modifiers, dhcpv6.WithFQDN(4, c.ddnsHostName))
+	modifiers = append(modifiers, dhcpv6.WithOption(&dhcpv6.OptionGeneric{OptionCode: dhcpv6.OptionUnicast}))
+
+	adv, err := c.client.Solicit(ctx, modifiers...)
+	if err != nil {
+		return nil, fmt.Errorf("solicit error: %w", err)
+	}
+
+	request, err := dhcpv6.NewRequestFromAdvertise(adv)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request message: %w", err)
+	}
+
+	request.MessageType = dhcpv6.MessageTypeRenew
+
+	reply, err := c.client.SendAndRead(ctx, c.client.RemoteAddr(), request, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to send renew: %w", err)
+	}
+
+	return getAddress(reply.Options.IANA())
+}
+
+func (c *DHCPv6Client) release(ctx context.Context) error {
+	modifiers := []dhcpv6.Modifier{}
+	modifiers = append(modifiers, dhcpv6.WithClientID(&dhcpv6.DUIDEN{EnterpriseNumber: 1, EnterpriseIdentifier: []byte(c.ddnsHostName)}))
+	modifiers = append(modifiers, dhcpv6.WithFQDN(4, c.ddnsHostName))
+
+	adv, err := c.client.Solicit(ctx, modifiers...)
+	if err != nil {
+		return fmt.Errorf("solicit error: %w", err)
+	}
+
+	request, err := dhcpv6.NewRequestFromAdvertise(adv)
+	if err != nil {
+		return fmt.Errorf("failed to create release message: %w", err)
+	}
+
+	request.MessageType = dhcpv6.MessageTypeRelease
+
+	reply, err := c.client.SendAndRead(ctx, c.client.RemoteAddr(), request, nil)
+	if err != nil {
+		return fmt.Errorf("failed to send release: %w", err)
+	}
+
+	if reply.Options.Status().StatusCode != iana.StatusSuccess {
+		return fmt.Errorf("release failed with code %d: %s", reply.Options.Status().StatusCode, reply.Options.Status().StatusMessage)
+	}
+
+	return nil
+}
+
+func getAddress(iana []*dhcpv6.OptIANA) (*dhcpv6.OptIAAddress, error) {
+	if len(iana) < 1 {
+		return nil, fmt.Errorf("failed to get IANA")
+	}
+
+	if len(iana) < 1 {
+		return nil, fmt.Errorf("failed to get addresses data")
+	}
+
+	return iana[0].Options.Addresses()[0], nil
 }

@@ -121,8 +121,11 @@ func (c *DHCPClient) ErrorChannel() chan error {
 //	                          |          |----------------------------+
 //	                           ----------
 //	        Figure: State-transition diagram for DHCP clients
-func (c *DHCPClient) Start() {
-	lease := c.requestWithBackoff()
+func (c *DHCPClient) Start(ctx context.Context) {
+	dhcpContext, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	lease := c.requestWithBackoff(dhcpContext)
 
 	c.initRebootFlag = false
 	c.lease = lease
@@ -141,7 +144,7 @@ func (c *DHCPClient) Start() {
 			// on renew error due to IP Change, but instead it returns a different error
 			// This way there's not much to do other than log and continue, as the renew error
 			// may be an offline server, or may be an incorrect package match
-			lease, err := c.renew()
+			lease, err := c.renew(dhcpContext)
 			if err == nil {
 				c.lease = lease
 				log.Info("renew", "lease", lease)
@@ -151,7 +154,7 @@ func (c *DHCPClient) Start() {
 			}
 		case <-t2.C:
 			// rebind is just like a request, but forcing to provide a new IP address
-			lease, err := c.request(true)
+			lease, err := c.request(dhcpContext, true)
 			if err == nil {
 				c.lease = lease
 				log.Info("rebind", "lease", lease)
@@ -164,7 +167,7 @@ func (c *DHCPClient) Start() {
 				}
 				log.Warn("ip may have changed", "ip", c.lease.ACK.YourIPAddr, "err", err)
 				c.initRebootFlag = false
-				c.lease = c.requestWithBackoff()
+				c.lease = c.requestWithBackoff(dhcpContext)
 			}
 			t1.Reset(t1Timeout)
 			t2.Reset(t2Timeout)
@@ -194,7 +197,7 @@ func (c *DHCPClient) Start() {
 // |ciaddr        |zero         | IP address   |IP address|
 // --------------------------------------------------------
 
-func (c *DHCPClient) requestWithBackoff() *nclient4.Lease {
+func (c *DHCPClient) requestWithBackoff(ctx context.Context) *nclient4.Lease {
 	backoff := backoff.Backoff{
 		Factor: 2,
 		Jitter: true,
@@ -207,7 +210,7 @@ func (c *DHCPClient) requestWithBackoff() *nclient4.Lease {
 
 	for {
 		log.Debug("trying to get a new IP", "attempt", backoff.Attempt())
-		lease, err = c.request(false)
+		lease, err = c.request(ctx, false)
 		if err != nil {
 			dur := backoff.Duration()
 			if backoff.Attempt() > maxBackoffAttempts-1 {
@@ -233,7 +236,7 @@ func (c *DHCPClient) requestWithBackoff() *nclient4.Lease {
 	return lease
 }
 
-func (c *DHCPClient) request(rebind bool) (*nclient4.Lease, error) {
+func (c *DHCPClient) request(ctx context.Context, rebind bool) (*nclient4.Lease, error) {
 	dhclient, err := nclient4.New(c.iface.Name)
 	if err != nil {
 		return nil, fmt.Errorf("create a client for iface %s failed, error: %w", c.iface.Name, err)
@@ -252,17 +255,17 @@ func (c *DHCPClient) request(rebind bool) (*nclient4.Lease, error) {
 
 	// if initRebootFlag is set, this means we have an IP already set on c.requestedIP that should be used
 	if c.initRebootFlag {
-		log.Debug("init-reboot", "ip", c.requestedIP)
+		log.Debug("DHCPv4 init-reboot", "ip", c.requestedIP)
 		modifiers = append(modifiers, dhcpv4.WithOption(dhcpv4.OptRequestedIPAddress(c.requestedIP)))
 	}
 
 	// if this is a rebind, then the IP we should set is the one that already exists in lease
 	if rebind {
-		log.Debug("rebinding", "ip", c.lease.ACK.YourIPAddr)
+		log.Debug("DHCPv4 rebinding", "ip", c.lease.ACK.YourIPAddr)
 		modifiers = append(modifiers, dhcpv4.WithOption(dhcpv4.OptRequestedIPAddress(c.lease.ACK.YourIPAddr)))
 	}
 
-	return dhclient.Request(context.TODO(), modifiers...)
+	return dhclient.Request(ctx, modifiers...)
 }
 
 func (c *DHCPClient) release() error {
@@ -276,7 +279,7 @@ func (c *DHCPClient) release() error {
 	return dhclient.Release(c.lease)
 }
 
-func (c *DHCPClient) renew() (*nclient4.Lease, error) {
+func (c *DHCPClient) renew(ctx context.Context) (*nclient4.Lease, error) {
 	// renew needs a unicast client. This is due to some servers (like dnsmasq) require the exact request coming from the vip interface
 	dhclient, err := nclient4.New(c.iface.Name,
 		nclient4.WithUnicast(&net.UDPAddr{IP: c.lease.ACK.YourIPAddr, Port: nclient4.ClientPort}))
@@ -285,5 +288,5 @@ func (c *DHCPClient) renew() (*nclient4.Lease, error) {
 	}
 	defer dhclient.Close()
 
-	return dhclient.Renew(context.TODO(), c.lease)
+	return dhclient.Renew(ctx, c.lease)
 }

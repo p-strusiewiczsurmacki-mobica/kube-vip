@@ -1,6 +1,7 @@
 package instance
 
 import (
+	"context"
 	"fmt"
 	"net"
 	"strconv"
@@ -52,7 +53,7 @@ type Port struct {
 	Type string
 }
 
-func NewInstance(svc *v1.Service, config *kubevip.Config, intfMgr *networkinterface.Manager, arpMgr *arp.Manager) (*Instance, error) {
+func NewInstance(ctx context.Context, svc *v1.Service, config *kubevip.Config, intfMgr *networkinterface.Manager, arpMgr *arp.Manager) (*Instance, error) {
 	instanceAddresses, instanceHostnames := FetchServiceAddresses(svc)
 	log.Info("NewInstance used", "instanceAddresses", instanceAddresses, "instanceHostnames", instanceHostnames)
 
@@ -276,7 +277,7 @@ func NewInstance(svc *v1.Service, config *kubevip.Config, intfMgr *networkinterf
 	// TODO: Consider how best to handle DHCP with multiple addresses
 	if len(instanceAddresses) == 1 && instanceAddresses[0] == "0.0.0.0" {
 		log.Info("4")
-		err := instance.startDHCP()
+		err := instance.startDHCP(ctx)
 		if err != nil {
 			return nil, err
 		}
@@ -383,7 +384,7 @@ func getAutoInterfaceName(link netlink.Link, defaultInterface string) string {
 	return link.Attrs().Name
 }
 
-func (i *Instance) startDHCP() error {
+func (i *Instance) startDHCP(ctx context.Context) error {
 	if len(i.VIPConfigs) != 1 {
 		return fmt.Errorf("DHCP requires exactly 1 VIP config, got: %v", len(i.VIPConfigs))
 	}
@@ -473,7 +474,7 @@ func (i *Instance) startDHCP() error {
 		client.WithHostName(i.DHCPHostname)
 	}
 
-	go client.Start()
+	go client.Start(ctx)
 
 	// Set that DHCP is enabled
 	i.IsDHCP = true
