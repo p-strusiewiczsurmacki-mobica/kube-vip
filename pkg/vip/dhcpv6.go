@@ -45,7 +45,7 @@ func NewDHCP6Client(iface *net.Interface, initRebootFlag bool, requestedIP strin
 	}, nil
 }
 
-func (c *DHCPv6Client) WithHostName(hostname string) *DHCPv6Client {
+func (c *DHCPv6Client) WithHostName(hostname string) DHCPClient {
 	c.ddnsHostName = hostname
 	return c
 }
@@ -85,7 +85,7 @@ func (c *DHCPv6Client) Start(ctx context.Context) error {
 	// Set up two ticker to renew/rebind regularly
 	t1Timeout := c.addr.PreferredLifetime / 2
 	t2Timeout := (c.addr.ValidLifetime / 8) * 7
-	log.Debug("dhcp timeouts", "timeout1", t1Timeout, "timeoute2", t2Timeout)
+	log.Debug("[DHCPv6] timeouts", "timeout1", t1Timeout, "timeoute2", t2Timeout)
 	t1, t2 := time.NewTicker(t1Timeout), time.NewTicker(t2Timeout)
 
 	for {
@@ -102,10 +102,10 @@ func (c *DHCPv6Client) Start(ctx context.Context) error {
 			addr, err := c.renew(dhcpContext)
 			if err == nil {
 				c.addr = addr
-				log.Info("renew", "addr", addr.IPv6Addr.String())
+				log.Info("[DHCPv6] renew", "addr", addr.IPv6Addr.String())
 				t2.Reset(t2Timeout)
 			} else {
-				log.Error("renew failed", "err", err)
+				log.Error("[DHCPv6] renew failed", "err", err)
 			}
 		case <-t2.C:
 			// rebind is just like a request, but forcing to provide a new IP address
@@ -113,30 +113,29 @@ func (c *DHCPv6Client) Start(ctx context.Context) error {
 			addr, err := c.request(dhcpContext, true)
 			if err == nil {
 				c.addr = addr
-				log.Info("rebind", "lease", addr)
+				log.Info("[DHCPv6] rebind", "lease", addr)
 			} else {
-				log.Warn("ip may have changed", "ip", addr.IPv6Addr.String(), "err", err)
+				log.Warn("[DHCPv6] ip may have changed", "ip", addr.IPv6Addr.String(), "err", err)
 				c.initRebootFlag = false
 				c.addr, err = c.requestWithBackoff(dhcpContext)
-				if err != nil {
-					return fmt.Errorf("DHCPv6 rebind failed: %w", err)
-				}
+				log.Error("[DHCPv6] rebind failed", "err", err)
 			}
 			t1.Reset(t1Timeout)
 			t2.Reset(t2Timeout)
 
 		case <-c.stopChan:
 			// IP address release.
-			if err := c.release(dhcpContext); err != nil {
-				log.Error("release failed", "err", err)
+			var err error
+			if err = c.release(dhcpContext); err != nil {
+				log.Error("[DHCPv6] release failed", "err", err)
 			} else {
-				log.Info("released", "address", c.addr.String())
+				log.Info("[DHCPv6] released", "address", c.addr.String())
 			}
 			t1.Stop()
 			t2.Stop()
 
 			close(c.releasedChan)
-			return nil
+			return err
 		}
 	}
 }

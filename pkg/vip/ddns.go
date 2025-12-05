@@ -39,7 +39,7 @@ func (ddns *ddnsManager) Start() (string, error) {
 		return "", err
 	}
 
-	client := NewDHCPClient(iface, false, "")
+	client := NewDHCPv4Client(iface, false, "")
 
 	client.WithHostName(ddns.network.DDNSHostName())
 

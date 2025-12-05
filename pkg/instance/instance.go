@@ -37,7 +37,7 @@ type Instance struct {
 	DHCPInterfaceHwaddr string
 	DHCPInterfaceIP     string
 	DHCPHostname        string
-	DHCPClient          *vip.DHCPClient
+	DHCPClient          *vip.DHCPv4Client
 
 	// External Gateway IP the service is forwarded from
 	UPNPGatewayIPs []string
@@ -466,7 +466,7 @@ func (i *Instance) startDHCP(ctx context.Context) error {
 		initRebootFlag = true
 	}
 
-	client := vip.NewDHCPClient(iface, initRebootFlag, i.DHCPInterfaceIP)
+	client := vip.NewDHCPv4Client(iface, initRebootFlag, i.DHCPInterfaceIP)
 
 	// Add hostname to dhcp client if annotated
 	if i.DHCPHostname != "" {
