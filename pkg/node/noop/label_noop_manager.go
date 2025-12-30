@@ -22,6 +22,6 @@ func (m *Manager) RemoveLabel(_ context.Context, _ *corev1.Service) error {
 	return nil
 }
 
-func (m *Manager) CleanUpLabels(_ time.Duration) error {
+func (m *Manager) CleanUpLabels(_ context.Context, _ time.Duration) error {
 	return nil
 }

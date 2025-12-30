@@ -37,7 +37,7 @@ func (sm *Manager) startARP(id string) error {
 			switch sig {
 			case syscall.SIGUSR1:
 				log.Info("Received SIGUSR1, dumping configuration")
-				sm.dumpConfiguration()
+				sm.dumpConfiguration(ctx)
 			case syscall.SIGINT, syscall.SIGTERM:
 				log.Info("Received kube-vip termination, signaling shutdown")
 				if sm.config.EnableControlPlane {
@@ -64,7 +64,7 @@ func (sm *Manager) startARP(id string) error {
 		}
 
 		go func() {
-			err := cpCluster.StartCluster(sm.config, clusterManager, nil)
+			err := cpCluster.StartCluster(ctx, sm.config, clusterManager, nil)
 			if err != nil {
 				log.Error("starting control plane", "err", err)
 				// Trigger the shutdown of this manager instance

@@ -45,7 +45,7 @@ func (sm *Manager) startWireguard(id string) error {
 			switch sig {
 			case syscall.SIGUSR1:
 				log.Info("Received SIGUSR1, dumping configuration")
-				sm.dumpConfiguration()
+				sm.dumpConfiguration(ctx)
 			case syscall.SIGINT, syscall.SIGTERM:
 				log.Info("Received termination, signaling shutdown")
 				// Cancel the context, which will in turn cancel the leadership

@@ -66,7 +66,7 @@ func (sm *Manager) startBGP() error {
 			switch sig {
 			case syscall.SIGUSR1:
 				log.Info("Received SIGUSR1, dumping configuration")
-				sm.dumpConfiguration()
+				sm.dumpConfiguration(ctx)
 			case syscall.SIGINT, syscall.SIGTERM:
 				log.Info("Received termination, signaling shutdown")
 				if sm.config.EnableControlPlane {
@@ -94,9 +94,9 @@ func (sm *Manager) startBGP() error {
 
 		go func() {
 			if sm.config.EnableLeaderElection {
-				err = cpCluster.StartCluster(sm.config, clusterManager, sm.bgpServer)
+				err = cpCluster.StartCluster(ctx, sm.config, clusterManager, sm.bgpServer)
 			} else {
-				err = cpCluster.StartVipService(sm.config, clusterManager, sm.bgpServer)
+				err = cpCluster.StartVipService(ctx, sm.config, clusterManager, sm.bgpServer)
 			}
 			if err != nil {
 				log.Error("Control Plane", "err", err)

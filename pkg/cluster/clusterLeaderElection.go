@@ -92,24 +92,24 @@ func NewManager(path string, inCluster bool, port int) (*Manager, error) {
 }
 
 // StartCluster - Begins a running instance of the Leader Election cluster
-func (cluster *Cluster) StartCluster(c *kubevip.Config, sm *Manager, bgpServer *bgp.Server) error {
+func (cluster *Cluster) StartCluster(ctx context.Context, c *kubevip.Config, sm *Manager, bgpServer *bgp.Server) error {
 	var err error
 
 	log.Info("cluster membership", "namespace", c.Namespace, "lock", c.LeaseName, "id", c.NodeName)
 
 	// use a Go context so we can tell the leaderelection code when we
 	// want to step down
-	ctx, cancel := context.WithCancel(context.Background())
+	leaderCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
 	// use a Go context so we can tell the arp loop code when we
 	// want to step down
-	ctxArp, cancelArp := context.WithCancel(context.Background())
+	ctxArp, cancelArp := context.WithCancel(ctx)
 	defer cancelArp()
 
 	// use a Go context so we can tell the dns loop code when we
 	// want to step down
-	ctxDNS, cancelDNS := context.WithCancel(context.Background())
+	ctxDNS, cancelDNS := context.WithCancel(ctx)
 	defer cancelDNS()
 
 	// listen for interrupts or the Linux SIGTERM signal and cancel
@@ -270,9 +270,9 @@ func (cluster *Cluster) StartCluster(c *kubevip.Config, sm *Manager, bgpServer *
 
 	switch c.LeaderElectionType {
 	case "kubernetes", "":
-		cluster.runKubernetesLeaderElectionOrDie(ctx, run)
+		cluster.runKubernetesLeaderElectionOrDie(leaderCtx, run)
 	case "etcd":
-		cluster.runEtcdLeaderElectionOrDie(ctx, run)
+		cluster.runEtcdLeaderElectionOrDie(leaderCtx, run)
 	default:
 		log.Info(fmt.Sprintf("LeaderElectionMode %s not supported, exiting", c.LeaderElectionType))
 	}
@@ -355,7 +355,7 @@ func (sm *Manager) NodeWatcher(ctxArp context.Context, lb *loadbalancer.IPVSLoad
 
 	rw, err := watchtools.NewRetryWatcherWithContext(ctxArp, "1", &cache.ListWatch{
 		WatchFunc: func(_ metav1.ListOptions) (watch.Interface, error) {
-			return sm.RetryWatcherClient.CoreV1().Nodes().Watch(context.Background(), listOptions)
+			return sm.RetryWatcherClient.CoreV1().Nodes().Watch(ctxArp, listOptions)
 		},
 	})
 	if err != nil {
