@@ -3,6 +3,7 @@ package manager
 import (
 	"context"
 	"fmt"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -45,8 +46,12 @@ func (sm *Manager) startTableMode(ctx context.Context, id string) error {
 		log.Debug("IPtables rules cleaned on startup")
 	}
 
+	var closing atomic.Bool
+	finished := make(chan struct{})
+
 	// Shutdown function that will wait on this signal, unless we call it ourselves
 	go func() {
+		defer close(finished)
 		for {
 			sig := <-sm.signalChan
 			switch sig {
@@ -54,10 +59,13 @@ func (sm *Manager) startTableMode(ctx context.Context, id string) error {
 				log.Info("Received SIGUSR1, dumping configuration")
 				sm.dumpConfiguration(rtCtx)
 			case syscall.SIGINT, syscall.SIGTERM:
+				closing.Store(true)
 				log.Info("Received kube-vip termination, signaling shutdown")
-				if sm.config.EnableControlPlane {
+				if cpCluster != nil {
 					cpCluster.Stop()
 				}
+				// Close all go routines
+				close(sm.shutdownChan)
 				// Cancel the context, which will in turn cancel the leadership
 				cancel()
 				return
@@ -114,7 +122,7 @@ func (sm *Manager) startTableMode(ctx context.Context, id string) error {
 						err = sm.svcProcessor.ServicesWatcher(ctx, sm.svcProcessor.SyncServices)
 						if err != nil {
 							log.Error(err.Error())
-							panic("")
+							sm.signalChan <- syscall.SIGINT
 						}
 					},
 					OnStoppedLeading: func() {
@@ -124,8 +132,8 @@ func (sm *Manager) startTableMode(ctx context.Context, id string) error {
 						log.Info("leader lost", "id", id)
 						sm.svcProcessor.Stop()
 
-						log.Error("lost leadership, restarting kube-vip")
-						panic("")
+						log.Error("lost services leadership, restarting kube-vip")
+						sm.signalChan <- syscall.SIGINT
 					},
 					OnNewLeader: func(identity string) {
 						// we're notified when new leader elected
@@ -141,7 +149,7 @@ func (sm *Manager) startTableMode(ctx context.Context, id string) error {
 			log.Info("beginning watching services without leader election")
 			err = sm.svcProcessor.ServicesWatcher(rtCtx, sm.svcProcessor.SyncServices)
 			if err != nil {
-				log.Error("Cannot watch services", "err", err)
+				return fmt.Errorf("cannot watch services: %w", err)
 			} else {
 				log.Debug("watching services")
 			}
@@ -165,11 +173,16 @@ func (sm *Manager) startTableMode(ctx context.Context, id string) error {
 		if err := cpCluster.StartVipService(rtCtx, sm.config, clusterManager, nil); err != nil {
 			log.Error("Control Plane", "err", err)
 			// Trigger the shutdown of this manager instance
-			sm.signalChan <- syscall.SIGINT
+			if !closing.Load() {
+				sm.signalChan <- syscall.SIGINT
+			}
 		} else {
 			log.Debug("start VipServer for cluster manager successful")
 		}
 	}
+
+	<-finished
+	log.Debug("kube-vip exited properly")
 
 	return nil
 }

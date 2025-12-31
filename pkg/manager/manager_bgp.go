@@ -3,6 +3,7 @@ package manager
 import (
 	"context"
 	"fmt"
+	"sync/atomic"
 	"syscall"
 
 	log "log/slog"
@@ -59,8 +60,12 @@ func (sm *Manager) startBGP(ctx context.Context) error {
 		}
 	}()
 
+	var closing atomic.Bool
+	finished := make(chan struct{})
+
 	// Shutdown function that will wait on this signal, unless we call it ourselves
 	go func() {
+		defer close(finished)
 		for {
 			sig := <-sm.signalChan
 			switch sig {
@@ -68,12 +73,13 @@ func (sm *Manager) startBGP(ctx context.Context) error {
 				log.Info("Received SIGUSR1, dumping configuration")
 				sm.dumpConfiguration(bgpCtx)
 			case syscall.SIGINT, syscall.SIGTERM:
-				log.Info("Received termination, signaling shutdown")
-				if sm.config.EnableControlPlane {
-					if cpCluster != nil {
-						cpCluster.Stop()
-					}
+				closing.Store(true)
+				log.Info("Received kube-vip termination, signaling shutdown")
+				if cpCluster != nil {
+					cpCluster.Stop()
 				}
+				// Close all go routines
+				close(sm.shutdownChan)
 				// Cancel the context, which will in turn cancel the leadership
 				cancel()
 				return
@@ -101,7 +107,9 @@ func (sm *Manager) startBGP(ctx context.Context) error {
 			if err != nil {
 				log.Error("Control Plane", "err", err)
 				// Trigger the shutdown of this manager instance
-				sm.signalChan <- syscall.SIGINT
+				if !closing.Load() {
+					sm.signalChan <- syscall.SIGINT
+				}
 			}
 		}()
 
@@ -129,6 +137,9 @@ func (sm *Manager) startBGP(ctx context.Context) error {
 	}
 
 	log.Info("Shutting down Kube-Vip")
+
+	<-finished
+	log.Debug("kube-vip exited properly")
 
 	return nil
 }

@@ -56,8 +56,7 @@ func (cluster *Cluster) vipService(ctx context.Context, c *kubevip.Config, sm *M
 		}
 
 		if err := network.SetMask(c.VIPSubnet); err != nil {
-			log.Error("failed to set mask", "subnet", c.VIPSubnet, "err", err)
-			panic("")
+			return fmt.Errorf("failed to set mask for subnet %q: %w", c.VIPSubnet, err)
 		}
 
 		// start the dns updater if address is dns
@@ -86,13 +85,16 @@ func (cluster *Cluster) vipService(ctx context.Context, c *kubevip.Config, sm *M
 		if c.EnableLoadBalancer {
 			lb, err := loadbalancer.NewIPVSLB(network.IP(), c.LoadBalancerPort, c.LoadBalancerForwardingMethod, c.BackendHealthCheckInterval, c.Interface, cancelLeaderElection, signalChan)
 			if err != nil {
-				log.Error("Error creating IPVS LoadBalancer", "err", err)
+				return fmt.Errorf("creating IPVS LoadBalance: %w", err)
 			}
 
 			go func() {
-				err = sm.NodeWatcher(ctx, lb, c.Port) //TODO: We're using the ctxARP as the context this will change when rkatz finishes his change
+				err = sm.NodeWatcher(ctx, lb, c.Port)
 				if err != nil {
 					log.Error("Error watching node labels", "err", err)
+					if errors.Is(err, &utils.PanicError{}) {
+						signalChan <- syscall.SIGINT
+					}
 				}
 			}()
 
@@ -231,7 +233,8 @@ func (cluster *Cluster) vipService(ctx context.Context, c *kubevip.Config, sm *M
 					deleted, err := network.DeleteIP()
 					if err != nil {
 						log.Error("error deleting IP", "err", err)
-						panic("")
+						signalChan <- syscall.SIGINT
+						return
 					}
 					if deleted {
 						log.Info("deleted address", "IP", network.IP(), "interface", network.Interface())
@@ -267,7 +270,7 @@ func getNodeIPs(ctx context.Context, nodename string, client *kubernetes.Clients
 }
 
 // StartLoadBalancerService will start a VIP instance and leave it for kube-proxy to handle
-func (cluster *Cluster) StartLoadBalancerService(ctx context.Context, c *kubevip.Config, bgp *bgp.Server, name string, CountRouteReferences func(*netlink.Route) int) {
+func (cluster *Cluster) StartLoadBalancerService(ctx context.Context, c *kubevip.Config, bgp *bgp.Server, name string, CountRouteReferences func(*netlink.Route) int) error {
 	// use a Go context so we can tell the arp loop code when we
 	// want to step down
 	//nolint
@@ -303,7 +306,8 @@ func (cluster *Cluster) StartLoadBalancerService(ctx context.Context, c *kubevip
 		log.Debug("current ip to process", "ip", network.IP(), "mask", c.VIPSubnet)
 		if err := network.SetMask(c.VIPSubnet); err != nil {
 			log.Error("failed to set mask", "subnet", c.VIPSubnet, "err", err)
-			panic("")
+			cancelArp()
+			return utils.NewPanicError(fmt.Sprintf("failed to set mask for subnet %q: %s", c.VIPSubnet, err.Error()))
 		}
 		_, err := network.DeleteIP()
 		if err != nil {
@@ -417,6 +421,8 @@ func (cluster *Cluster) StartLoadBalancerService(ctx context.Context, c *kubevip
 
 		close(cluster.completed)
 	}()
+
+	return nil
 }
 
 // Layer2Update, handles the creation of the

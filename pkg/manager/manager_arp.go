@@ -2,6 +2,7 @@ package manager
 
 import (
 	"context"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -30,8 +31,12 @@ func (sm *Manager) startARP(ctx context.Context, id string) error {
 	log.Info("Start ARP/NDP advertisement")
 	go sm.arpMgr.StartAdvertisement(arpCtx)
 
+	var closing atomic.Bool
+	finished := make(chan struct{})
+
 	// Shutdown function that will wait on this signal, unless we call it ourselves
 	go func() {
+		defer close(finished)
 		for {
 			sig := <-sm.signalChan
 			switch sig {
@@ -39,8 +44,9 @@ func (sm *Manager) startARP(ctx context.Context, id string) error {
 				log.Info("Received SIGUSR1, dumping configuration")
 				sm.dumpConfiguration(arpCtx)
 			case syscall.SIGINT, syscall.SIGTERM:
+				closing.Store(true)
 				log.Info("Received kube-vip termination, signaling shutdown")
-				if sm.config.EnableControlPlane {
+				if cpCluster != nil {
 					cpCluster.Stop()
 				}
 				// Close all go routines
@@ -67,7 +73,10 @@ func (sm *Manager) startARP(ctx context.Context, id string) error {
 			err := cpCluster.StartCluster(arpCtx, sm.config, clusterManager, nil)
 			if err != nil {
 				log.Error("starting control plane", "err", err)
-				// Trigger the shutdown of this manager instance
+			}
+
+			// Trigger the shutdown of this manager instance
+			if !closing.Load() {
 				sm.signalChan <- syscall.SIGINT
 			}
 		}()
@@ -137,7 +146,9 @@ func (sm *Manager) startARP(ctx context.Context, id string) error {
 					err = sm.svcProcessor.ServicesWatcher(ctx, sm.svcProcessor.SyncServices)
 					if err != nil {
 						log.Error("service watcher", "err", err)
-						panic("") // TODO: - emulating log.fatal here
+						if !closing.Load() {
+							sm.signalChan <- syscall.SIGINT
+						}
 					}
 				},
 				OnStoppedLeading: func() {
@@ -147,8 +158,10 @@ func (sm *Manager) startARP(ctx context.Context, id string) error {
 					log.Info("leader lost", "new leader", id)
 					sm.svcProcessor.Stop()
 
-					log.Error("lost leadership, restarting kube-vip")
-					panic("") // TODO: - emulating log.fatal here
+					log.Error("lost services leadership, restarting kube-vip")
+					if !closing.Load() {
+						sm.signalChan <- syscall.SIGINT
+					}
 				},
 				OnNewLeader: func(identity string) {
 					// we're notified when new leader elected
@@ -164,5 +177,8 @@ func (sm *Manager) startARP(ctx context.Context, id string) error {
 			},
 		})
 	}
+
+	<-finished
+	log.Debug("kube-vip exited properly")
 	return nil
 }

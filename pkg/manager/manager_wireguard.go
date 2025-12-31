@@ -2,6 +2,7 @@ package manager
 
 import (
 	"context"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -38,8 +39,12 @@ func (sm *Manager) startWireguard(ctx context.Context, id string) error {
 		return err
 	}
 
+	var closing atomic.Bool
+	finished := make(chan struct{})
+
 	// Shutdown function that will wait on this signal, unless we call it ourselves
 	go func() {
+		defer close(finished)
 		for {
 			sig := <-sm.signalChan
 			switch sig {
@@ -47,7 +52,10 @@ func (sm *Manager) startWireguard(ctx context.Context, id string) error {
 				log.Info("Received SIGUSR1, dumping configuration")
 				sm.dumpConfiguration(wgCtx)
 			case syscall.SIGINT, syscall.SIGTERM:
-				log.Info("Received termination, signaling shutdown")
+				closing.Store(true)
+				log.Info("Received kube-vip termination, signaling shutdown")
+				// Close all go routines
+				close(sm.shutdownChan)
 				// Cancel the context, which will in turn cancel the leadership
 				cancel()
 				return
@@ -103,7 +111,9 @@ func (sm *Manager) startWireguard(ctx context.Context, id string) error {
 					err = sm.svcProcessor.ServicesWatcher(ctx, sm.svcProcessor.SyncServices)
 					if err != nil {
 						log.Error(err.Error())
-						panic("")
+						if !closing.Load() {
+							sm.signalChan <- syscall.SIGINT
+						}
 					}
 				},
 				OnStoppedLeading: func() {
@@ -113,8 +123,10 @@ func (sm *Manager) startWireguard(ctx context.Context, id string) error {
 					log.Info("leader lost", "id", id)
 					sm.svcProcessor.Stop()
 
-					log.Error("lost leadership, restarting kube-vip")
-					panic("")
+					log.Error("lost services leadership, restarting kube-vip")
+					if !closing.Load() {
+						sm.signalChan <- syscall.SIGINT
+					}
 				},
 				OnNewLeader: func(identity string) {
 					// we're notified when new leader elected
@@ -127,5 +139,9 @@ func (sm *Manager) startWireguard(ctx context.Context, id string) error {
 			},
 		})
 	}
+
+	<-finished
+	log.Debug("kube-vip exited properly")
+
 	return nil
 }
