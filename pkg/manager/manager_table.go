@@ -73,6 +73,35 @@ func (sm *Manager) startTableMode(ctx context.Context, id string) error {
 		}
 	}()
 
+	if sm.config.EnableControlPlane {
+		log.Debug("initCluster for ControlPlane")
+		cpCluster, err = cluster.InitCluster(sm.config, false, sm.intfMgr, sm.arpMgr)
+		if err != nil {
+			log.Debug("init of ControlPlane NOT successful")
+			return fmt.Errorf("cluster initialization error: %w", err)
+		}
+		log.Debug("init of ControlPlane successful")
+		log.Debug("init ClusterManager")
+		clusterManager, err := initClusterManager(sm)
+		if err != nil {
+			log.Debug("init cluster manager NOT successful")
+			return fmt.Errorf("cluster manager initialization error: %w", err)
+		}
+
+		go func() {
+			log.Debug("init ClusterManager successful")
+			if err := cpCluster.StartVipService(rtCtx, sm.config, clusterManager, nil); err != nil {
+				log.Error("Control Plane", "err", err)
+				// Trigger the shutdown of this manager instance
+
+			}
+
+			if !closing.Load() {
+				sm.signalChan <- syscall.SIGINT
+			}
+		}()
+	}
+
 	if sm.config.EnableServices {
 		log.Debug("starting Services")
 		ns, err := returnNameSpace()
@@ -155,31 +184,9 @@ func (sm *Manager) startTableMode(ctx context.Context, id string) error {
 			}
 		}
 	}
-	if sm.config.EnableControlPlane {
-		log.Debug("initCluster for ControlPlane")
-		cpCluster, err = cluster.InitCluster(sm.config, false, sm.intfMgr, sm.arpMgr)
-		if err != nil {
-			log.Debug("init of ControlPlane NOT successful")
-			return fmt.Errorf("cluster initialization error: %w", err)
-		}
-		log.Debug("init of ControlPlane successful")
-		log.Debug("init ClusterManager")
-		clusterManager, err := initClusterManager(sm)
-		if err != nil {
-			log.Debug("init cluster manager NOT successful")
-			return fmt.Errorf("cluster manager initialization error: %w", err)
-		}
-		log.Debug("init ClusterManager successful")
-		if err := cpCluster.StartVipService(rtCtx, sm.config, clusterManager, nil); err != nil {
-			log.Error("Control Plane", "err", err)
-			// Trigger the shutdown of this manager instance
-			if !closing.Load() {
-				sm.signalChan <- syscall.SIGINT
-			}
-		} else {
-			log.Debug("start VipServer for cluster manager successful")
-		}
-	}
+
+	<-sm.shutdownChan
+	log.Info("Shutting down Kube-Vip")
 
 	<-finished
 	log.Debug("kube-vip exited properly")

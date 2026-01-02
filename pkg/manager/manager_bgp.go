@@ -112,30 +112,26 @@ func (sm *Manager) startBGP(ctx context.Context) error {
 				}
 			}
 		}()
+	}
 
-		// Check if we're also starting the services, if not we can sit and wait on the closing channel and return here
-		if !sm.config.EnableServices {
-			<-sm.signalChan
-			log.Info("Shutting down Kube-Vip")
+	if sm.config.EnableServices {
 
-			return nil
+		if sm.config.EnableServicesElection {
+			log.Info("beginning watching services, leaderelection will happen for every service")
+			err = sm.svcProcessor.StartServicesWatchForLeaderElection(bgpCtx)
+			if err != nil {
+				return err
+			}
+		} else {
+			log.Info("beginning watching services without leader election")
+			err = sm.svcProcessor.ServicesWatcher(bgpCtx, sm.svcProcessor.SyncServices)
+			if err != nil {
+				return err
+			}
 		}
 	}
 
-	if sm.config.EnableServicesElection {
-		log.Info("beginning watching services, leaderelection will happen for every service")
-		err = sm.svcProcessor.StartServicesWatchForLeaderElection(bgpCtx)
-		if err != nil {
-			return err
-		}
-	} else {
-		log.Info("beginning watching services without leader election")
-		err = sm.svcProcessor.ServicesWatcher(bgpCtx, sm.svcProcessor.SyncServices)
-		if err != nil {
-			return err
-		}
-	}
-
+	<-sm.shutdownChan
 	log.Info("Shutting down Kube-Vip")
 
 	<-finished
