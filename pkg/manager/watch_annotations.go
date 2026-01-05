@@ -25,7 +25,7 @@ import (
 
 // This file handles the watching of node annotations for configuration, it will exit once the annotations are
 // present
-func (sm *Manager) annotationsWatcher() error {
+func (sm *Manager) annotationsWatcher(ctx context.Context) error {
 	// Use a restartable watcher, as this should help in the event of etcd or timeout issues
 	log.Info("Kube-Vip is waiting for annotation prefix to be present on this node", "prefix", sm.config.Annotations)
 
@@ -58,7 +58,7 @@ func (sm *Manager) annotationsWatcher() error {
 	log.Warn(err.Error())
 
 	// TODO, will need refactoring as part of rikatz work
-	rw, err := watchtools.NewRetryWatcherWithContext(context.TODO(), node.ResourceVersion, &cache.ListWatch{
+	rw, err := watchtools.NewRetryWatcherWithContext(ctx, node.ResourceVersion, &cache.ListWatch{
 		WatchFunc: func(_ metav1.ListOptions) (watch.Interface, error) {
 			return sm.rwClientSet.CoreV1().Nodes().Watch(context.Background(), listOptions)
 		},

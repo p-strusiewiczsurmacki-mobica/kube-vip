@@ -202,7 +202,7 @@ func (c *DHCPv6Client) Start(ctx context.Context) error {
 			t2.Reset(t2Timeout)
 
 		case <-c.stopChan:
-			dhcpStopContext, cancel := context.WithCancel(context.Background())
+			dhcpStopContext, cancel := context.WithCancel(ctx)
 			defer cancel()
 			// IP address release.
 			var err error

@@ -243,15 +243,18 @@ var kubeVipService = &cobra.Command{
 			}
 		}
 
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+
 		// Define the new service manager
-		mgr, err := manager.New(configMap, &initConfig)
+		mgr, err := manager.New(ctx, configMap, &initConfig)
 		if err != nil {
 			log.Error("new manager", "err", err)
 			return
 		}
 
 		// Start the service manager, this will watch the config Map and construct kube-vip services for it
-		err = mgr.Start()
+		err = mgr.Start(ctx)
 		if err != nil {
 			log.Error("manager start", "err", err)
 			return
@@ -343,6 +346,9 @@ var kubeVipManager = &cobra.Command{
 			return
 		}
 
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+
 		// If we're using wireguard then all traffic goes through the wg0 interface
 		if initConfig.EnableWireguard {
 			if initConfig.Interface == "" {
@@ -387,7 +393,7 @@ var kubeVipManager = &cobra.Command{
 				log.Info("kube-vip bind", "interface", initConfig.Interface)
 
 				go func() {
-					if err := vip.MonitorDefaultInterface(context.TODO(), defaultIF); err != nil {
+					if err := vip.MonitorDefaultInterface(ctx, defaultIF); err != nil {
 
 						log.Error("interface monitor", "err", err)
 						return
@@ -408,7 +414,7 @@ var kubeVipManager = &cobra.Command{
 		}
 
 		// Define the new service manager
-		mgr, err := manager.New(configMap, &initConfig)
+		mgr, err := manager.New(ctx, configMap, &initConfig)
 		if err != nil {
 			log.Error("new manager", "err", err)
 			return
@@ -417,7 +423,7 @@ var kubeVipManager = &cobra.Command{
 		prometheus.MustRegister(mgr.PrometheusCollector()...)
 
 		// Start the service manager, this will watch the config Map and construct kube-vip services for it
-		err = mgr.Start()
+		err = mgr.Start(ctx)
 		if err != nil {
 			log.Error("start manager", "err", err)
 			return

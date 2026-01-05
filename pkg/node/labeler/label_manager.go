@@ -66,14 +66,14 @@ func (m *Manager) RemoveLabel(ctx context.Context, svc *corev1.Service) error {
 }
 
 // clean up the node labels
-func (m *Manager) CleanUpLabels(timeout time.Duration) error {
+func (m *Manager) CleanUpLabels(ctx context.Context, timeout time.Duration) error {
 	log.Debug("cleaning up labels for node", "node", m.nodeName, "timeout", timeout)
 
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	cleanupCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
 	// get the node
-	node, err := m.clientSet.CoreV1().Nodes().Get(ctx, m.nodeName, metav1.GetOptions{})
+	node, err := m.clientSet.CoreV1().Nodes().Get(cleanupCtx, m.nodeName, metav1.GetOptions{})
 	if err != nil {
 		return errors.Wrapf(err, "failed to get node %s", m.nodeName)
 	}
@@ -92,7 +92,7 @@ func (m *Manager) CleanUpLabels(timeout time.Duration) error {
 	}
 
 	// patch the node with the labels to remove
-	return m.patchNode(ctx, labelOperationRemove, labels)
+	return m.patchNode(cleanupCtx, labelOperationRemove, labels)
 }
 
 // generateNodeLabelKeyValue generates a label key and value for the given service

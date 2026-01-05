@@ -22,7 +22,7 @@ type LabelManager interface {
 	RemoveLabel(ctx context.Context, svc *v1.Service) error
 
 	// CleanUpLabels removes all labels from the node
-	CleanUpLabels(timeout time.Duration) error
+	CleanUpLabels(ctx context.Context, timeout time.Duration) error
 }
 
 // NewManager creates a new Label Manager for the given node

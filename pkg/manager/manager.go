@@ -75,7 +75,7 @@ type Manager struct {
 }
 
 // New will create a new managing object
-func New(configMap string, config *kubevip.Config) (*Manager, error) {
+func New(ctx context.Context, configMap string, config *kubevip.Config) (*Manager, error) {
 
 	// Instance identity should be the same as k8s node name to ensure better compatibility.
 	// By default k8s sets node name to `hostname -s`,
@@ -235,7 +235,7 @@ func New(configMap string, config *kubevip.Config) (*Manager, error) {
 }
 
 // Start will begin the Manager, which will start services and watch the configmap
-func (sm *Manager) Start() error {
+func (sm *Manager) Start(ctx context.Context) error {
 	// listen for interrupts or the Linux SIGTERM signal and cancel
 	// our context, which the leader election code will observe and
 	// step down
@@ -274,7 +274,7 @@ func (sm *Manager) Start() error {
 
 	// on exit, clean up the node labels
 	defer func() {
-		if err := sm.nodeLabelManager.CleanUpLabels(10 * time.Second); err != nil {
+		if err := sm.nodeLabelManager.CleanUpLabels(ctx, 10*time.Second); err != nil {
 			log.Error("CleanUpNodeLabels", "unable to cleanup node labels", err)
 		}
 	}()
@@ -283,7 +283,7 @@ func (sm *Manager) Start() error {
 	if sm.config.EnableBGP {
 
 		// If Annotations have been set then we will look them up
-		err := sm.parseAnnotations()
+		err := sm.parseAnnotations(ctx)
 		if err != nil {
 			return err
 		}
@@ -294,7 +294,7 @@ func (sm *Manager) Start() error {
 
 	if sm.config.EnableARP || sm.config.EnableWireguard {
 		if sm.config.EnableUPNP {
-			clients := upnp.GetConnectionClients(context.TODO())
+			clients := upnp.GetConnectionClients(ctx)
 			if len(clients) == 0 {
 				log.Error("Error Enabling UPNP. No Clients found")
 				// Set the struct to false so nothing should use it in future
@@ -309,7 +309,7 @@ func (sm *Manager) Start() error {
 				}
 			}
 			// TODO: It would be nice to run the UPNP refresh only on the leader.
-			go sm.svcProcessor.RefreshUPNPForwards()
+			go sm.svcProcessor.RefreshUPNPForwards(ctx)
 		}
 	}
 
@@ -343,13 +343,13 @@ func returnNameSpace() (string, error) {
 	return "", fmt.Errorf("unable to find Namespace")
 }
 
-func (sm *Manager) parseAnnotations() error {
+func (sm *Manager) parseAnnotations(ctx context.Context) error {
 	if sm.config.Annotations == "" {
 		log.Debug("No Node annotations to parse")
 		return nil
 	}
 
-	err := sm.annotationsWatcher()
+	err := sm.annotationsWatcher(ctx)
 	if err != nil {
 		return err
 	}
