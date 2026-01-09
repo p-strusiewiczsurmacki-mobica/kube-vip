@@ -203,6 +203,9 @@ func (p *Processor) AddOrModify(ctx context.Context, event watch.Event, serviceF
 				(!p.config.EnableLeaderElection && !p.config.EnableServicesElection)) { // No leaderelection or services election
 
 			// If this load balancer Traffic Policy is "local"
+			func() {
+
+			}()
 			if svc.Spec.ExternalTrafficPolicy == v1.ServiceExternalTrafficPolicyTypeLocal {
 
 				// Start an endpoint watcher if we're not watching it already
@@ -216,6 +219,12 @@ func (p *Processor) AddOrModify(ctx context.Context, event watch.Event, serviceF
 					}
 
 					go func() {
+						defer func() {
+							if svcCtx != nil {
+								svcCtx.IsWatched = false
+							}
+						}()
+
 						if svc.Spec.ExternalTrafficPolicy == v1.ServiceExternalTrafficPolicyTypeLocal {
 							// Add Endpoint or EndpointSlices watcher
 							var provider providers.Provider
@@ -240,6 +249,12 @@ func (p *Processor) AddOrModify(ctx context.Context, event watch.Event, serviceF
 				}
 
 				go func() {
+					defer func() {
+						if svcCtx != nil {
+							svcCtx.IsWatched = false
+						}
+					}()
+
 					if svc.Spec.ExternalTrafficPolicy == v1.ServiceExternalTrafficPolicyTypeCluster {
 						// Add Endpoint watcher
 						var provider providers.Provider

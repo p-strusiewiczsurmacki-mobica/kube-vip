@@ -142,6 +142,7 @@ func (p *Processor) updateAnnotations(service *v1.Service, lastKnownGoodEndpoint
 }
 
 func startLeaderElection(svcCtx *servicecontext.Context, service *v1.Service, serviceFunc func(*servicecontext.Context, *v1.Service) error) {
+	log.Debug("startLeaderElection", "service", service.Name)
 	// This is a blocking function, that will restart (in the event of failure)
 	for {
 		select {

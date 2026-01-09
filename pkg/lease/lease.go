@@ -3,6 +3,7 @@ package lease
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"sync"
 
 	"github.com/kube-vip/kube-vip/pkg/kubevip"
@@ -30,10 +31,11 @@ func (m *Manager) Add(service *v1.Service) (*Lease, bool) {
 	if _, exist := m.leases[id]; !exist {
 		ctx, cancel := context.WithCancel(context.Background())
 		m.leases[id] = newLease(ctx, cancel)
+		slog.Debug("new lease", "service", service.Name, "id", id)
 		return m.leases[id], true
 	}
-
 	m.leases[id].increment()
+	slog.Debug("incrementing lease counter", "service", service.Name, "id", id, "cnt", m.leases[id].cnt)
 	return m.leases[id], false
 }
 
@@ -44,7 +46,9 @@ func (m *Manager) Delete(service *v1.Service) {
 	_, id := GetName(service)
 	if _, exist := m.leases[id]; exist {
 		m.leases[id].decrement()
+		slog.Debug("decremented lease counter", "service", service.Name, "id", id, "cnt", m.leases[id].cnt)
 		if m.leases[id].cnt < 1 {
+			slog.Debug("removing lease (cnt 0)", "service", service.Name, "id", id)
 			delete(m.leases, id)
 		}
 	}
