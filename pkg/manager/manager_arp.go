@@ -104,6 +104,53 @@ func (sm *Manager) startARP(id string) error {
 			return err
 		}
 	} else {
+		objectName := "services-leader"
+		servicesLease, newLease, sharedLease := sm.leaseMgr.Add(sm.config.ServicesLeaseName, objectName)
+		// this service was already processed so we do not need to do anything
+		if !newLease {
+			// Wait for either the object context or lease context to be done
+			select {
+			case <-ctx.Done():
+				// Service was deleted
+				sm.leaseMgr.Delete(sm.config.ServicesLeaseName, objectName)
+			case <-servicesLease.Ctx.Done():
+				// Leader election ended (leadership lost or context cancelled)
+			}
+			return nil
+		}
+
+		// Start a goroutine that will delete the lease when the service context is cancelled.
+		// This is important for proper cleanup when a service is deleted - it ensures that
+		// the lease context (svcLease.Ctx) gets cancelled, which causes RunOrDie to return.
+		// Without this, RunOrDie would continue running until leadership is naturally lost.
+		go func() {
+			<-ctx.Done()
+			sm.leaseMgr.Delete(sm.config.ServicesLeaseName, objectName)
+		}()
+
+		// this object is sharing lease with another object
+		if sharedLease {
+			// wait for leader election to start or context to be done
+			select {
+			case <-servicesLease.Started:
+			case <-servicesLease.Ctx.Done():
+				// Lease was cancelled (e.g., leader election ended), return immediately
+				// This allows the restart loop to create a fresh lease
+				log.Debug("lease context cancelled before leader election started", "id", sm.config.ServicesLeaseName, "object", objectName)
+				return nil
+			}
+
+			err = sm.svcProcessor.ServicesWatcher(ctx, sm.svcProcessor.SyncServices)
+			if err != nil {
+				log.Error("service watcher", "err", err)
+				cancel()
+			}
+
+			// Block until context is cancelled
+			<-ctx.Done()
+
+			return nil
+		}
 
 		log.Info("beginning services leadership", "namespace", ns, "lock name", sm.config.ServicesLeaseName, "id", id)
 		// we use the Lease lock type since edits to Leases are less common

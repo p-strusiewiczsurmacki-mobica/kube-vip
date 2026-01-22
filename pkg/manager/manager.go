@@ -18,6 +18,7 @@ import (
 	"github.com/kube-vip/kube-vip/pkg/bgp"
 	"github.com/kube-vip/kube-vip/pkg/k8s"
 	"github.com/kube-vip/kube-vip/pkg/kubevip"
+	"github.com/kube-vip/kube-vip/pkg/lease"
 	"github.com/kube-vip/kube-vip/pkg/networkinterface"
 	"github.com/kube-vip/kube-vip/pkg/node"
 	"github.com/kube-vip/kube-vip/pkg/services"
@@ -72,6 +73,8 @@ type Manager struct {
 	// implementation will be decided in constructor
 	// based on config.EnableNodeLabeling
 	nodeLabelManager node.LabelManager
+
+	leaseMgr *lease.Manager
 }
 
 // New will create a new managing object
@@ -205,7 +208,9 @@ func New(configMap string, config *kubevip.Config) (*Manager, error) {
 		}
 	}
 
-	svcProcessor := services.NewServicesProcessor(config, bgpServer, clientset, rwClientSet, shutdownChan, intfMgr, arpMgr, nodeLabelManager)
+	leaseMgr := lease.NewManager()
+
+	svcProcessor := services.NewServicesProcessor(config, bgpServer, clientset, rwClientSet, shutdownChan, intfMgr, arpMgr, nodeLabelManager, leaseMgr)
 
 	return &Manager{
 		clientSet:   clientset,
@@ -231,6 +236,7 @@ func New(configMap string, config *kubevip.Config) (*Manager, error) {
 		arpMgr:           arpMgr,
 		bgpServer:        bgpServer,
 		nodeLabelManager: nodeLabelManager,
+		leaseMgr:         leaseMgr,
 	}, nil
 }
 
