@@ -13,6 +13,7 @@ import (
 	"github.com/kube-vip/kube-vip/pkg/bgp"
 	"github.com/kube-vip/kube-vip/pkg/cluster"
 	"github.com/kube-vip/kube-vip/pkg/kubevip"
+	"github.com/kube-vip/kube-vip/pkg/lease"
 	"github.com/kube-vip/kube-vip/pkg/networkinterface"
 	"github.com/kube-vip/kube-vip/pkg/services"
 	api "github.com/osrg/gobgp/v3/api"
@@ -30,7 +31,8 @@ type BGP struct {
 func NewBGP(arpMgr *arp.Manager, intfMgr *networkinterface.Manager,
 	config *kubevip.Config, closing *atomic.Bool, signalChan chan os.Signal,
 	svcProcessor *services.Processor, mutex *sync.Mutex, clientSet *kubernetes.Clientset,
-	bgpServer *bgp.Server, bgpSessionInfoGauge *prometheus.GaugeVec) *BGP {
+	bgpServer *bgp.Server, bgpSessionInfoGauge *prometheus.GaugeVec,
+	leaseMgr *lease.Manager) *BGP {
 	return &BGP{
 		Common: Common{
 			arpMgr:       arpMgr,
@@ -41,6 +43,7 @@ func NewBGP(arpMgr *arp.Manager, intfMgr *networkinterface.Manager,
 			svcProcessor: svcProcessor,
 			mutex:        mutex,
 			clientSet:    clientSet,
+			leaseMgr:     leaseMgr,
 		},
 		bgpServer:           bgpServer,
 		bgpSessionInfoGauge: bgpSessionInfoGauge,
@@ -83,7 +86,7 @@ func (b *BGP) Configure(ctx context.Context) error {
 func (b *BGP) StartControlPlane(ctx context.Context, clusterManager *cluster.Manager) {
 	var err error
 	if b.config.EnableLeaderElection {
-		err = b.cpCluster.StartCluster(ctx, b.config, clusterManager, b.bgpServer)
+		err = b.cpCluster.StartCluster(ctx, b.config, clusterManager, b.bgpServer, b.leaseMgr)
 	} else {
 		err = b.cpCluster.StartVipService(ctx, b.config, clusterManager, b.bgpServer)
 	}
