@@ -64,7 +64,8 @@ type labelManager interface {
 
 func NewServicesProcessor(config *kubevip.Config, bgpServer *bgp.Server,
 	clientSet *kubernetes.Clientset, rwClientSet *kubernetes.Clientset, shutdownChan chan struct{},
-	intfMgr *networkinterface.Manager, arpMgr *arp.Manager, nodeLabelManager labelManager) *Processor {
+	intfMgr *networkinterface.Manager, arpMgr *arp.Manager, nodeLabelManager labelManager,
+	leaseMgr *lease.Manager) *Processor {
 	lbClassFilterFunc := lbClassFilter
 	if config.LoadBalancerClassLegacyHandling {
 		lbClassFilterFunc = lbClassFilterLegacy
@@ -87,7 +88,7 @@ func NewServicesProcessor(config *kubevip.Config, bgpServer *bgp.Server,
 
 		intfMgr:          intfMgr,
 		arpMgr:           arpMgr,
-		leaseMgr:         lease.NewManager(),
+		leaseMgr:         leaseMgr,
 		nodeLabelManager: nodeLabelManager,
 	}
 }

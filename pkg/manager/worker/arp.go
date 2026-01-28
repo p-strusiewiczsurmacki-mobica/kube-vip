@@ -12,6 +12,7 @@ import (
 	"github.com/kube-vip/kube-vip/pkg/cluster"
 	"github.com/kube-vip/kube-vip/pkg/iptables"
 	"github.com/kube-vip/kube-vip/pkg/kubevip"
+	"github.com/kube-vip/kube-vip/pkg/lease"
 	"github.com/kube-vip/kube-vip/pkg/networkinterface"
 	"github.com/kube-vip/kube-vip/pkg/services"
 	"github.com/kube-vip/kube-vip/pkg/vip"
@@ -24,7 +25,8 @@ type ARP struct {
 
 func NewARP(arpMgr *arp.Manager, intfMgr *networkinterface.Manager,
 	config *kubevip.Config, closing *atomic.Bool, signalChan chan os.Signal,
-	svcProcessor *services.Processor, mutex *sync.Mutex, clientSet *kubernetes.Clientset) *ARP {
+	svcProcessor *services.Processor, mutex *sync.Mutex, clientSet *kubernetes.Clientset,
+	leaseMgr *lease.Manager) *ARP {
 	return &ARP{
 		Common: Common{
 			arpMgr:       arpMgr,
@@ -35,6 +37,7 @@ func NewARP(arpMgr *arp.Manager, intfMgr *networkinterface.Manager,
 			svcProcessor: svcProcessor,
 			mutex:        mutex,
 			clientSet:    clientSet,
+			leaseMgr:     leaseMgr,
 		},
 	}
 }
@@ -46,7 +49,7 @@ func (a *ARP) Configure(ctx context.Context) error {
 }
 
 func (a *ARP) StartControlPlane(ctx context.Context, clusterManager *cluster.Manager) {
-	err := a.cpCluster.StartCluster(ctx, a.config, clusterManager, nil)
+	err := a.cpCluster.StartCluster(ctx, a.config, clusterManager, nil, a.leaseMgr)
 	if err != nil {
 		log.Error("starting control plane", "err", err)
 	}
