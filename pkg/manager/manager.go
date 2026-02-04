@@ -198,6 +198,9 @@ func New(configMap string, config *kubevip.Config) (*Manager, error) {
 	// Add Notification for SIGTERM (sent from Kubernetes)
 	signal.Notify(signalChan, syscall.SIGTERM)
 
+	// Add Notification for SIGUSR1 (for configuration dump)
+	signal.Notify(signalChan, syscall.SIGUSR1)
+
 	// All watchers and other goroutines should have an additional goroutine that blocks on this, to shut things down
 	shutdownChan := make(chan struct{})
 
@@ -257,22 +260,6 @@ func New(configMap string, config *kubevip.Config) (*Manager, error) {
 
 // Start will begin the Manager, which will start services and watch the configmap
 func (sm *Manager) Start(ctx context.Context) error {
-	// listen for interrupts or the Linux SIGTERM signal and cancel
-	// our context, which the leader election code will observe and
-	// step down
-	sm.signalChan = make(chan os.Signal, 1)
-	// Add Notification for Userland interrupt
-	signal.Notify(sm.signalChan, syscall.SIGINT)
-
-	// Add Notification for SIGTERM (sent from Kubernetes)
-	signal.Notify(sm.signalChan, syscall.SIGTERM)
-
-	// Add Notification for SIGUSR1 (for configuration dump)
-	signal.Notify(sm.signalChan, syscall.SIGUSR1)
-
-	// All watchers and other goroutines should have an additional goroutine that blocks on this, to shut things down
-	sm.shutdownChan = make(chan struct{})
-
 	wg := sync.WaitGroup{}
 	defer wg.Wait()
 
@@ -284,7 +271,7 @@ func (sm *Manager) Start(ctx context.Context) error {
 		http.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
 			fmt.Fprintf(w, "OK")
 		})
-		wg.Go(func() { runHealtcheckServer(ctx, sm.config.HealthCheckPort) })
+		wg.Go(func() { runHealthcheckServer(ctx, sm.config.HealthCheckPort) })
 	}
 
 	// on exit, clean up the node labels
@@ -327,7 +314,7 @@ func (sm *Manager) Start(ctx context.Context) error {
 	return sm.startMode(ctx, sm.config.NodeName)
 }
 
-func runHealtcheckServer(ctx context.Context, port int) {
+func runHealthcheckServer(ctx context.Context, port int) {
 	wg := sync.WaitGroup{}
 	defer wg.Wait()
 
@@ -403,7 +390,6 @@ func (sm *Manager) startMode(ctx context.Context, id string) error {
 
 	wg.Wait()
 
-	<-sm.shutdownChan
 	log.Info("shutting down kube-vip")
 
 	return nil

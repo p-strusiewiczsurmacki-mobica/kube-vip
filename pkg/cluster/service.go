@@ -298,10 +298,6 @@ func (cluster *Cluster) StartLoadBalancerService(ctx context.Context, c *kubevip
 	//nolint
 	ctxArp, cancelArp := context.WithCancel(ctx)
 
-	if cluster.stop == nil {
-		cluster.stop = make(chan bool, 1)
-	}
-
 	if cluster.completed == nil {
 		cluster.completed = make(chan bool, 1)
 	}

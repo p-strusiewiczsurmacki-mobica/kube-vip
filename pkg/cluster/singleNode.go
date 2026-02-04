@@ -20,10 +20,6 @@ func (cluster *Cluster) StartSingleNode(c *kubevip.Config, disableVIP bool) erro
 
 	log.Info("This node is assuming leadership of the cluster")
 
-	if cluster.stop == nil {
-		cluster.stop = make(chan bool, 1)
-	}
-
 	if cluster.completed == nil {
 		cluster.completed = make(chan bool, 1)
 	}
