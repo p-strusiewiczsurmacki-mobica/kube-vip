@@ -38,7 +38,7 @@ type Common struct {
 
 func (c *Common) InitControlPlane() error {
 	var err error
-	c.cpCluster, err = cluster.InitCluster(c.config, false, c.intfMgr, c.arpMgr)
+	c.cpCluster, err = cluster.InitCluster(c.config, false, c.intfMgr, c.arpMgr, c.signalChan)
 	if err != nil {
 		return fmt.Errorf("cluster initialization error: %w", err)
 	}

@@ -76,10 +76,7 @@ func (cluster *Cluster) StartCluster(ctx context.Context, c *kubevip.Config, sm 
 	clusterCtx, clusterCancel := context.WithCancel(ctx)
 	defer clusterCancel()
 
-	if cluster.completed == nil {
-		cluster.completed = make(chan bool, 1)
-		defer close(cluster.completed)
-	}
+	defer close(cluster.completed)
 
 	go func() {
 		<-cluster.stop

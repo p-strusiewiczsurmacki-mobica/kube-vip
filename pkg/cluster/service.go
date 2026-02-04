@@ -7,7 +7,6 @@ import (
 	"io/fs"
 	"net"
 	"os"
-	"os/signal"
 	"strings"
 	"sync"
 	"syscall"
@@ -33,28 +32,10 @@ import (
 func (cluster *Cluster) vipService(ctx context.Context, c *kubevip.Config, sm *election.Manager, bgpServer *bgp.Server, cancelLeaderElection context.CancelFunc) error {
 	var err error
 
-	// listen for interrupts or the Linux SIGTERM signal and cancel
-	// our context, which the leader election code will observe and
-	// step down
-	signalChan := make(chan os.Signal, 1)
-	// Add Notification for Userland interrupt
-	signal.Notify(signalChan, syscall.SIGINT)
-
-	// Add Notification for SIGTERM (sent from Kubernetes)
-	signal.Notify(signalChan, syscall.SIGTERM)
-
-	shouldClose := false
-	if cluster.completed == nil {
-		cluster.completed = make(chan bool, 1)
-		shouldClose = true
-	}
-
 	go func() {
 		<-ctx.Done()
-		signalChan <- syscall.SIGINT
-		if shouldClose {
-			defer close(cluster.completed)
-		}
+		cluster.signal <- syscall.SIGINT
+		defer close(cluster.completed)
 	}()
 
 	loadbalancers := []*loadbalancer.IPVSLoadBalancer{}
@@ -98,7 +79,7 @@ func (cluster *Cluster) vipService(ctx context.Context, c *kubevip.Config, sm *e
 		}
 
 		if c.EnableLoadBalancer {
-			lb, err := loadbalancer.NewIPVSLB(network.IP(), c.LoadBalancerPort, c.LoadBalancerForwardingMethod, c.BackendHealthCheckInterval, c.Interface, cancelLeaderElection, signalChan)
+			lb, err := loadbalancer.NewIPVSLB(network.IP(), c.LoadBalancerPort, c.LoadBalancerForwardingMethod, c.BackendHealthCheckInterval, c.Interface, cancelLeaderElection, cluster.signal)
 			if err != nil {
 				return fmt.Errorf("creating IPVS LoadBalance: %w", err)
 			}
@@ -108,7 +89,7 @@ func (cluster *Cluster) vipService(ctx context.Context, c *kubevip.Config, sm *e
 				if err != nil {
 					log.Error("Error watching node labels", "err", err)
 					if errors.Is(err, &utils.PanicError{}) {
-						signalChan <- syscall.SIGINT
+						cluster.signal <- syscall.SIGINT
 					}
 				}
 			})
@@ -125,7 +106,7 @@ func (cluster *Cluster) vipService(ctx context.Context, c *kubevip.Config, sm *e
 
 	if c.EnableLoadBalancer {
 		// Shutdown function that will wait on this signal, unless we call it ourselves
-		<-signalChan
+		<-cluster.signal
 		for _, lb := range loadbalancers {
 			err = lb.RemoveIPVSLB()
 			if err != nil {
@@ -184,7 +165,7 @@ func (cluster *Cluster) vipService(ctx context.Context, c *kubevip.Config, sm *e
 
 		// will wait for system interrupt and will send stop signal to backend watch
 		wg.Go(func() {
-			<-signalChan
+			<-cluster.signal
 			stop <- struct{}{}
 		})
 
@@ -249,7 +230,7 @@ func (cluster *Cluster) vipService(ctx context.Context, c *kubevip.Config, sm *e
 					deleted, err := network.DeleteIP()
 					if err != nil {
 						log.Error("error deleting IP", "err", err)
-						signalChan <- syscall.SIGINT
+						cluster.signal <- syscall.SIGINT
 						return
 					}
 					if deleted {
@@ -261,7 +242,7 @@ func (cluster *Cluster) vipService(ctx context.Context, c *kubevip.Config, sm *e
 	}
 
 	if c.EnableBGP {
-		<-signalChan
+		<-cluster.signal
 	}
 
 	wg.Wait()
@@ -297,10 +278,6 @@ func (cluster *Cluster) StartLoadBalancerService(ctx context.Context, c *kubevip
 	// want to step down
 	//nolint
 	ctxArp, cancelArp := context.WithCancel(ctx)
-
-	if cluster.completed == nil {
-		cluster.completed = make(chan bool, 1)
-	}
 
 	wg := sync.WaitGroup{}
 
@@ -371,6 +348,7 @@ func (cluster *Cluster) StartLoadBalancerService(ctx context.Context, c *kubevip
 	}
 
 	lbWg.Go(func() {
+		defer close(cluster.completed)
 		for i := range cluster.Network {
 			network := cluster.Network[i]
 
@@ -404,8 +382,6 @@ func (cluster *Cluster) StartLoadBalancerService(ctx context.Context, c *kubevip
 					}
 				}
 			}
-
-			close(cluster.completed)
 			return
 		}
 		for i := range cluster.Network {
@@ -442,8 +418,6 @@ func (cluster *Cluster) StartLoadBalancerService(ctx context.Context, c *kubevip
 				}
 			}
 		}
-
-		close(cluster.completed)
 	})
 
 	return nil

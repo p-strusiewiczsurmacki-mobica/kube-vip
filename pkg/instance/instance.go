@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net"
+	"os"
 	"slices"
 	"strconv"
 	"strings"
@@ -57,7 +58,7 @@ type Port struct {
 	Type string
 }
 
-func NewInstance(ctx context.Context, svc *v1.Service, config *kubevip.Config, intfMgr *networkinterface.Manager, arpMgr *arp.Manager) (*Instance, error) {
+func NewInstance(ctx context.Context, svc *v1.Service, config *kubevip.Config, intfMgr *networkinterface.Manager, arpMgr *arp.Manager, signalChan chan os.Signal) (*Instance, error) {
 	instanceAddresses, instanceHostnames := FetchServiceAddresses(svc)
 	log.Info("NewInstance used", "instanceAddresses", instanceAddresses, "instanceHostnames", instanceHostnames)
 
@@ -352,7 +353,7 @@ func NewInstance(ctx context.Context, svc *v1.Service, config *kubevip.Config, i
 			}
 		}
 
-		c, err := cluster.InitCluster(instance.VIPConfigs[i], false, intfMgr, arpMgr)
+		c, err := cluster.InitCluster(instance.VIPConfigs[i], false, intfMgr, arpMgr, signalChan)
 		if err != nil {
 			log.Error("failed to add service", "err", err)
 			return nil, err
