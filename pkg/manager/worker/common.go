@@ -38,7 +38,7 @@ type Common struct {
 
 func (c *Common) InitControlPlane() error {
 	var err error
-	c.cpCluster, err = cluster.InitCluster(c.config, false, c.intfMgr, c.arpMgr)
+	c.cpCluster, err = cluster.InitCluster(c.config, false, c.intfMgr, c.arpMgr, c.signalChan)
 	if err != nil {
 		return fmt.Errorf("cluster initialization error: %w", err)
 	}
@@ -117,9 +117,10 @@ func (c *Common) runGlobalElection(ctx context.Context, a election.Actions, id, 
 	leaseID := fmt.Sprintf("%s/%s", ns, leaseName)
 	objectName := fmt.Sprintf("%s-svcs", leaseID)
 
-	objLease, newLease, sharedLease := c.leaseMgr.Add(leaseID, objectName)
+	objLease := c.leaseMgr.Add(ctx, leaseID)
+	isNew := objLease.Add(objectName)
 	// this service was already processed so we do not need to do anything
-	if !newLease {
+	if !isNew {
 		log.Debug("this election was already done, waiting for it to finish", "lease", c.config.ServicesLeaseName)
 		// Wait for either the service context or lease context to be done
 		select {
@@ -132,18 +133,34 @@ func (c *Common) runGlobalElection(ctx context.Context, a election.Actions, id, 
 		return
 	}
 
-	// Start a goroutine that will delete the lease when the service context is cancelled.
+	// Start a goroutine that will delete the lease when the context is cancelled.
 	// This is important for proper cleanup when a service is deleted - it ensures that
 	// the lease context (svcLease.Ctx) gets cancelled, which causes RunOrDie to return.
 	// Without this, RunOrDie would continue running until leadership is naturally lost.
-	go func() {
+	wg := sync.WaitGroup{}
+	defer wg.Wait()
+	wg.Go(func() {
 		<-ctx.Done()
 		c.leaseMgr.Delete(leaseID, objectName)
+	})
+
+	objLease.Mtx.Lock()
+	locked := true
+	defer func() {
+		if locked {
+			objLease.Mtx.Unlock()
+		}
 	}()
 
 	// this object is sharing lease with another object
-	if sharedLease {
+	if objLease.Elected.Load() {
+		if locked {
+			locked = false
+			objLease.Mtx.Unlock()
+		}
+
 		log.Debug("this election was already done, shared lease", "lease", c.config.ServicesLeaseName)
+
 		// wait for leader election to start or context to be done
 		select {
 		case <-objLease.Started:
@@ -154,7 +171,7 @@ func (c *Common) runGlobalElection(ctx context.Context, a election.Actions, id, 
 			return
 		}
 
-		err = c.svcProcessor.ServicesWatcher(ctx, c.svcProcessor.SyncServices)
+		err = c.svcProcessor.ServicesWatcher(objLease.Ctx, c.svcProcessor.SyncServices)
 		if err != nil {
 			log.Error("service watcher", "err", err)
 			if !c.closing.Load() {
@@ -194,6 +211,9 @@ func (c *Common) runGlobalElection(ctx context.Context, a election.Actions, id, 
 		// 1. Leadership loss (e.g., network timeout)
 		// 2. Context cancellation
 		// 3. Any other reason RunOrDie returns
+		if objLease != nil {
+			objLease.Elected.Store(false)
+		}
 		c.leaseMgr.Delete(leaseID, objectName)
 	}()
 
@@ -205,13 +225,27 @@ func (c *Common) runGlobalElection(ctx context.Context, a election.Actions, id, 
 		LeaseAnnotations: map[string]string{},
 		Mgr:              c.electionMgr,
 		OnStartedLeading: func(ctx context.Context) {
+			objLease.Elected.Store(true)
+			if locked {
+				locked = false
+				objLease.Mtx.Unlock()
+			}
 			close(objLease.Started)
 			if err := a.OnStartedLeading(ctx); err != nil {
 				objLease.Cancel()
 			}
 		},
-		OnStoppedLeading: a.OnStoppedLeading,
-		OnNewLeader:      a.OnNewLeader,
+		OnStoppedLeading: func() {
+			a.OnStoppedLeading()
+			objLease.Elected.Store(false)
+		},
+		OnNewLeader: func(identity string) {
+			a.OnNewLeader(identity)
+			if locked {
+				locked = false
+				objLease.Mtx.Unlock()
+			}
+		},
 	}
 
 	if err := election.RunOrDie(objLease.Ctx, run, c.config); err != nil {

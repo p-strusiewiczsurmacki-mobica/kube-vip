@@ -62,15 +62,12 @@ func TestRunElectionWithMemberIDCollision(t *testing.T) {
 	}
 
 	wg := &sync.WaitGroup{}
-	wg.Add(2)
 
-	go func() {
-		defer wg.Done()
+	wg.Go(func() {
 		g.Expect(etcd.RunElection(memberCtx, config)).To(Succeed())
-	}()
+	})
 
-	go func() {
-		defer wg.Done()
+	wg.Go(func() {
 		// Wait for the first member to observe a leader, which means the lease has been created
 		select {
 		case <-firstMemberObservedLeader:
@@ -83,7 +80,7 @@ func TestRunElectionWithMemberIDCollision(t *testing.T) {
 		member2Ctx, cancelMember2 := context.WithTimeout(ctx, 5*time.Second)
 		defer cancelMember2()
 		g.Expect(etcd.RunElection(member2Ctx, config)).Should(MatchError(ContainSubstring("creating lease")))
-	}()
+	})
 
 	wg.Wait()
 }
@@ -108,7 +105,7 @@ func TestRunElectionWithTwoMembersAndReelection(t *testing.T) {
 		LeaseDurationSeconds: 1,
 	}
 
-	member1Ctx, _ := context.WithCancel(ctx)
+	member1Ctx, cancelMember1 := context.WithCancel(ctx)
 	member2Ctx, cancelMember2 := context.WithCancel(ctx)
 
 	config1 := configBase
@@ -124,6 +121,7 @@ func TestRunElectionWithTwoMembersAndReelection(t *testing.T) {
 		log.Println("Losing the leadership on purpose by stopping renewing the lease")
 		g.Expect(cliMember1.Lease.Close()).To(Succeed())
 		log.Println("Member1 leases closed")
+		cancelMember1()
 	}
 
 	config2 := configBase
@@ -136,20 +134,17 @@ func TestRunElectionWithTwoMembersAndReelection(t *testing.T) {
 	}
 
 	wg := &sync.WaitGroup{}
-	wg.Add(2)
 
-	go func() {
-		defer wg.Done()
+	wg.Go(func() {
 		g.Expect(etcd.RunElection(member1Ctx, &config1)).To(Succeed())
 		log.Printf("%s routine done\n", config1.MemberID)
-	}()
+	})
 
-	go func() {
-		defer wg.Done()
+	wg.Go(func() {
 		<-syncMembers
 		g.Expect(etcd.RunElection(member2Ctx, &config2)).To(Succeed())
 		log.Printf("%s routine done\n", config2.MemberID)
-	}()
+	})
 
 	wg.Wait()
 }

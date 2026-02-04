@@ -39,15 +39,23 @@ func (p *Processor) StartServicesWatchForLeaderElection(ctx context.Context) err
 }
 
 // The startServicesWatchForLeaderElection function will start a services watcher, the
-func (p *Processor) StartServicesLeaderElection(svcCtx *servicecontext.Context, service *v1.Service) error {
+func (p *Processor) StartServicesLeaderElection(svcCtx *servicecontext.Context, service *v1.Service, _ *sync.WaitGroup) error {
 	if svcCtx == nil {
 		return fmt.Errorf("no context context for service %q with UID %q: nil context", service.Name, service.UID)
 	}
 
+	log.Debug("StartServicesLeaderElection", "service", service.Name, "uid", service.UID)
+
 	serviceLease, serviceLeaseID, leaseNamespace := lease.ServiceName(service)
 	objectName := lease.ServiceNamespacedName(service)
 
-	svcLease, newService, sharedLease := p.leaseMgr.Add(serviceLeaseID, objectName)
+	svcLease := p.leaseMgr.Get(serviceLeaseID)
+	if svcLease == nil {
+		// this sbhould never happen, but let just
+		return fmt.Errorf("unable to find lease for ID %q", serviceLeaseID)
+	}
+
+	newService := svcLease.Add(objectName)
 
 	// this service was already processed so we do not need to do anything
 	if !newService {
@@ -73,9 +81,24 @@ func (p *Processor) StartServicesLeaderElection(svcCtx *servicecontext.Context, 
 		p.leaseMgr.Delete(serviceLeaseID, objectName)
 	})
 
+	svcLease.Mtx.Lock()
+	locked := true
+	defer func() {
+		if locked {
+			svcLease.Mtx.Unlock()
+		}
+	}()
+
 	// this service is sharing lease with another service
-	if sharedLease {
+	if svcLease.Elected.Load() {
 		// wait for leader election to start or context to be done
+		if locked {
+			locked = false
+			svcLease.Mtx.Unlock()
+		}
+
+		log.Debug("shared lease", "service", service.Name, "uid", service.UID)
+
 		select {
 		case <-svcLease.Started:
 		case <-svcLease.Ctx.Done():
@@ -88,7 +111,7 @@ func (p *Processor) StartServicesLeaderElection(svcCtx *servicecontext.Context, 
 
 		// Common lease handling: sync the service and wait for context cancellation
 		if !svcCtx.IsActive {
-			if err := p.SyncServices(svcCtx, service); err != nil {
+			if err := p.SyncServices(svcCtx, service, &wg); err != nil {
 				log.Error("service sync", "err", err, "uid", service.UID)
 				svcLease.Cancel()
 			}
@@ -125,6 +148,9 @@ func (p *Processor) StartServicesLeaderElection(svcCtx *servicecontext.Context, 
 		// 1. Leadership loss (e.g., network timeout)
 		// 2. Context cancellation
 		// 3. Any other reason RunOrDie returns
+		if svcLease != nil {
+			svcLease.Elected.Store(false)
+		}
 		p.leaseMgr.Delete(serviceLeaseID, objectName)
 	}()
 
@@ -139,11 +165,16 @@ func (p *Processor) StartServicesLeaderElection(svcCtx *servicecontext.Context, 
 		LeaseAnnotations: map[string]string{},
 
 		OnStartedLeading: func(_ context.Context) {
+			svcLease.Elected.Store(true)
+			if locked {
+				locked = false
+				svcLease.Mtx.Unlock()
+			}
 			close(svcLease.Started)
 			// Mark this service as active (as we've started leading)
 			// we run this in background as it's blocking
 			svcCtx.IsActive = true
-			if err := p.SyncServices(svcCtx, service); err != nil {
+			if err := p.SyncServices(svcCtx, service, &wg); err != nil {
 				log.Error("service sync", "uid", service.UID, "err", err)
 				svcLease.Cancel()
 			}
@@ -159,12 +190,17 @@ func (p *Processor) StartServicesLeaderElection(svcCtx *servicecontext.Context, 
 			}
 			// Mark this service is inactive
 			svcCtx.IsActive = false
+			svcLease.Elected.Store(false)
 		},
 		OnNewLeader: func(identity string) {
 			// we're notified when new leader elected
 			if identity == p.config.NodeName {
 				// I just got the lock
 				return
+			}
+			if locked {
+				locked = false
+				svcLease.Mtx.Unlock()
 			}
 			log.Info("new leader", "leader", identity, "service", service.Name, "uid", service.UID)
 		},

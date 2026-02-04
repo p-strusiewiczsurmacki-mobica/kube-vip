@@ -156,7 +156,7 @@ func CheckIPAddressPresence(ip string, container string, expected bool) bool {
 		return false
 	}
 
-	By(fmt.Sprintf("contianer %q interfaces:\n %s", container, cmdOut.String()))
+	// By(fmt.Sprintf("contianer %q interfaces:\n %s", container, cmdOut.String()))
 
 	return strings.Contains(cmdOut.String(), ip) == expected
 }

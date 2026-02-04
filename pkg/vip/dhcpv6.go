@@ -203,7 +203,7 @@ func (c *DHCPv6Client) Start(ctx context.Context) error {
 
 		case <-c.stopChan:
 			// create new context for DHCP cleanup (independent)
-			dhcpStopCtx, cancel := context.WithCancel(context.Background())
+			dhcpStopCtx, cancel := context.WithTimeout(context.Background(), time.Second*20)
 			defer cancel()
 			// IP address release.
 			var err error

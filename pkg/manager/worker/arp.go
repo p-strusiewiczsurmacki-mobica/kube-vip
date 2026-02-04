@@ -43,14 +43,17 @@ func NewARP(arpMgr *arp.Manager, intfMgr *networkinterface.Manager,
 	}
 }
 
-func (a *ARP) Configure(ctx context.Context) error {
+func (a *ARP) Configure(ctx context.Context, wg *sync.WaitGroup) error {
 	log.Info("Start ARP/NDP advertisement")
-	go a.arpMgr.StartAdvertisement(ctx)
+	wg.Go(func() {
+		a.arpMgr.StartAdvertisement(ctx)
+	})
 	return nil
 }
 
 func (a *ARP) StartControlPlane(ctx context.Context, _, _ string) {
-	err := a.cpCluster.StartCluster(ctx, a.config, a.electionMgr, nil, a.leaseMgr)
+	wg := sync.WaitGroup{}
+	err := a.cpCluster.StartCluster(ctx, a.config, a.electionMgr, nil, a.leaseMgr, &wg)
 	if err != nil {
 		log.Error("starting control plane", "err", err)
 	}
@@ -59,6 +62,7 @@ func (a *ARP) StartControlPlane(ctx context.Context, _, _ string) {
 	if !a.closing.Load() {
 		a.signalChan <- syscall.SIGINT
 	}
+	wg.Wait()
 }
 
 func (a *ARP) ConfigureServices() {
