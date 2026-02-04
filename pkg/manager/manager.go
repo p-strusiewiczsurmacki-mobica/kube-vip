@@ -171,23 +171,6 @@ func New(configMap string, config *kubevip.Config) (*Manager, error) {
 		}
 	}
 
-	// Flip this to something else
-	// if config.DetectControlPlane {
-	// 	log.Info("[k8s client] flipping to internal service account")
-	// 	_, err = clientset.CoreV1().ServiceAccounts("kube-system").Apply(context.TODO(), kubevip.GenerateSA(), v1.ApplyOptions{FieldManager: "application/apply-patch"})
-	// 	if err != nil {
-	// 		return nil, fmt.Errorf("could not create k8s clientset from incluster config: %v", err)
-	// 	}
-	// 	_, err = clientset.RbacV1().ClusterRoles().Apply(context.TODO(), kubevip.GenerateCR(), v1.ApplyOptions{FieldManager: "application/apply-patch"})
-	// 	if err != nil {
-	// 		return nil, fmt.Errorf("could not create k8s clientset from incluster config: %v", err)
-	// 	}
-	// 	_, err = clientset.RbacV1().ClusterRoleBindings().Apply(context.TODO(), kubevip.GenerateCRB(), v1.ApplyOptions{FieldManager: "application/apply-patch"})
-	// 	if err != nil {
-	// 		return nil, fmt.Errorf("could not create k8s clientset from incluster config: %v", err)
-	// 	}
-	// }
-
 	// listen for interrupts or the Linux SIGTERM signal and cancel
 	// our context, which the leader election code will observe and
 	// step down
@@ -219,7 +202,7 @@ func New(configMap string, config *kubevip.Config) (*Manager, error) {
 		}
 	}
 
-	electionMgr, err := election.NewManager(config, clientset, rwClientSet, signalChan)
+	electionMgr, err := election.NewManager(config, clientset, rwClientSet, shutdownChan)
 	if err != nil {
 		return nil, fmt.Errorf("creating election manager: %w", err)
 	}
@@ -371,7 +354,9 @@ func (sm *Manager) startMode(ctx context.Context, id string) error {
 
 	// Shutdown function that will wait on this signal, unless we call it ourselves
 	wg.Go(func() {
-		sm.waitForShutdown(modeCtx, cancel, w.GetCPCluster())
+		if sm.waitForShutdown(modeCtx, w.GetCPCluster()) {
+			cancel()
+		}
 	})
 
 	if sm.config.EnableControlPlane {
@@ -408,23 +393,25 @@ func (sm *Manager) parseAnnotations(ctx context.Context) error {
 	return nil
 }
 
-func (sm *Manager) waitForShutdown(ctx context.Context, cancel context.CancelFunc, cpCluster *cluster.Cluster) {
+func (sm *Manager) waitForShutdown(ctx context.Context, cpCluster *cluster.Cluster) bool {
 	defer close(sm.shutdownChan)
 	for {
-		sig := <-sm.signalChan
-		switch sig {
-		case syscall.SIGUSR1:
-			log.Info("Received SIGUSR1, dumping configuration")
-			sm.dumpConfiguration(ctx)
-		case syscall.SIGINT, syscall.SIGTERM:
-			sm.closing.Store(true)
-			log.Info("Received kube-vip termination, signaling shutdown")
-			if cpCluster != nil {
-				cpCluster.Stop()
+		select {
+		case <-ctx.Done():
+			return false
+		case sig := <-sm.signalChan:
+			switch sig {
+			case syscall.SIGUSR1:
+				log.Info("Received SIGUSR1, dumping configuration")
+				sm.dumpConfiguration(ctx)
+			case syscall.SIGINT, syscall.SIGTERM:
+				sm.closing.Store(true)
+				log.Info("Received kube-vip termination, signaling shutdown")
+				if cpCluster != nil {
+					cpCluster.Stop()
+				}
+				return true
 			}
-			// Cancel the context, which will in turn cancel the leadership and all goroutines
-			cancel()
-			return
 		}
 	}
 }

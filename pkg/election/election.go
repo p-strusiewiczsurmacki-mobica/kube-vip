@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os"
 	"time"
 
 	log "log/slog"
@@ -30,15 +29,15 @@ type Manager struct {
 	KubernetesClient   *kubernetes.Clientset
 	RetryWatcherClient *kubernetes.Clientset
 	// This channel is used to signal a shutdown
-	SignalChan chan os.Signal
+	shutdown chan struct{}
 
 	EtcdClient *clientv3.Client
 }
 
 // NewManager will create a new managing object
-func NewManager(config *kubevip.Config, k8sClientset, rwClientset *kubernetes.Clientset, signalChan chan os.Signal) (*Manager, error) {
+func NewManager(config *kubevip.Config, k8sClientset, rwClientset *kubernetes.Clientset, shutdown chan struct{}) (*Manager, error) {
 	m := &Manager{
-		SignalChan: signalChan,
+		shutdown: shutdown,
 	}
 
 	switch config.LeaderElectionType {
@@ -171,7 +170,7 @@ func (em *Manager) NodeWatcher(ctx context.Context, lb *loadbalancer.IPVSLoadBal
 	}
 
 	go func() {
-		<-em.SignalChan
+		<-em.shutdown
 		log.Info("Received termination, signaling shutdown")
 		// Cancel the context
 		rw.Stop()
