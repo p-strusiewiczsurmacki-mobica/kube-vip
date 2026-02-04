@@ -704,14 +704,20 @@ func isUPNPEnabled(s *v1.Service) bool {
 // Refresh UPNP Port Forwards for all Service Instances registered in the processor
 func (p *Processor) RefreshUPNPForwards(ctx context.Context) {
 	log.Info("Starting UPNP Port Refresher")
-	for {
-		time.Sleep(300 * time.Second)
+	ticker := time.NewTicker(300 * time.Second)
+	defer ticker.Stop()
 
-		log.Info("[UPNP] Refreshing Instances", "number of instances", len(p.ServiceInstances))
-		for i := range p.ServiceInstances {
-			p.upnpMap(ctx, p.ServiceInstances[i])
-			if err := p.updateStatus(ctx, p.ServiceInstances[i]); err != nil {
-				log.Warn("[UPNP] Error updating service", "ip", p.ServiceInstances[i].ServiceSnapshot.Name, "err", err)
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			log.Info("[UPNP] Refreshing Instances", "number of instances", len(p.ServiceInstances))
+			for i := range p.ServiceInstances {
+				p.upnpMap(ctx, p.ServiceInstances[i])
+				if err := p.updateStatus(ctx, p.ServiceInstances[i]); err != nil {
+					log.Warn("[UPNP] Error updating service", "ip", p.ServiceInstances[i].ServiceSnapshot.Name, "err", err)
+				}
 			}
 		}
 	}

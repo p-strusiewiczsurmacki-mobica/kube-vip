@@ -273,6 +273,9 @@ func (sm *Manager) Start(ctx context.Context) error {
 	// All watchers and other goroutines should have an additional goroutine that blocks on this, to shut things down
 	sm.shutdownChan = make(chan struct{})
 
+	wg := sync.WaitGroup{}
+	defer wg.Wait()
+
 	// HealthCheck
 	if sm.config.HealthCheckPort != 0 {
 		if sm.config.HealthCheckPort < 1024 {
@@ -281,16 +284,7 @@ func (sm *Manager) Start(ctx context.Context) error {
 		http.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
 			fmt.Fprintf(w, "OK")
 		})
-		go func() {
-			server := &http.Server{
-				Addr:              fmt.Sprintf(":%d", sm.config.HealthCheckPort),
-				ReadHeaderTimeout: 3 * time.Second,
-			}
-			err := server.ListenAndServe()
-			if err != nil {
-				log.Error("healthcheck", "unable to start", err)
-			}
-		}()
+		wg.Go(func() { runHealtcheckServer(ctx, sm.config.HealthCheckPort) })
 	}
 
 	// on exit, clean up the node labels
@@ -317,7 +311,7 @@ func (sm *Manager) Start(ctx context.Context) error {
 				}
 			}
 			// TODO: It would be nice to run the UPNP refresh only on the leader.
-			go sm.svcProcessor.RefreshUPNPForwards(ctx)
+			wg.Go(func() { sm.svcProcessor.RefreshUPNPForwards(ctx) })
 		}
 	}
 
@@ -331,6 +325,34 @@ func (sm *Manager) Start(ctx context.Context) error {
 	}
 
 	return sm.startMode(ctx, sm.config.NodeName)
+}
+
+func runHealtcheckServer(ctx context.Context, port int) {
+	wg := sync.WaitGroup{}
+	defer wg.Wait()
+
+	var server *http.Server
+	wg.Go(func() {
+		server = &http.Server{
+			Addr:              fmt.Sprintf(":%d", port),
+			ReadHeaderTimeout: 3 * time.Second,
+		}
+		err := server.ListenAndServe()
+		if err != nil {
+			log.Error("healthcheck", "unable to start", err)
+		}
+	})
+
+	<-ctx.Done()
+
+	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), time.Second*5)
+	defer shutdownCancel()
+
+	if server != nil {
+		if err := server.Shutdown(shutdownCtx); err != nil {
+			log.Error("heltcheck sbhutdown", "error", err)
+		}
+	}
 }
 
 // Start will begin the Manager, which will start services and watch the configmap

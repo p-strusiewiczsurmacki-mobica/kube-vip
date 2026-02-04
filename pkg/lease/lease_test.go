@@ -200,22 +200,18 @@ func TestManager_ConcurrentAccess(t *testing.T) {
 	const numGoroutines = 100
 
 	// Concurrent adds
-	for i := 0; i < numGoroutines; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+	for range numGoroutines {
+		wg.Go(func() {
 			mgr.Add(getSvcData(svc))
-		}()
+		})
 	}
 	wg.Wait()
 
 	// Concurrent deletes
-	for i := 0; i < numGoroutines; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+	for range numGoroutines {
+		wg.Go(func() {
 			mgr.Delete(getSvcData(svc))
-		}()
+		})
 	}
 	wg.Wait()
 
