@@ -147,8 +147,6 @@ func NewIPVSLB(ctx context.Context, address string, port uint16, forwardingMetho
 		family:              family,
 	}
 
-	go lb.healthCheck(ctx)
-
 	// Return our created load-balancer
 	return lb, nil
 }
@@ -317,7 +315,7 @@ func ipAndFamily(address string) (netip.Addr, ipvs.AddressFamily) {
 	return netip.AddrFrom4([4]byte(ipAddr.To4())), ipvs.INET
 }
 
-func (lb *IPVSLoadBalancer) healthCheck(ctx context.Context) {
+func (lb *IPVSLoadBalancer) HealthCheck(ctx context.Context) {
 	backend.Watch(ctx, func() {
 		lb.lock.Lock()
 		defer lb.lock.Unlock()

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync"
 	"time"
 
 	log "log/slog"
@@ -165,15 +166,17 @@ func (em *Manager) NodeWatcher(ctx context.Context, lb *loadbalancer.IPVSLoadBal
 		return fmt.Errorf("error creating label watcher: %s", err.Error())
 	}
 
-	go func() {
+	wg := sync.WaitGroup{}
+	defer wg.Wait()
+
+	wg.Go(func() {
 		<-ctx.Done()
 		log.Info("Received termination, signaling shutdown")
 		// Cancel the context
 		rw.Stop()
-	}()
+	})
 
 	ch := rw.ResultChan()
-	// defer rw.Stop()
 
 	for event := range ch {
 		// We need to inspect the event and get ResourceVersion out of it

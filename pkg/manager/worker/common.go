@@ -136,10 +136,12 @@ func (c *Common) runGlobalElection(ctx context.Context, a election.Actions, id, 
 	// This is important for proper cleanup when a service is deleted - it ensures that
 	// the lease context (svcLease.Ctx) gets cancelled, which causes RunOrDie to return.
 	// Without this, RunOrDie would continue running until leadership is naturally lost.
-	go func() {
+	wg := sync.WaitGroup{}
+	defer wg.Wait()
+	wg.Go(func() {
 		<-ctx.Done()
 		c.leaseMgr.Delete(leaseID, objectName)
-	}()
+	})
 
 	// this object is sharing lease with another object
 	if sharedLease {

@@ -84,6 +84,8 @@ func (cluster *Cluster) vipService(ctx context.Context, c *kubevip.Config, sm *e
 				return fmt.Errorf("creating IPVS LoadBalance: %w", err)
 			}
 
+			wg.Go(func() { lb.HealthCheck(ctx) })
+
 			wg.Go(func() {
 				err = sm.NodeWatcher(ctx, lb, c.Port)
 				if err != nil {
