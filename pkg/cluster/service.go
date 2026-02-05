@@ -46,7 +46,7 @@ func (cluster *Cluster) vipService(ctx context.Context, c *kubevip.Config, sm *e
 		network := cluster.Network[i]
 
 		if network.IsDDNS() {
-			if err := cluster.StartDDNS(ctx, cluster.Network[i], c.DHCPBackoffAttempts); err != nil {
+			if err := cluster.StartDDNS(ctx, cluster.Network[i], c.DHCPBackoffAttempts, &wg); err != nil {
 				log.Error("failed to start DDNS", "err", err)
 			}
 		}
@@ -282,12 +282,9 @@ func (cluster *Cluster) StartLoadBalancerService(ctx context.Context, c *kubevip
 		if network.IsDDNS() {
 			ddnsReady := make(chan struct{})
 			go func() {
-				ctxDDNS, ddnsCancel := context.WithCancel(ctx)
-				defer ddnsCancel()
-
 				// start the DDNS if requested
 				log.Debug("(svcs) start DDNS", "name", network.DNSName())
-				if err := cluster.StartDDNS(ctxDDNS, cluster.Network[i], c.DHCPBackoffAttempts); err != nil {
+				if err := cluster.StartDDNS(ctx, cluster.Network[i], c.DHCPBackoffAttempts, &wg); err != nil {
 					log.Error("failed to start DDNS", "err", err)
 				}
 
