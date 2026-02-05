@@ -132,7 +132,7 @@ func (c *Common) runGlobalElection(ctx context.Context, a election.Actions, id, 
 		return
 	}
 
-	// Start a goroutine that will delete the lease when the service context is cancelled.
+	// Start a goroutine that will delete the lease when the context is cancelled.
 	// This is important for proper cleanup when a service is deleted - it ensures that
 	// the lease context (svcLease.Ctx) gets cancelled, which causes RunOrDie to return.
 	// Without this, RunOrDie would continue running until leadership is naturally lost.
@@ -154,7 +154,7 @@ func (c *Common) runGlobalElection(ctx context.Context, a election.Actions, id, 
 			return
 		}
 
-		err = c.svcProcessor.ServicesWatcher(ctx, c.svcProcessor.SyncServices)
+		err = c.svcProcessor.ServicesWatcher(objLease.Ctx, c.svcProcessor.SyncServices)
 		if err != nil {
 			log.Error("service watcher", "err", err)
 			if !c.closing.Load() {

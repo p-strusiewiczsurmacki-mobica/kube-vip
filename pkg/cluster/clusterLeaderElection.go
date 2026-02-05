@@ -24,8 +24,8 @@ func (cluster *Cluster) StartCluster(ctx context.Context, c *kubevip.Config, sm 
 
 	// use a Go context so we can tell the leaderelection code when we
 	// want to step down
-	leaderCtx, leaderCancel := context.WithCancel(ctx)
-	defer leaderCancel()
+	// leaderCtx, leaderCancel := context.WithCancel(ctx)
+	// defer leaderCancel()
 
 	ns, err := utils.ReturnNameSpace()
 	if err != nil {
@@ -35,13 +35,14 @@ func (cluster *Cluster) StartCluster(ctx context.Context, c *kubevip.Config, sm 
 
 	leaseID := fmt.Sprintf("%s/%s", ns, c.LeaseName)
 	objectName := fmt.Sprintf("%s-cp", leaseID)
-	objLease, newLease, sharedLease := leaseMgr.Add(leaseID, objectName)
+	objLease, newLease, sharedLease := leaseMgr.Add(ctx, leaseID, objectName)
+	defer objLease.Cancel()
 
 	if !newLease {
 		log.Debug("this election was alreadty done, waiting for it to finish", "lease", c.LeaseName)
 		select {
 		case <-ctx.Done():
-		case <-leaderCtx.Done():
+		// case <-leaderCtx.Done():
 		case <-objLease.Ctx.Done():
 		}
 		leaseMgr.Delete(leaseID, objectName)
@@ -54,7 +55,7 @@ func (cluster *Cluster) StartCluster(ctx context.Context, c *kubevip.Config, sm 
 	// Without this, RunOrDie would continue running until leadership is naturally lost.
 	go func() {
 		select {
-		case <-leaderCtx.Done():
+		case <-objLease.Ctx.Done():
 		case <-ctx.Done():
 		}
 
@@ -71,18 +72,13 @@ func (cluster *Cluster) StartCluster(ctx context.Context, c *kubevip.Config, sm 
 	// Add Notification for SIGTERM (sent from Kubernetes)
 	signal.Notify(signalChan, syscall.SIGTERM)
 
-	// use a Go context so we can tell the arp loop code when we
-	// want to step down
-	clusterCtx, clusterCancel := context.WithCancel(ctx)
-	defer clusterCancel()
-
 	defer close(cluster.completed)
 
 	go func() {
 		<-cluster.stop
 		log.Info("Received termination, signaling cluster shutdown")
 		// Cancel the leader context, which will in turn cancel the leadership
-		leaderCancel()
+		objLease.Cancel()
 	}()
 
 	// (attempt to) Remove the virtual IP, in case it already exists
@@ -129,13 +125,13 @@ func (cluster *Cluster) StartCluster(ctx context.Context, c *kubevip.Config, sm 
 			return fmt.Errorf("lease %q context cancelled before leader election started", c.LeaseName)
 		}
 
-		cluster.onStartedLeadingAction(leaderCtx, c, sm, bgpServer, leaderCancel, signalChan)
+		cluster.onStartedLeadingAction(objLease.Ctx, c, sm, bgpServer, objLease.Cancel, signalChan)
 
 		log.Debug("cluster waiting for leader context done", "lease", c.LeaseName)
 		// wait for leaderelection to be finished
-		<-leaderCtx.Done()
+		<-objLease.Ctx.Done()
 
-		cluster.onStoppedLeadingAction(c, bgpServer, clusterCancel, signalChan)
+		cluster.onStoppedLeadingAction(c, bgpServer, objLease.Cancel, signalChan)
 
 		return nil
 	}
@@ -149,17 +145,17 @@ func (cluster *Cluster) StartCluster(ctx context.Context, c *kubevip.Config, sm 
 		Mgr:              sm,
 		OnStartedLeading: func(context.Context) {
 			close(objLease.Started)
-			cluster.onStartedLeadingAction(clusterCtx, c, sm, bgpServer, leaderCancel, signalChan)
+			cluster.onStartedLeadingAction(objLease.Ctx, c, sm, bgpServer, objLease.Cancel, signalChan)
 		},
 		OnStoppedLeading: func() {
-			cluster.onStoppedLeadingAction(c, bgpServer, clusterCancel, signalChan)
+			cluster.onStoppedLeadingAction(c, bgpServer, objLease.Cancel, signalChan)
 		},
 		OnNewLeader: func(identity string) {
 			cluster.onNewLeaderAction(identity, c)
 		},
 	}
 
-	if err := election.RunOrDie(leaderCtx, run, c); err != nil {
+	if err := election.RunOrDie(objLease.Ctx, run, c); err != nil {
 		return fmt.Errorf("leaderelection failed: %w", err)
 	}
 

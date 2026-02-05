@@ -32,12 +32,12 @@ func NewManager() *Manager {
 // If service is new but not shared, we should start leaderelection and sync it
 // If service is new and shared, we should only sync it as the leaderelection should be already handled
 // If service is not new we should do nothing
-func (m *Manager) Add(leaseID, objectName string) (lease *Lease, newService bool, sharedLease bool) {
+func (m *Manager) Add(ctx context.Context, leaseID, objectName string) (lease *Lease, newService bool, sharedLease bool) {
 	m.lock.Lock()
 	defer m.lock.Unlock()
 	if _, sharedLease = m.leases[leaseID]; !sharedLease {
-		ctx, cancel := context.WithCancel(context.Background())
-		m.leases[leaseID] = newLease(ctx, cancel)
+		leaseCtx, cancel := context.WithCancel(ctx)
+		m.leases[leaseID] = newLease(leaseCtx, cancel)
 	}
 	lease = m.leases[leaseID]
 	newService = m.leases[leaseID].add(objectName)
