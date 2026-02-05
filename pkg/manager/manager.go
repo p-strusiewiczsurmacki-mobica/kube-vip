@@ -202,7 +202,7 @@ func New(configMap string, config *kubevip.Config) (*Manager, error) {
 		}
 	}
 
-	electionMgr, err := election.NewManager(config, clientset, rwClientSet, shutdownChan)
+	electionMgr, err := election.NewManager(config, clientset, rwClientSet)
 	if err != nil {
 		return nil, fmt.Errorf("creating election manager: %w", err)
 	}
