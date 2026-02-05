@@ -47,7 +47,7 @@ func (p *Processor) StartServicesLeaderElection(svcCtx *servicecontext.Context, 
 	serviceLease, serviceLeaseID, leaseNamespace := lease.ServiceName(service)
 	objectName := lease.ServiceNamespacedName(service)
 
-	svcLease, newService, sharedLease := p.leaseMgr.Add(serviceLeaseID, objectName)
+	svcLease, newService, sharedLease := p.leaseMgr.Add(context.Background(), serviceLeaseID, objectName)
 
 	// this service was already processed so we do not need to do anything
 	if !newService {

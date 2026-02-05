@@ -117,7 +117,7 @@ func (c *Common) runGlobalElection(ctx context.Context, a election.Actions, id, 
 	leaseID := fmt.Sprintf("%s/%s", ns, leaseName)
 	objectName := fmt.Sprintf("%s-svcs", leaseID)
 
-	objLease, newLease, sharedLease := c.leaseMgr.Add(leaseID, objectName)
+	objLease, newLease, sharedLease := c.leaseMgr.Add(ctx, leaseID, objectName)
 	// this service was already processed so we do not need to do anything
 	if !newLease {
 		log.Debug("this election was already done, waiting for it to finish", "lease", c.config.ServicesLeaseName)

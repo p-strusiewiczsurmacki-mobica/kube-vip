@@ -26,7 +26,12 @@ func getSvcID(svc *v1.Service) string {
 	return id
 }
 
-func getSvcData(svc *v1.Service) (string, string) {
+func getSvcData(svc *v1.Service) (context.Context, string, string) {
+	id, nsName := getSvcNames(svc)
+	return context.Background(), id, nsName
+}
+
+func getSvcNames(svc *v1.Service) (string, string) {
 	return getSvcID(svc), ServiceNamespacedName(svc)
 }
 
@@ -94,7 +99,7 @@ func TestManager_Delete_DecrementCounter(t *testing.T) {
 	mgr.Add(getSvcData(svc))
 
 	// Delete once - should not remove the lease
-	mgr.Delete(getSvcData(svc))
+	mgr.Delete(getSvcNames(svc))
 
 	lease := mgr.Get(getSvcID(svc))
 	if lease != nil {
@@ -102,7 +107,7 @@ func TestManager_Delete_DecrementCounter(t *testing.T) {
 	}
 
 	// Delete again - should remove the lease
-	mgr.Delete(getSvcData(svc))
+	mgr.Delete(getSvcNames(svc))
 
 	lease = mgr.Get(getSvcID(svc))
 	if lease != nil {
@@ -126,7 +131,7 @@ func TestManager_Delete_CancelsContext(t *testing.T) {
 	}
 
 	// Delete the lease
-	mgr.Delete(getSvcData(svc))
+	mgr.Delete(getSvcNames(svc))
 
 	// Verify context is cancelled
 	select {
@@ -144,7 +149,7 @@ func TestManager_Add_AfterDelete_CreatesNewLease(t *testing.T) {
 
 	// Add and delete
 	lease1, _, _ := mgr.Add(getSvcData(svc))
-	mgr.Delete(getSvcData(svc))
+	mgr.Delete(getSvcNames(svc))
 
 	// Add again - should create new lease
 	lease2, isNew, _ := mgr.Add(getSvcData(svc))
@@ -210,7 +215,7 @@ func TestManager_ConcurrentAccess(t *testing.T) {
 	// Concurrent deletes
 	for range numGoroutines {
 		wg.Go(func() {
-			mgr.Delete(getSvcData(svc))
+			mgr.Delete(getSvcNames(svc))
 		})
 	}
 	wg.Wait()
@@ -330,7 +335,7 @@ func TestManager_LeaderElectionRestartScenario(t *testing.T) {
 
 	// Simulate leadership lost - the leader election function should delete the lease
 	// This is the fix: delete the lease when RunOrDie returns
-	mgr.Delete(getSvcData(svc))
+	mgr.Delete(getSvcNames(svc))
 
 	// Verify lease is removed
 	if mgr.Get(getSvcID(svc)) != nil {
@@ -397,13 +402,13 @@ func TestManager_CommonLeaseScenario(t *testing.T) {
 	}
 
 	// Delete first service - lease should still exist
-	mgr.Delete(getSvcData(svc1))
+	mgr.Delete(getSvcNames(svc1))
 	if mgr.Get(getSvcID(svc1)) == nil {
 		t.Error("expected lease to still exist after first delete")
 	}
 
 	// Delete second service - lease should be removed
-	mgr.Delete(getSvcData(svc2))
+	mgr.Delete(getSvcNames(svc2))
 	if mgr.Get(getSvcID(svc2)) != nil {
 		t.Error("expected lease to be removed after all services deleted")
 	}
@@ -450,7 +455,7 @@ func TestManager_RaceCondition_LeaseExistsBeforeDelete(t *testing.T) {
 	}
 
 	// Now the first goroutine's defer deletes the lease
-	mgr.Delete(getSvcData(svc))
+	mgr.Delete(getSvcNames(svc))
 
 	// The lease should not still exist because same service was processed twice, so we do not increment the counter
 	if mgr.Get(getSvcID(svc)) != nil {
@@ -458,7 +463,7 @@ func TestManager_RaceCondition_LeaseExistsBeforeDelete(t *testing.T) {
 	}
 
 	// Second delete does nothing
-	mgr.Delete(getSvcData(svc))
+	mgr.Delete(getSvcNames(svc))
 	if mgr.Get(getSvcID(svc)) != nil {
 		t.Error("expected lease to not exist")
 	}
@@ -507,17 +512,17 @@ func TestManager_NonCommonLease_MultipleAdds(t *testing.T) {
 	}
 
 	// Need one delete to remove the lease, another delete runs do nothing
-	mgr.Delete(getSvcData(svc))
+	mgr.Delete(getSvcNames(svc))
 	if mgr.Get(getSvcID(svc)) != nil {
 		t.Error("expected lease to be deleted")
 	}
 
-	mgr.Delete(getSvcData(svc))
+	mgr.Delete(getSvcNames(svc))
 	if mgr.Get(getSvcID(svc)) != nil {
 		t.Error("expected lease to be deleted")
 	}
 
-	mgr.Delete(getSvcData(svc))
+	mgr.Delete(getSvcNames(svc))
 	if mgr.Get(getSvcID(svc)) != nil {
 		t.Error("expected lease to be deleted")
 	}
@@ -568,8 +573,8 @@ func TestManager_LeaseContextCancelledBeforeStarted(t *testing.T) {
 	}
 
 	// Delete should still work
-	mgr.Delete(getSvcData(svc))
-	mgr.Delete(getSvcData(svc))
+	mgr.Delete(getSvcNames(svc))
+	mgr.Delete(getSvcNames(svc))
 
 	if mgr.Get(getSvcID(svc)) != nil {
 		t.Error("expected lease to be removed")
@@ -589,7 +594,7 @@ func TestManager_RestartAfterLeaseContextCancelled(t *testing.T) {
 	lease1.Cancel()
 
 	// Delete the lease
-	mgr.Delete(getSvcData(svc))
+	mgr.Delete(getSvcNames(svc))
 
 	// Verify lease is gone
 	if mgr.Get(getSvcID(svc)) != nil {
@@ -687,11 +692,11 @@ func TestManager_NonCommonLease_WaitForLeaseContextDone(t *testing.T) {
 	}
 
 	// Now simulate the first leader election ending (defer deletes the lease)
-	mgr.Delete(getSvcData(svc))
+	mgr.Delete(getSvcNames(svc))
 
 	// The lease context should now be cancelled (because counter went to 0)
 	// But we added twice, so we need to delete twice
-	mgr.Delete(getSvcData(svc))
+	mgr.Delete(getSvcNames(svc))
 
 	// Now the goroutine should have completed
 	select {
@@ -769,7 +774,7 @@ func TestManager_NonCommonLease_SpinLoopPrevention(t *testing.T) {
 		t.Errorf("expected 100 adds, got %d", addCount)
 	}
 
-	mgr.Delete(getSvcData(svc))
+	mgr.Delete(getSvcNames(svc))
 	if mgr.Get(getSvcID(svc)) != nil {
 		t.Error("expected lease to be removed after first delete")
 	}
