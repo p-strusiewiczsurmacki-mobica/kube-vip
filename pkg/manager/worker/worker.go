@@ -19,7 +19,7 @@ import (
 )
 
 type Worker interface {
-	Configure(context.Context) error
+	Configure(context.Context, *sync.WaitGroup) error
 	InitControlPlane() error
 	StartControlPlane(context.Context, string, string)
 	ConfigureServices()

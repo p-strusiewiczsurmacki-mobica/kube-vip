@@ -339,7 +339,10 @@ func (sm *Manager) startMode(ctx context.Context, id string) error {
 		sm.electionMgr, sm.leaseMgr)
 
 	log.Info("starting Kube-vip Manager", "mode", w.Name())
-	if err := w.Configure(modeCtx); err != nil {
+
+	wg := sync.WaitGroup{}
+
+	if err := w.Configure(modeCtx, &wg); err != nil {
 		return fmt.Errorf("failed to configure %s mode: %w", w.Name(), err)
 	}
 
@@ -349,8 +352,6 @@ func (sm *Manager) startMode(ctx context.Context, id string) error {
 			return err
 		}
 	}
-
-	wg := sync.WaitGroup{}
 
 	// Shutdown function that will wait on this signal, unless we call it ourselves
 	wg.Go(func() {
