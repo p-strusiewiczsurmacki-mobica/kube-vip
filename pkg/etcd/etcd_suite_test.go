@@ -51,7 +51,6 @@ func expectSuccess(err error, msg string) {
 }
 
 func startEtcd(ctx context.Context) error {
-	log.Println(pidFile)
 	if _, err := os.Stat(pidFile); err == nil {
 		log.Println("Etcd already running, reusing")
 		return nil
@@ -61,8 +60,6 @@ func startEtcd(ctx context.Context) error {
 	if err != nil {
 		errors.Wrap(err, "installing etcd for tests")
 	}
-
-	fmt.Println("INSTALL ETCD")
 
 	etcdCmd := exec.Command(etcdPath, "--data-dir", "./etcd-data")
 	if os.Getenv("ETCD_SERVER_LOGS") == "true" {
@@ -86,7 +83,6 @@ func startEtcd(ctx context.Context) error {
 }
 
 func installEtcd(ctx context.Context) (string, error) {
-	log.Println("installEtcd")
 	projectRoot, err := filepath.Abs("../../")
 	if err != nil {
 		return "", err
@@ -94,13 +90,11 @@ func installEtcd(ctx context.Context) (string, error) {
 	binDir := filepath.Join(projectRoot, etcdBinDir)
 	etcdPath := filepath.Join(projectRoot, etcdBinPath)
 
-	log.Println("Stat")
 	if _, err := os.Stat(etcdPath); err == nil {
 		log.Println("Etcd already installed, skipping")
 		return etcdPath, nil
 	}
 
-	log.Println("MkdirAll")
 	if err := os.MkdirAll(binDir, 0o755); err != nil {
 		return "", err
 	}
