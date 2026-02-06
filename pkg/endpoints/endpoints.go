@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net"
+	"sync"
 
 	log "log/slog"
 
@@ -39,7 +40,8 @@ func NewEndpointProcessor(config *kubevip.Config, provider providers.Provider, b
 
 func (p *Processor) AddOrModify(svcCtx *servicecontext.Context, event watch.Event,
 	lastKnownGoodEndpoint *string, service *v1.Service, id string,
-	serviceFunc func(*servicecontext.Context, *v1.Service) error) (bool, error) {
+	serviceFunc func(*servicecontext.Context, *v1.Service, *sync.WaitGroup) error,
+	wg *sync.WaitGroup) (bool, error) {
 
 	var err error
 	if err = p.provider.LoadObject(event.Object, svcCtx.Cancel); err != nil {
@@ -72,9 +74,9 @@ func (p *Processor) AddOrModify(svcCtx *servicecontext.Context, event watch.Even
 		svcCtx.HasEndpoints.Store(true)
 		// start leader election if it's enabled and not already started
 		if !svcCtx.IsActive && p.config.EnableServicesElection {
-			go func() {
+			wg.Go(func() {
 				startLeaderElection(svcCtx, service, serviceFunc)
-			}()
+			})
 		}
 
 		// There are local endpoints available on the node
@@ -154,14 +156,16 @@ func (p *Processor) updateAnnotations(service *v1.Service, lastKnownGoodEndpoint
 	}
 }
 
-func startLeaderElection(svcCtx *servicecontext.Context, service *v1.Service, serviceFunc func(*servicecontext.Context, *v1.Service) error) {
+func startLeaderElection(svcCtx *servicecontext.Context, service *v1.Service, serviceFunc func(*servicecontext.Context, *v1.Service, *sync.WaitGroup) error) {
 	// This is a blocking function, that will restart (in the event of failure)
+	wg := sync.WaitGroup{}
+	defer wg.Wait()
 	for {
 		select {
 		case <-svcCtx.Ctx.Done():
 			return
 		default:
-			err := serviceFunc(svcCtx, service)
+			err := serviceFunc(svcCtx, service, &wg)
 			if err != nil {
 				log.Error(err.Error())
 			}

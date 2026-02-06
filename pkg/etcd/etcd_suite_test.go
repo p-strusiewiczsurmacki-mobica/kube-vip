@@ -19,27 +19,38 @@ import (
 )
 
 const (
-	etcdVersion     = "v3.5.9"
-	etcdBinDir      = "bin"
-	etcdBinPath     = etcdBinDir + "/etcd"
-	downloadURL     = "https://storage.googleapis.com/etcd"
-	tmpDownloadFile = "etcd.tar.gz"
-	pidFile         = "etcd.pid"
+	etcdVersion = "v3.5.9"
+	etcdBinDir  = "bin"
+	etcdBinPath = etcdBinDir + "/etcd"
+	downloadURL = "https://storage.googleapis.com/etcd"
+	pidFile     = "etcd.pid"
 )
 
 func TestMain(m *testing.M) {
 	logrus.SetLevel(logrus.DebugLevel)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	expectSuccess(startEtcd(ctx), "starting etcd")
 
-	os.Exit(runTestsWithCleanup(m, func() {
+	err := startEtcd(ctx)
+	if err != nil {
+		log.Fatalf("%s: %s\n", "starting etcd", err)
+	}
+	testsDone := make(chan struct{})
+	cleanupDone := make(chan struct{})
+	go func() {
+		<-testsDone
 		expectSuccess(stopEtcd(), "stopping etcd")
-	}))
+		close(cleanupDone)
+	}()
+
+	ret := runTests(m, testsDone)
+
+	<-cleanupDone
+	os.Exit(ret)
 }
 
-func runTestsWithCleanup(m *testing.M, cleanup func()) int {
-	defer cleanup()
+func runTests(m *testing.M, stop chan struct{}) int {
+	defer close(stop)
 	return m.Run()
 }
 

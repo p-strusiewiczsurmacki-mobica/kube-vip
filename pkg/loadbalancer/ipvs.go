@@ -51,7 +51,6 @@ type IPVSLoadBalancer struct {
 	backendMap          backend.Map
 	interval            int
 	lock                sync.Mutex
-	stop                chan struct{}
 	networkInterface    string
 	leaderCancel        context.CancelFunc
 	signal              chan os.Signal
@@ -59,7 +58,8 @@ type IPVSLoadBalancer struct {
 	family              ipvs.AddressFamily
 }
 
-func NewIPVSLB(address string, port uint16, forwardingMethod string, backendHealthCheckInterval int, networkInterface string, leaderCancel context.CancelFunc, signal chan os.Signal) (*IPVSLoadBalancer, error) {
+func NewIPVSLB(ctx context.Context, address string, port uint16, forwardingMethod string, backendHealthCheckInterval int,
+	networkInterface string, leaderCancel context.CancelFunc, signal chan os.Signal) (*IPVSLoadBalancer, error) {
 	log.Info("Starting IPVS LoadBalancer", "address", address)
 
 	// Create IPVS client
@@ -140,15 +140,12 @@ func NewIPVSLB(address string, port uint16, forwardingMethod string, backendHeal
 		forwardingMethod:    m,
 		interval:            backendHealthCheckInterval,
 		backendMap:          make(backend.Map),
-		stop:                make(chan struct{}),
 		networkInterface:    networkInterface,
 		leaderCancel:        leaderCancel,
 		signal:              signal,
 		address:             address,
 		family:              family,
 	}
-
-	go lb.healthCheck()
 
 	// Return our created load-balancer
 	return lb, nil
@@ -167,7 +164,6 @@ func enableProcSys(path, name string) error {
 
 func (lb *IPVSLoadBalancer) RemoveIPVSLB() error {
 	log.Info("Stopping IPVS LoadBalancer", "address", lb.address)
-	close(lb.stop)
 	err := lb.client.RemoveService(lb.loadBalancerService)
 	if err != nil {
 		return fmt.Errorf("error removing existing IPVS service: %v", err)
@@ -319,8 +315,8 @@ func ipAndFamily(address string) (netip.Addr, ipvs.AddressFamily) {
 	return netip.AddrFrom4([4]byte(ipAddr.To4())), ipvs.INET
 }
 
-func (lb *IPVSLoadBalancer) healthCheck() {
-	backend.Watch(func() {
+func (lb *IPVSLoadBalancer) HealthCheck(ctx context.Context) {
+	backend.Watch(ctx, func() {
 		lb.lock.Lock()
 		defer lb.lock.Unlock()
 		for backend, oldStatus := range lb.backendMap {
@@ -355,7 +351,7 @@ func (lb *IPVSLoadBalancer) healthCheck() {
 				}
 			}
 		}
-	}, lb.interval, lb.stop)
+	}, lb.interval)
 }
 
 func (lb *IPVSLoadBalancer) isLocal(address string) (bool, error) {
