@@ -25,9 +25,8 @@ import (
 )
 
 const (
-	defaultValidLft         = 60
-	iptablesComment         = "%s kube-vip load balancer IP"
-	iptablesCommentMarkRule = "kube-vip load balancer IP set mark for masquerade"
+	defaultValidLft = 60
+	iptablesComment = "%s kube-vip load balancer IP"
 
 	DefaultMaskIPv4 = 32
 	DefaultMaskIPv6 = 128
