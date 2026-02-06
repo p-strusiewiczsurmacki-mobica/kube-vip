@@ -32,15 +32,15 @@ import (
 func (cluster *Cluster) vipService(ctx context.Context, c *kubevip.Config, sm *election.Manager, bgpServer *bgp.Server, cancelLeaderElection context.CancelFunc) error {
 	var err error
 
-	go func() {
+	var wg sync.WaitGroup
+
+	wg.Go(func() {
 		<-ctx.Done()
 		cluster.signal <- syscall.SIGINT
 		defer close(cluster.completed)
-	}()
+	})
 
 	loadbalancers := []*loadbalancer.IPVSLoadBalancer{}
-
-	var wg sync.WaitGroup
 
 	for i := range cluster.Network {
 		network := cluster.Network[i]
@@ -59,7 +59,7 @@ func (cluster *Cluster) vipService(ctx context.Context, c *kubevip.Config, sm *e
 		if network.IsDNS() {
 			log.Info("starting the DNS updater", "address", network.DNSName())
 			ipUpdater := vip.NewIPUpdater(network)
-			ipUpdater.Run(ctx)
+			wg.Go(func() { ipUpdater.Run(ctx) })
 		}
 
 		if !c.EnableRoutingTable {
@@ -236,7 +236,7 @@ func (cluster *Cluster) vipService(ctx context.Context, c *kubevip.Config, sm *e
 	}
 
 	if c.EnableBGP {
-		<-cluster.signal
+		<-cluster.stop
 	}
 
 	wg.Wait()
@@ -281,7 +281,7 @@ func (cluster *Cluster) StartLoadBalancerService(ctx context.Context, c *kubevip
 
 		if network.IsDDNS() {
 			ddnsReady := make(chan struct{})
-			go func() {
+			wg.Go(func() {
 				// start the DDNS if requested
 				log.Debug("(svcs) start DDNS", "name", network.DNSName())
 				if err := cluster.StartDDNS(ctx, cluster.Network[i], c.DHCPBackoffAttempts, &wg); err != nil {
@@ -290,7 +290,7 @@ func (cluster *Cluster) StartLoadBalancerService(ctx context.Context, c *kubevip
 
 				close(ddnsReady)
 				<-cluster.stop
-			}()
+			})
 			<-ddnsReady
 		}
 
@@ -350,7 +350,7 @@ func (cluster *Cluster) StartLoadBalancerService(ctx context.Context, c *kubevip
 			if network.IsDNS() {
 				log.Info("(svcs) starting the DNS updater", "address", network.DNSName(), "ip", network.IP())
 				ipUpdater := vip.NewIPUpdater(network)
-				ipUpdater.Run(ctxDNS)
+				wg.Go(func() { ipUpdater.Run(ctxDNS) })
 			}
 		}
 

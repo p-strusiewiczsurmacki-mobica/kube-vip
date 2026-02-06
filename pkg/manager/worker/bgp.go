@@ -51,7 +51,7 @@ func NewBGP(arpMgr *arp.Manager, intfMgr *networkinterface.Manager,
 	}
 }
 
-func (b *BGP) Configure(ctx context.Context, _ *sync.WaitGroup) error {
+func (b *BGP) Configure(ctx context.Context, wg *sync.WaitGroup) error {
 	var err error
 	if b.bgpServer == nil {
 		b.bgpServer, err = bgp.NewBGPServer(b.config.BGPConfig)
@@ -77,7 +77,7 @@ func (b *BGP) Configure(ctx context.Context, _ *sync.WaitGroup) error {
 				"peer":  peerDescription,
 			}).Set(metricValue)
 		}
-	}); err != nil {
+	}, wg); err != nil {
 		return fmt.Errorf("starting BGP server: %w", err)
 	}
 
@@ -86,8 +86,9 @@ func (b *BGP) Configure(ctx context.Context, _ *sync.WaitGroup) error {
 
 func (b *BGP) StartControlPlane(ctx context.Context, _, _ string) {
 	var err error
+	wg := sync.WaitGroup{}
 	if b.config.EnableLeaderElection {
-		err = b.cpCluster.StartCluster(ctx, b.config, b.electionMgr, b.bgpServer, b.leaseMgr)
+		err = b.cpCluster.StartCluster(ctx, b.config, b.electionMgr, b.bgpServer, b.leaseMgr, &wg)
 	} else {
 		err = b.cpCluster.StartVipService(ctx, b.config, b.electionMgr, b.bgpServer)
 	}
@@ -98,6 +99,7 @@ func (b *BGP) StartControlPlane(ctx context.Context, _, _ string) {
 			b.signalChan <- syscall.SIGINT
 		}
 	}
+	wg.Wait()
 }
 
 func (b *BGP) ConfigureServices() {

@@ -3,6 +3,7 @@ package bgp
 import (
 	"context"
 	"fmt"
+	"sync"
 	"time"
 
 	log "log/slog"
@@ -52,8 +53,8 @@ func NewBGPServer(c kubevip.BGPConfig) (b *Server, err error) {
 }
 
 // Start starts the BGP server
-func (b *Server) Start(ctx context.Context, peerStateChangeCallback func(*api.WatchEventResponse_PeerEvent)) (err error) {
-	go b.s.Serve()
+func (b *Server) Start(ctx context.Context, peerStateChangeCallback func(*api.WatchEventResponse_PeerEvent), wg *sync.WaitGroup) (err error) {
+	wg.Go(func() { b.s.Serve() })
 
 	if err = b.s.StartBgp(ctx, &api.StartBgpRequest{
 		Global: &api.Global{
