@@ -61,7 +61,7 @@ func (p *Processor) SyncServices(ctx *servicecontext.Context, svc *v1.Service, w
 		}
 	case ActionAdd:
 		log.Debug("[service] add", "namespace", svc.Namespace, "name", svc.Name, "uid", svc.UID)
-		if err := p.addService(ctx.Ctx, svc); err != nil {
+		if err := p.addService(ctx.Ctx, svc, wg); err != nil {
 			return fmt.Errorf("error adding service %s/%s: %w", svc.Namespace, svc.Name, err)
 		}
 
@@ -150,14 +150,14 @@ func comparePortsAndPortStatuses(svc *v1.Service) bool {
 	return true
 }
 
-func (p *Processor) addService(ctx context.Context, svc *v1.Service) error {
+func (p *Processor) addService(ctx context.Context, svc *v1.Service, wg *sync.WaitGroup) error {
 	// protect against addService while reading
 	p.mutex.Lock()
 	defer p.mutex.Unlock()
 
 	startTime := time.Now()
 
-	newService, err := instance.NewInstance(ctx, svc, p.config, p.intfMgr, p.arpMgr, p.signalChan)
+	newService, err := instance.NewInstance(ctx, svc, p.config, p.intfMgr, p.arpMgr, p.signalChan, wg)
 	if err != nil {
 		return err
 	}
@@ -172,7 +172,7 @@ func (p *Processor) addService(ctx context.Context, svc *v1.Service) error {
 	p.upnpMap(ctx, newService)
 
 	if newService.IsDHCPv4 {
-		go func() {
+		wg.Go(func() {
 			index := -1
 			for i := range newService.VIPConfigs {
 				ip := net.ParseIP(newService.VIPConfigs[i].VIP)
@@ -197,11 +197,11 @@ func (p *Processor) addService(ctx context.Context, svc *v1.Service) error {
 				log.Debug("IPv4 update channel closed, stopping")
 			}
 
-		}()
+		})
 	}
 
 	if newService.IsDHCPv6 {
-		go func() {
+		wg.Go(func() {
 			index := -1
 			for i := range newService.VIPConfigs {
 				ip := net.ParseIP(newService.VIPConfigs[i].VIP)
@@ -225,7 +225,7 @@ func (p *Processor) addService(ctx context.Context, svc *v1.Service) error {
 				}
 				log.Debug("IPv6 update channel closed, stopping")
 			}
-		}()
+		})
 	}
 
 	p.ServiceInstances = append(p.ServiceInstances, newService)

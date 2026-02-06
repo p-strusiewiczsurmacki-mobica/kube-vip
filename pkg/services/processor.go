@@ -230,7 +230,7 @@ func (p *Processor) AddOrModify(ctx context.Context, event watch.Event, serviceF
 						}
 					}
 
-					go func() {
+					wg.Go(func() {
 						defer func() {
 							if svcCtx != nil {
 								svcCtx.IsWatched = false
@@ -249,7 +249,7 @@ func (p *Processor) AddOrModify(ctx context.Context, event watch.Event, serviceF
 								log.Error(err.Error())
 							}
 						}
-					}()
+					})
 
 					// We're now watching this service
 					svcCtx.IsWatched = true
@@ -263,7 +263,7 @@ func (p *Processor) AddOrModify(ctx context.Context, event watch.Event, serviceF
 					}
 				}
 
-				go func() {
+				wg.Go(func() {
 					defer func() {
 						if svcCtx != nil {
 							svcCtx.IsWatched = false
@@ -282,11 +282,11 @@ func (p *Processor) AddOrModify(ctx context.Context, event watch.Event, serviceF
 							log.Error(err.Error())
 						}
 					}
-				}()
+				})
 				// We're now watching this service
 				svcCtx.IsWatched = true
 			} else {
-				go func() {
+				wg.Go(func() {
 					for {
 						select {
 						case <-svcCtx.Ctx.Done():
@@ -306,7 +306,7 @@ func (p *Processor) AddOrModify(ctx context.Context, event watch.Event, serviceF
 							}
 						}
 					}
-				}()
+				})
 			}
 		} else {
 			// Increment the waitGroup before the service Func is called (Done is completed in there)

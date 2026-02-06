@@ -8,6 +8,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	log "log/slog"
@@ -58,7 +59,7 @@ type Port struct {
 	Type string
 }
 
-func NewInstance(ctx context.Context, svc *v1.Service, config *kubevip.Config, intfMgr *networkinterface.Manager, arpMgr *arp.Manager, signalChan chan os.Signal) (*Instance, error) {
+func NewInstance(ctx context.Context, svc *v1.Service, config *kubevip.Config, intfMgr *networkinterface.Manager, arpMgr *arp.Manager, signalChan chan os.Signal, wg *sync.WaitGroup) (*Instance, error) {
 	instanceAddresses, instanceHostnames := FetchServiceAddresses(svc)
 	log.Info("NewInstance used", "instanceAddresses", instanceAddresses, "instanceHostnames", instanceHostnames)
 
@@ -287,7 +288,7 @@ func NewInstance(ctx context.Context, svc *v1.Service, config *kubevip.Config, i
 	}
 	for i := range instance.VIPConfigs {
 		if instance.VIPConfigs[i].VIP == "0.0.0.0" {
-			err := instance.startDHCP(ctx, i, config.DHCPBackoffAttempts)
+			err := instance.startDHCP(ctx, i, config.DHCPBackoffAttempts, wg)
 			if err != nil {
 				return nil, err
 			}
@@ -302,7 +303,7 @@ func NewInstance(ctx context.Context, svc *v1.Service, config *kubevip.Config, i
 			}
 		}
 		if instance.VIPConfigs[i].VIP == "::" {
-			err := instance.startDHCP(ctx, i, config.DHCPBackoffAttempts)
+			err := instance.startDHCP(ctx, i, config.DHCPBackoffAttempts, wg)
 			if err != nil {
 				return nil, err
 			}
@@ -427,7 +428,7 @@ func getAutoInterfaceName(link netlink.Link, defaultInterface string) string {
 	return link.Attrs().Name
 }
 
-func (i *Instance) startDHCP(ctx context.Context, index int, backoffAttempts uint) error {
+func (i *Instance) startDHCP(ctx context.Context, index int, backoffAttempts uint, wg *sync.WaitGroup) error {
 	if len(i.VIPConfigs) > 2 {
 		return fmt.Errorf("DHCP can be used with 2 VIP config maximally, got: %v", len(i.VIPConfigs))
 	}
@@ -544,11 +545,11 @@ func (i *Instance) startDHCP(ctx context.Context, index int, backoffAttempts uin
 		client.WithHostName(i.DHCPHostname)
 	}
 
-	go func() {
+	wg.Go(func() {
 		if err := client.Start(ctx); err != nil {
 			log.Error("[instance] DHCP client error: %w")
 		}
-	}()
+	})
 
 	// Set the name of the interface so that it can be removed on Service deletion
 	i.DHCPInterface = interfaceName
