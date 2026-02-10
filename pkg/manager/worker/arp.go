@@ -44,7 +44,7 @@ func NewARP(arpMgr *arp.Manager, intfMgr *networkinterface.Manager,
 }
 
 func (a *ARP) Configure(ctx context.Context, wg *sync.WaitGroup) error {
-	log.Info("Start ARP/NDP advertisement")
+	log.Info("Start ARP/NDP advertisement WORKER")
 	wg.Go(func() {
 		a.arpMgr.StartAdvertisement(ctx)
 	})
@@ -53,7 +53,7 @@ func (a *ARP) Configure(ctx context.Context, wg *sync.WaitGroup) error {
 
 func (a *ARP) StartControlPlane(ctx context.Context, _, _ string) {
 	wg := sync.WaitGroup{}
-	err := a.cpCluster.StartCluster(ctx, a.config, a.electionMgr, nil, a.leaseMgr, &wg)
+	err := a.cpCluster.StartCluster(ctx, a.config, a.electionMgr, nil, a.leaseMgr, a.signalChan, &wg)
 	if err != nil {
 		log.Error("starting control plane", "err", err)
 	}

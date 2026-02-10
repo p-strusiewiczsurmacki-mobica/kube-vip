@@ -357,12 +357,15 @@ func (sm *Manager) startMode(ctx context.Context, id string) error {
 	wg.Go(func() {
 		if sm.waitForShutdown(modeCtx, w.GetCPCluster()) {
 			cancel()
+			log.Info("waitForShutdown DONE 1")
 		}
+		log.Info("waitForShutdown DONE 2")
 	})
 
 	if sm.config.EnableControlPlane {
 		wg.Go(func() {
 			w.StartControlPlane(modeCtx, id, sm.config.LeaseName)
+			log.Info("StartControlPlane DONE 1")
 		})
 	}
 
@@ -372,8 +375,10 @@ func (sm *Manager) startMode(ctx context.Context, id string) error {
 		if err = w.StartServices(modeCtx, id); err != nil {
 			return fmt.Errorf("failed to start services: %w", err)
 		}
+		log.Info("StartServices DONE 1")
 	}
 
+	log.Info("WAIT 1")
 	wg.Wait()
 
 	log.Info("shutting down kube-vip")
@@ -409,6 +414,7 @@ func (sm *Manager) waitForShutdown(ctx context.Context, cpCluster *cluster.Clust
 				sm.closing.Store(true)
 				log.Info("Received kube-vip termination, signaling shutdown")
 				if cpCluster != nil {
+					log.Info("STOPPING CLUSTER")
 					cpCluster.Stop()
 				}
 				return true

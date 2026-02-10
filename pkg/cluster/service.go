@@ -37,7 +37,7 @@ func (cluster *Cluster) vipService(ctx context.Context, c *kubevip.Config, sm *e
 	wg.Go(func() {
 		<-ctx.Done()
 		cluster.signal <- syscall.SIGINT
-		defer close(cluster.completed)
+		// defer close(cluster.completed)
 	})
 
 	loadbalancers := []*loadbalancer.IPVSLoadBalancer{}
@@ -339,7 +339,7 @@ func (cluster *Cluster) StartLoadBalancerService(ctx context.Context, c *kubevip
 	}
 
 	lbWg.Go(func() {
-		defer close(cluster.completed)
+		// defer close(cluster.completed)
 		for i := range cluster.Network {
 			network := cluster.Network[i]
 

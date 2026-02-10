@@ -116,6 +116,7 @@ func (m *Manager) StartAdvertisement(ctx context.Context) {
 	for {
 		select {
 		case <-ctx.Done(): // if cancel() execute
+			log.Info("[ARP manager] Ending ARP/NDP advertisement")
 			return
 		default:
 			m.instances.Range(func(_ any, instance any) bool {

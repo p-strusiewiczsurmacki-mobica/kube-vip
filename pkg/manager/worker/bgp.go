@@ -88,7 +88,7 @@ func (b *BGP) StartControlPlane(ctx context.Context, _, _ string) {
 	var err error
 	wg := sync.WaitGroup{}
 	if b.config.EnableLeaderElection {
-		err = b.cpCluster.StartCluster(ctx, b.config, b.electionMgr, b.bgpServer, b.leaseMgr, &wg)
+		err = b.cpCluster.StartCluster(ctx, b.config, b.electionMgr, b.bgpServer, b.leaseMgr, b.signalChan, &wg)
 	} else {
 		err = b.cpCluster.StartVipService(ctx, b.config, b.electionMgr, b.bgpServer)
 	}

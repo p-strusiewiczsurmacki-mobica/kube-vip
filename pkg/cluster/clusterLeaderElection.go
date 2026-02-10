@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"os/signal"
 	"sync"
 	"syscall"
 
@@ -18,7 +17,7 @@ import (
 )
 
 // StartCluster - Begins a running instance of the Leader Election cluster
-func (cluster *Cluster) StartCluster(ctx context.Context, c *kubevip.Config, sm *election.Manager, bgpServer *bgp.Server, leaseMgr *lease.Manager, wg *sync.WaitGroup) error {
+func (cluster *Cluster) StartCluster(ctx context.Context, c *kubevip.Config, sm *election.Manager, bgpServer *bgp.Server, leaseMgr *lease.Manager, signalChan chan os.Signal, wg *sync.WaitGroup) error {
 	var err error
 
 	log.Info("cluster membership", "namespace", c.Namespace, "lock", c.LeaseName, "id", c.NodeName)
@@ -45,8 +44,10 @@ func (cluster *Cluster) StartCluster(ctx context.Context, c *kubevip.Config, sm 
 		log.Debug("this election was alreadty done, waiting for it to finish", "lease", c.LeaseName)
 		select {
 		case <-ctx.Done():
-		// case <-leaderCtx.Done():
+			log.Info("ctx DONE 2")
 		case <-objLease.Ctx.Done():
+			log.Info("objLease DONE 2")
+
 		}
 		leaseMgr.Delete(leaseID, objectName)
 		return nil
@@ -59,21 +60,14 @@ func (cluster *Cluster) StartCluster(ctx context.Context, c *kubevip.Config, sm 
 	wg.Go(func() {
 		select {
 		case <-objLease.Ctx.Done():
+			log.Info("objLease DONE 1")
 		case <-ctx.Done():
+			log.Info("ctx DONE 1")
 		}
 
 		leaseMgr.Delete(leaseID, objectName)
+		log.Info("wg DONE 1")
 	})
-
-	// listen for interrupts or the Linux SIGTERM signal and cancel
-	// our context, which the leader election code will observe and
-	// step down
-	signalChan := make(chan os.Signal, 1)
-	// Add Notification for Userland interrupt
-	signal.Notify(signalChan, syscall.SIGINT)
-
-	// Add Notification for SIGTERM (sent from Kubernetes)
-	signal.Notify(signalChan, syscall.SIGTERM)
 
 	defer close(cluster.completed)
 
@@ -82,6 +76,7 @@ func (cluster *Cluster) StartCluster(ctx context.Context, c *kubevip.Config, sm 
 		log.Info("Received termination, signaling cluster shutdown")
 		// Cancel the leader context, which will in turn cancel the leadership
 		objLease.Cancel()
+		log.Info("wg DONE 2")
 	})
 
 	// (attempt to) Remove the virtual IP, in case it already exists
@@ -175,6 +170,7 @@ func (cluster *Cluster) StartCluster(ctx context.Context, c *kubevip.Config, sm 
 		OnStoppedLeading: func() {
 			cluster.onStoppedLeadingAction(c, bgpServer, objLease.Cancel, signalChan)
 			objLease.Elected.Store(false)
+			log.Info("On stopped leading DONE 1")
 		},
 		OnNewLeader: func(identity string) {
 			cluster.onNewLeaderAction(identity, c)
@@ -188,6 +184,8 @@ func (cluster *Cluster) StartCluster(ctx context.Context, c *kubevip.Config, sm 
 	if err := election.RunOrDie(objLease.Ctx, run, c); err != nil {
 		return fmt.Errorf("leaderelection failed: %w", err)
 	}
+
+	log.Info("CLUSTER EXIT 1")
 
 	return nil
 }
@@ -211,7 +209,7 @@ func (cluster *Cluster) onStartedLeadingAction(ctx context.Context, c *kubevip.C
 
 	// Start ARP advertisements now that we have leadership
 	wg := sync.WaitGroup{}
-	log.Info("Start ARP/NDP advertisement")
+	log.Info("Start ARP/NDP advertisement CLUSTER")
 	wg.Go(func() { cluster.arpMgr.StartAdvertisement(ctx) })
 
 	// As we're leading lets start the vip service
@@ -273,7 +271,8 @@ func (cluster *Cluster) onStoppedLeadingAction(c *kubevip.Config, bgpServer *bgp
 	}
 
 	log.Error("lost leadership, restarting kube-vip")
-	signalChan <- syscall.SIGINT
+	// signalChan <- syscall.SIGINT
+	// log.Error("SENT SIGINT")
 }
 
 func (cluster *Cluster) onNewLeaderAction(identity string, c *kubevip.Config) {

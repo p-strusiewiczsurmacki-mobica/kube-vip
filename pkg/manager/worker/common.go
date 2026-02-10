@@ -89,6 +89,7 @@ func (c *Common) OnStoppedLeading() {
 
 	log.Error("lost services leadership, restarting kube-vip")
 	if !c.closing.Load() {
+		log.Info("SIGNALLING 2")
 		c.signalChan <- syscall.SIGINT
 	}
 }
@@ -196,6 +197,7 @@ func (c *Common) runGlobalElection(ctx context.Context, a election.Actions, id, 
 
 		log.Error("lost services leadership, restarting kube-vip")
 		if !c.closing.Load() {
+			log.Info("SIGNALLING 1")
 			c.signalChan <- syscall.SIGINT
 		}
 
