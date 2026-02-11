@@ -161,6 +161,7 @@ func (p *Processor) StartServicesLeaderElection(svcCtx *servicecontext.Context, 
 				return
 			}
 			log.Info("new leader", "leader", identity, "service", service.Name, "uid", service.UID)
+			svcLease.Cancel()
 		},
 	}
 
