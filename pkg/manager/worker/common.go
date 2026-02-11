@@ -5,7 +5,6 @@ import (
 	"fmt"
 	log "log/slog"
 	"os"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"syscall"
@@ -15,6 +14,7 @@ import (
 	"github.com/kube-vip/kube-vip/pkg/cluster"
 	"github.com/kube-vip/kube-vip/pkg/election"
 	"github.com/kube-vip/kube-vip/pkg/kubevip"
+	"github.com/kube-vip/kube-vip/pkg/lease"
 	"github.com/kube-vip/kube-vip/pkg/networkinterface"
 	"github.com/kube-vip/kube-vip/pkg/services"
 	"k8s.io/client-go/kubernetes"
@@ -30,8 +30,26 @@ type Common struct {
 	svcProcessor *services.Processor
 	mutex        *sync.Mutex
 	clientSet    *kubernetes.Clientset
-	id           string
 	electionMgr  *election.Manager
+	leaseMgr     *lease.Manager
+}
+
+func newCommon(arpMgr *arp.Manager, intfMgr *networkinterface.Manager,
+	config *kubevip.Config, closing *atomic.Bool, signalChan chan os.Signal,
+	svcProcessor *services.Processor, mutex *sync.Mutex, clientSet *kubernetes.Clientset,
+	electionMgr *election.Manager, leaseMgr *lease.Manager) *Common {
+	return &Common{
+		arpMgr:       arpMgr,
+		intfMgr:      intfMgr,
+		config:       config,
+		closing:      closing,
+		signalChan:   signalChan,
+		svcProcessor: svcProcessor,
+		mutex:        mutex,
+		clientSet:    clientSet,
+		electionMgr:  electionMgr,
+		leaseMgr:     leaseMgr,
+	}
 }
 
 func (c *Common) InitControlPlane() error {
@@ -52,8 +70,8 @@ func (c *Common) PerServiceLeader(ctx context.Context) error {
 	return nil
 }
 
-func (c *Common) GlobalLeader(ctx context.Context, id string, leaseName string) {
-	runGlobalElection(ctx, c, leaseName, c.config, id, c.electionMgr)
+func (c *Common) GlobalLeader(ctx context.Context, leaseName string) {
+	runGlobalElection(ctx, c, leaseName, c.config, c.electionMgr)
 }
 
 func (c *Common) ServicesNoLeader(ctx context.Context) error {
@@ -79,7 +97,7 @@ func (c *Common) OnStoppedLeading() {
 	// we can do cleanup here
 	c.mutex.Lock()
 	defer c.mutex.Unlock()
-	log.Info("leader lost", "new leader", c.id)
+	log.Info("leader lost", "former leader", c.config.NodeName)
 	c.svcProcessor.Stop()
 
 	log.Error("lost services leadership, restarting kube-vip")
@@ -93,38 +111,24 @@ func (c *Common) OnNewLeader(identity string) {
 	if c.config.EnableNodeLabeling {
 		labelCtx, cancel := context.WithTimeout(context.Background(), time.Second*30)
 		defer cancel()
-		applyNodeLabel(labelCtx, c.clientSet, c.config.Address, c.id, identity)
+		applyNodeLabel(labelCtx, c.clientSet, c.config.Address, c.config.NodeName, identity)
 	}
-	if identity == c.id {
+	if identity == c.config.NodeName {
 		// I just got the lock
 		return
 	}
 	log.Info("new leader elected", "new leader", identity)
 }
 
-func returnNameSpace() (string, error) {
-	if data, err := os.ReadFile("/var/run/secrets/kubernetes.io/serviceaccount/namespace"); err == nil {
-		if ns := strings.TrimSpace(string(data)); len(ns) > 0 {
-			return ns, nil
-		}
-		return "", err
-	}
-	return "", fmt.Errorf("unable to find Namespace")
-}
-
 func runGlobalElection(ctx context.Context, a election.Actions, leaseName string,
-	config *kubevip.Config, id string, electionManager *election.Manager) {
-	ns, err := returnNameSpace()
-	if err != nil {
-		log.Warn("unable to auto-detect namespace, dropping to config", "namespace", config.Namespace)
-		ns = config.Namespace
-	}
+	config *kubevip.Config, electionManager *election.Manager) {
+	ns, leaseName := lease.NamespaceName(leaseName, config)
+
+	leaseID := lease.NewID(config.LeaderElectionType, ns, leaseName)
 
 	run := &election.RunConfig{
 		Config:           config,
-		LeaseID:          id,
-		Namespace:        ns,
-		LeaseName:        leaseName,
+		LeaseID:          leaseID,
 		LeaseAnnotations: map[string]string{},
 		Mgr:              electionManager,
 		OnStartedLeading: a.OnStartedLeading,
@@ -133,6 +137,6 @@ func runGlobalElection(ctx context.Context, a election.Actions, leaseName string
 	}
 
 	if err := election.RunOrDie(ctx, run, config); err != nil {
-		log.Error("leaderelection failed", "err", err, "id", id, "name", leaseName)
+		log.Error("leaderelection failed", "err", err, "id", config.NodeName, "name", leaseID.Name())
 	}
 }
