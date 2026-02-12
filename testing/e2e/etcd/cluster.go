@@ -54,10 +54,10 @@ func CreateCluster(ctx context.Context, spec *ClusterSpec) *Cluster {
 	c.initKindCluster()
 
 	c.Logger.Printf("Loading kube-vip image into nodes")
-	e2e.LoadDockerImageToKind(spec.Logger, spec.KubeVIPImage, spec.Name)
+	Eventually(e2e.LoadDockerImageToKind(spec.Logger, spec.KubeVIPImage, spec.Name), "20s").Should(Succeed())
 
 	c.Logger.Printf("Loading traefik image into nodes")
-	e2e.LoadDockerImageToKind(spec.Logger, "ghcr.io/traefik/whoami:v1.11", spec.Name)
+	Eventually(e2e.LoadDockerImageToKind(spec.Logger, "ghcr.io/traefik/whoami:v1.11", spec.Name), "20s").Should(Succeed())
 
 	c.Logger.Printf("Starting etcd cluster")
 	c.initEtcd(ctx)
