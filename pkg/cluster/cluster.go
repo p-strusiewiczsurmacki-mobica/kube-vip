@@ -1,6 +1,7 @@
 package cluster
 
 import (
+	"os"
 	"sync"
 
 	log "log/slog"
@@ -15,13 +16,14 @@ import (
 type Cluster struct {
 	stop      chan bool
 	completed chan bool
+	signal    chan os.Signal
 	once      sync.Once
 	Network   []vip.Network
 	arpMgr    *arp.Manager
 }
 
 // InitCluster - Will attempt to initialise all of the required settings for the cluster
-func InitCluster(c *kubevip.Config, disableVIP bool, intfMgr *networkinterface.Manager, arpMgr *arp.Manager) (*Cluster, error) {
+func InitCluster(c *kubevip.Config, disableVIP bool, intfMgr *networkinterface.Manager, arpMgr *arp.Manager, signalChan chan os.Signal) (*Cluster, error) {
 	var networks []vip.Network
 	var err error
 
@@ -34,8 +36,11 @@ func InitCluster(c *kubevip.Config, disableVIP bool, intfMgr *networkinterface.M
 	}
 	// Initialise the Cluster structure
 	newCluster := &Cluster{
-		Network: networks,
-		arpMgr:  arpMgr,
+		Network:   networks,
+		arpMgr:    arpMgr,
+		stop:      make(chan bool, 1),
+		completed: make(chan bool, 1),
+		signal:    signalChan,
 	}
 
 	log.Debug("service security", "enabled", c.EnableServiceSecurity)

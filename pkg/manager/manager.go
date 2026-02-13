@@ -7,7 +7,6 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"syscall"
@@ -18,8 +17,11 @@ import (
 	"github.com/kube-vip/kube-vip/pkg/arp"
 	"github.com/kube-vip/kube-vip/pkg/bgp"
 	"github.com/kube-vip/kube-vip/pkg/cluster"
+	"github.com/kube-vip/kube-vip/pkg/election"
 	"github.com/kube-vip/kube-vip/pkg/k8s"
 	"github.com/kube-vip/kube-vip/pkg/kubevip"
+	"github.com/kube-vip/kube-vip/pkg/lease"
+	"github.com/kube-vip/kube-vip/pkg/manager/worker"
 	"github.com/kube-vip/kube-vip/pkg/networkinterface"
 	"github.com/kube-vip/kube-vip/pkg/node"
 	"github.com/kube-vip/kube-vip/pkg/services"
@@ -29,8 +31,6 @@ import (
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 )
-
-const plunderLock = "plndr-svcs-lock"
 
 // Manager degines the manager of the load-balancing services
 type Manager struct {
@@ -77,6 +77,12 @@ type Manager struct {
 
 	// This variable reports if manager is being closed
 	closing atomic.Bool
+
+	// Will be used for leaderelection when required
+	electionMgr *election.Manager
+
+	// Will handle leases
+	leaseMgr *lease.Manager
 }
 
 // New will create a new managing object
@@ -165,23 +171,6 @@ func New(configMap string, config *kubevip.Config) (*Manager, error) {
 		}
 	}
 
-	// Flip this to something else
-	// if config.DetectControlPlane {
-	// 	log.Info("[k8s client] flipping to internal service account")
-	// 	_, err = clientset.CoreV1().ServiceAccounts("kube-system").Apply(context.TODO(), kubevip.GenerateSA(), v1.ApplyOptions{FieldManager: "application/apply-patch"})
-	// 	if err != nil {
-	// 		return nil, fmt.Errorf("could not create k8s clientset from incluster config: %v", err)
-	// 	}
-	// 	_, err = clientset.RbacV1().ClusterRoles().Apply(context.TODO(), kubevip.GenerateCR(), v1.ApplyOptions{FieldManager: "application/apply-patch"})
-	// 	if err != nil {
-	// 		return nil, fmt.Errorf("could not create k8s clientset from incluster config: %v", err)
-	// 	}
-	// 	_, err = clientset.RbacV1().ClusterRoleBindings().Apply(context.TODO(), kubevip.GenerateCRB(), v1.ApplyOptions{FieldManager: "application/apply-patch"})
-	// 	if err != nil {
-	// 		return nil, fmt.Errorf("could not create k8s clientset from incluster config: %v", err)
-	// 	}
-	// }
-
 	// listen for interrupts or the Linux SIGTERM signal and cancel
 	// our context, which the leader election code will observe and
 	// step down
@@ -191,6 +180,9 @@ func New(configMap string, config *kubevip.Config) (*Manager, error) {
 
 	// Add Notification for SIGTERM (sent from Kubernetes)
 	signal.Notify(signalChan, syscall.SIGTERM)
+
+	// Add Notification for SIGUSR1 (for configuration dump)
+	signal.Notify(signalChan, syscall.SIGUSR1)
 
 	// All watchers and other goroutines should have an additional goroutine that blocks on this, to shut things down
 	shutdownChan := make(chan struct{})
@@ -210,7 +202,15 @@ func New(configMap string, config *kubevip.Config) (*Manager, error) {
 		}
 	}
 
-	svcProcessor := services.NewServicesProcessor(config, bgpServer, clientset, rwClientSet, shutdownChan, intfMgr, arpMgr, nodeLabelManager)
+	electionMgr, err := election.NewManager(config, clientset, rwClientSet)
+	if err != nil {
+		return nil, fmt.Errorf("creating election manager: %w", err)
+	}
+
+	leaseMgr := lease.NewManager()
+
+	svcProcessor := services.NewServicesProcessor(config, bgpServer, clientset, rwClientSet, shutdownChan,
+		intfMgr, arpMgr, nodeLabelManager, electionMgr, leaseMgr, signalChan)
 
 	return &Manager{
 		clientSet:   clientset,
@@ -236,26 +236,15 @@ func New(configMap string, config *kubevip.Config) (*Manager, error) {
 		arpMgr:           arpMgr,
 		bgpServer:        bgpServer,
 		nodeLabelManager: nodeLabelManager,
+		electionMgr:      electionMgr,
+		leaseMgr:         leaseMgr,
 	}, nil
 }
 
 // Start will begin the Manager, which will start services and watch the configmap
 func (sm *Manager) Start(ctx context.Context) error {
-	// listen for interrupts or the Linux SIGTERM signal and cancel
-	// our context, which the leader election code will observe and
-	// step down
-	sm.signalChan = make(chan os.Signal, 1)
-	// Add Notification for Userland interrupt
-	signal.Notify(sm.signalChan, syscall.SIGINT)
-
-	// Add Notification for SIGTERM (sent from Kubernetes)
-	signal.Notify(sm.signalChan, syscall.SIGTERM)
-
-	// Add Notification for SIGUSR1 (for configuration dump)
-	signal.Notify(sm.signalChan, syscall.SIGUSR1)
-
-	// All watchers and other goroutines should have an additional goroutine that blocks on this, to shut things down
-	sm.shutdownChan = make(chan struct{})
+	wg := sync.WaitGroup{}
+	defer wg.Wait()
 
 	// HealthCheck
 	if sm.config.HealthCheckPort != 0 {
@@ -265,16 +254,7 @@ func (sm *Manager) Start(ctx context.Context) error {
 		http.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
 			fmt.Fprintf(w, "OK")
 		})
-		go func() {
-			server := &http.Server{
-				Addr:              fmt.Sprintf(":%d", sm.config.HealthCheckPort),
-				ReadHeaderTimeout: 3 * time.Second,
-			}
-			err := server.ListenAndServe()
-			if err != nil {
-				log.Error("healthcheck", "unable to start", err)
-			}
-		}()
+		wg.Go(func() { runHealthcheckServer(ctx, sm.config.HealthCheckPort) })
 	}
 
 	// on exit, clean up the node labels
@@ -283,19 +263,6 @@ func (sm *Manager) Start(ctx context.Context) error {
 			log.Error("CleanUpNodeLabels", "unable to cleanup node labels", err)
 		}
 	}()
-
-	// If BGP is enabled then we start a server instance that will broadcast VIPs
-	if sm.config.EnableBGP {
-
-		// If Annotations have been set then we will look them up
-		err := sm.parseAnnotations(ctx)
-		if err != nil {
-			return err
-		}
-
-		log.Info("Starting Kube-vip Manager with the BGP engine")
-		return sm.startBGP(ctx)
-	}
 
 	if sm.config.EnableARP || sm.config.EnableWireguard {
 		if sm.config.EnableUPNP {
@@ -314,38 +281,109 @@ func (sm *Manager) Start(ctx context.Context) error {
 				}
 			}
 			// TODO: It would be nice to run the UPNP refresh only on the leader.
-			go sm.svcProcessor.RefreshUPNPForwards(ctx)
+			wg.Go(func() { sm.svcProcessor.RefreshUPNPForwards(ctx) })
 		}
 	}
 
-	// If ARP is enabled then we start a LeaderElection that will use ARP to advertise VIPs
-	if sm.config.EnableARP {
-		log.Info("Starting Kube-vip Manager with the ARP engine")
-		return sm.startARP(ctx, sm.config.NodeName)
+	// If BGP is enabled then we start a server instance that will broadcast VIPs
+	if sm.config.EnableBGP {
+		// If Annotations have been set then we will look them up
+		err := sm.parseAnnotations(ctx)
+		if err != nil {
+			return err
+		}
 	}
 
-	if sm.config.EnableWireguard {
-		log.Info("Starting Kube-vip Manager with the Wireguard engine")
-		return sm.startWireguard(ctx, sm.config.NodeName)
-	}
-
-	if sm.config.EnableRoutingTable {
-		log.Info("Starting Kube-vip Manager with the Routing Table engine")
-		return sm.startTableMode(ctx, sm.config.NodeName)
-	}
-
-	log.Error("prematurely exiting Load-balancer as no modes [ARP/BGP/Wireguard] are enabled")
-	return nil
+	return sm.startMode(ctx, sm.config.NodeName)
 }
 
-func returnNameSpace() (string, error) {
-	if data, err := os.ReadFile("/var/run/secrets/kubernetes.io/serviceaccount/namespace"); err == nil {
-		if ns := strings.TrimSpace(string(data)); len(ns) > 0 {
-			return ns, nil
+func runHealthcheckServer(ctx context.Context, port int) {
+	wg := sync.WaitGroup{}
+	defer wg.Wait()
+
+	var server *http.Server
+	wg.Go(func() {
+		server = &http.Server{
+			Addr:              fmt.Sprintf(":%d", port),
+			ReadHeaderTimeout: 3 * time.Second,
 		}
-		return "", err
+		err := server.ListenAndServe()
+		if err != nil {
+			log.Error("healthcheck", "unable to start", err)
+		}
+	})
+
+	<-ctx.Done()
+
+	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), time.Second*5)
+	defer shutdownCancel()
+
+	if server != nil {
+		if err := server.Shutdown(shutdownCtx); err != nil {
+			log.Error("heltcheck sbhutdown", "error", err)
+		}
 	}
-	return "", fmt.Errorf("unable to find Namespace")
+}
+
+// Start will begin the Manager, which will start services and watch the configmap
+func (sm *Manager) startMode(ctx context.Context, id string) error {
+	var err error
+
+	// use a Go context so we can tell the leaderelection code when we
+	// want to step down
+	modeCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	w := worker.New(sm.arpMgr, sm.intfMgr, sm.config, &sm.closing, sm.signalChan,
+		sm.svcProcessor, &sm.mutex, sm.clientSet, sm.bgpServer, sm.bgpSessionInfoGauge,
+		sm.electionMgr, sm.leaseMgr)
+
+	log.Info("starting Kube-vip Manager", "mode", w.Name())
+
+	wg := sync.WaitGroup{}
+
+	if err := w.Configure(modeCtx, &wg); err != nil {
+		return fmt.Errorf("failed to configure %s mode: %w", w.Name(), err)
+	}
+
+	if sm.config.EnableControlPlane {
+		err = w.InitControlPlane()
+		if err != nil {
+			return err
+		}
+	}
+
+	// Shutdown function that will wait on this signal, unless we call it ourselves
+	wg.Go(func() {
+		if sm.waitForShutdown(modeCtx, w.GetCPCluster()) {
+			cancel()
+			log.Info("waitForShutdown DONE 1")
+		}
+		log.Info("waitForShutdown DONE 2")
+	})
+
+	if sm.config.EnableControlPlane {
+		wg.Go(func() {
+			w.StartControlPlane(modeCtx, id, sm.config.LeaseName)
+			log.Info("StartControlPlane DONE 1")
+		})
+	}
+
+	if sm.config.EnableServices {
+		w.ConfigureServices()
+
+		if err = w.StartServices(modeCtx, id); err != nil {
+			return fmt.Errorf("failed to start services: %w", err)
+		}
+		log.Info("StartServices DONE 1")
+	}
+
+	log.Info("WAIT 1")
+	wg.Wait()
+
+	log.Info("shutting down kube-vip")
+
+	return nil
 }
 
 func (sm *Manager) parseAnnotations(ctx context.Context) error {
@@ -361,23 +399,26 @@ func (sm *Manager) parseAnnotations(ctx context.Context) error {
 	return nil
 }
 
-func (sm *Manager) waitForShutdown(ctx context.Context, cancel context.CancelFunc, cpCluster *cluster.Cluster) {
+func (sm *Manager) waitForShutdown(ctx context.Context, cpCluster *cluster.Cluster) bool {
 	defer close(sm.shutdownChan)
 	for {
-		sig := <-sm.signalChan
-		switch sig {
-		case syscall.SIGUSR1:
-			log.Info("Received SIGUSR1, dumping configuration")
-			sm.dumpConfiguration(ctx)
-		case syscall.SIGINT, syscall.SIGTERM:
-			sm.closing.Store(true)
-			log.Info("Received kube-vip termination, signaling shutdown")
-			if cpCluster != nil {
-				cpCluster.Stop()
+		select {
+		case <-ctx.Done():
+			return false
+		case sig := <-sm.signalChan:
+			switch sig {
+			case syscall.SIGUSR1:
+				log.Info("Received SIGUSR1, dumping configuration")
+				sm.dumpConfiguration(ctx)
+			case syscall.SIGINT, syscall.SIGTERM:
+				sm.closing.Store(true)
+				log.Info("Received kube-vip termination, signaling shutdown")
+				if cpCluster != nil {
+					log.Info("STOPPING CLUSTER")
+					cpCluster.Stop()
+				}
+				return true
 			}
-			// Cancel the context, which will in turn cancel the leadership and all goroutines
-			cancel()
-			return
 		}
 	}
 }

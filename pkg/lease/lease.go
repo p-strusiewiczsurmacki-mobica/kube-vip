@@ -3,6 +3,7 @@ package lease
 import (
 	"context"
 	"fmt"
+	"strings"
 	"sync"
 	"sync/atomic"
 
@@ -31,42 +32,49 @@ func NewManager() *Manager {
 // If service is new but not shared, we should start leaderelection and sync it
 // If service is new and shared, we should only sync it as the leaderelection should be already handled
 // If service is not new we should do nothing
-func (m *Manager) Add(service *v1.Service) (lease *Lease, newService bool, sharedLease bool) {
+// func (m *Manager) Add(ctx context.Context, leaseID, objectName string) (lease *Lease, newObject bool, sharedLease bool) {
+// 	m.lock.Lock()
+// 	defer m.lock.Unlock()
+// 	lease, sharedLease = m.addLease(ctx, leaseID)
+// 	newObject = m.leases[leaseID].Add(objectName)
+// 	return
+// }
+
+// Add adds lease placeholder to the manager.
+func (m *Manager) Add(ctx context.Context, leaseID string) (lease *Lease) {
 	m.lock.Lock()
 	defer m.lock.Unlock()
-	_, id := GetName(service)
+	return m.addLease(ctx, leaseID)
+}
 
-	if _, sharedLease = m.leases[id]; !sharedLease {
-		// create new lease context (independent)
-		ctx, cancel := context.WithCancel(context.Background())
-		m.leases[id] = newLease(ctx, cancel)
+func (m *Manager) addLease(ctx context.Context, leaseID string) (lease *Lease) {
+	if _, exists := m.leases[leaseID]; !exists {
+		leaseCtx, cancel := context.WithCancel(ctx)
+		m.leases[leaseID] = newLease(leaseCtx, cancel)
 	}
-	lease = m.leases[id]
-	newService = m.leases[id].add(namespacedName(service))
+	lease = m.leases[leaseID]
 	return
 }
 
 // Delete removes the lease and cancels it if the lease counter equals 0.
-func (m *Manager) Delete(service *v1.Service) {
+func (m *Manager) Delete(leaseID, objectName string) {
 	m.lock.Lock()
 	defer m.lock.Unlock()
-	_, id := GetName(service)
-	if _, exist := m.leases[id]; exist {
-		m.leases[id].delete(namespacedName(service))
-		if m.leases[id].cnt.Load() < 1 {
-			m.leases[id].Cancel()
-			delete(m.leases, id)
+	if _, exist := m.leases[leaseID]; exist {
+		m.leases[leaseID].delete(objectName)
+		if m.leases[leaseID].cnt.Load() < 1 {
+			m.leases[leaseID].Cancel()
+			delete(m.leases, leaseID)
 		}
 	}
 }
 
 // Get returns lease for the service.
-func (m *Manager) Get(service *v1.Service) *Lease {
+func (m *Manager) Get(leaseID string) *Lease {
 	m.lock.Lock()
 	defer m.lock.Unlock()
-	_, id := GetName(service)
 
-	if lease, exist := m.leases[id]; exist {
+	if lease, exist := m.leases[leaseID]; exist {
 		return lease
 	}
 	return nil
@@ -74,12 +82,13 @@ func (m *Manager) Get(service *v1.Service) *Lease {
 
 // Lease holds lease data.
 type Lease struct {
-	Lock     sync.Mutex
 	Ctx      context.Context
 	Cancel   context.CancelFunc
 	Started  chan any
 	services sync.Map
 	cnt      atomic.Int64
+	Elected  atomic.Bool
+	Mtx      sync.Mutex
 }
 
 func newLease(ctx context.Context, cancel context.CancelFunc) *Lease {
@@ -89,12 +98,13 @@ func newLease(ctx context.Context, cancel context.CancelFunc) *Lease {
 		Started:  make(chan any),
 		services: sync.Map{},
 		cnt:      atomic.Int64{},
+		Elected:  atomic.Bool{},
 	}
 }
 
-// add adds the service to the lease and increments counter
+// Add adds the service to the lease and increments counter
 // it will return true if service was added
-func (l *Lease) add(service string) bool {
+func (l *Lease) Add(service string) bool {
 	if _, exists := l.services.Load(service); !exists {
 		l.services.Store(service, true)
 		l.cnt.Add(1)
@@ -111,16 +121,26 @@ func (l *Lease) delete(service string) {
 	}
 }
 
-// GetName gets lease name and id for the service.
-func GetName(service *v1.Service) (string, string) {
+// ServiceName gets lease name and id for the service.
+func ServiceName(service *v1.Service) (string, string, string) {
 	serviceLease, exists := service.Annotations[kubevip.ServiceLease]
 	if !exists || serviceLease == "" {
 		serviceLease = fmt.Sprintf("kubevip-%s", service.Name)
 	}
-	serviceLeaseID := fmt.Sprintf("%s/%s", serviceLease, service.Namespace)
-	return serviceLease, serviceLeaseID
+
+	serviceLeaseParts := strings.Split(serviceLease, "/")
+	namespace := service.Namespace
+
+	if len(serviceLeaseParts) > 1 {
+		namespace = serviceLeaseParts[0]
+		serviceLease = serviceLeaseParts[1]
+	}
+
+	serviceLeaseID := fmt.Sprintf("%s/%s", namespace, serviceLease)
+
+	return serviceLease, serviceLeaseID, namespace
 }
 
-func namespacedName(service *v1.Service) string {
+func ServiceNamespacedName(service *v1.Service) string {
 	return fmt.Sprintf("%s/%s", service.Namespace, service.Name)
 }
