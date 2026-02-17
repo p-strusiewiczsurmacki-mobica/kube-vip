@@ -34,16 +34,13 @@ func NewManager() *Manager {
 // If object is new but not shared, we should start leaderelection and sync it
 // If object is new and shared, we should only sync it as the leaderelection should be already handled
 // If object is not new we should do nothing
-func (m *Manager) Add(id ID, objectName string) (lease *Lease, isNewObject bool, isSharedLease bool) {
+func (m *Manager) Add(ctx context.Context, id ID) *Lease {
 	m.lock.Lock()
 	defer m.lock.Unlock()
-	if _, isSharedLease = m.leases[id.NamespacedName()]; !isSharedLease {
-		ctx, cancel := context.WithCancel(context.Background())
-		m.leases[id.NamespacedName()] = newLease(ctx, cancel)
+	if _, exists := m.leases[id.NamespacedName()]; !exists {
+		m.leases[id.NamespacedName()] = newLease(ctx)
 	}
-	lease = m.leases[id.NamespacedName()]
-	isNewObject = m.leases[id.NamespacedName()].add(objectName)
-	return
+	return m.leases[id.NamespacedName()]
 }
 
 // Delete removes the lease and cancels it if the lease counter equals 0.
@@ -78,23 +75,24 @@ type Lease struct {
 	Started  chan any
 	services sync.Map
 	cnt      atomic.Int64
+	Elected  atomic.Bool
+	Mtx      sync.Mutex
 }
 
-func newLease(ctx context.Context, cancel context.CancelFunc) *Lease {
+func newLease(ctx context.Context) *Lease {
+	leaseCtx, cancel := context.WithCancel(ctx)
 	return &Lease{
-		Ctx:      ctx,
-		Cancel:   cancel,
-		Started:  make(chan any),
-		services: sync.Map{},
-		cnt:      atomic.Int64{},
+		Ctx:     leaseCtx,
+		Cancel:  cancel,
+		Started: make(chan any),
 	}
 }
 
-// add adds the service to the lease and increments counter
-// it will return true if service was added
-func (l *Lease) add(service string) bool {
-	if _, exists := l.services.Load(service); !exists {
-		l.services.Store(service, true)
+// Add adds the service to the lease and increments counter
+// it will return true if object was added
+func (l *Lease) Add(object string) bool {
+	if _, exists := l.services.Load(object); !exists {
+		l.services.Store(object, true)
 		l.cnt.Add(1)
 		return true
 	}
@@ -102,9 +100,9 @@ func (l *Lease) add(service string) bool {
 }
 
 // delete removes the service from the lease and decrements the counter
-func (l *Lease) delete(service string) {
-	if _, exists := l.services.Load(service); exists {
-		l.services.Delete(service)
+func (l *Lease) delete(object string) {
+	if _, exists := l.services.Load(object); exists {
+		l.services.Delete(object)
 		l.cnt.Add(-1)
 	}
 }
