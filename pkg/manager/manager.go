@@ -338,6 +338,12 @@ func (sm *Manager) startMode(ctx context.Context) error {
 	var cpCluster *cluster.Cluster
 	var err error
 
+	wg := sync.WaitGroup{}
+	defer func() {
+		wg.Wait()
+		log.Info("Shutting down Kube-Vip")
+	}()
+
 	// use a Go context so we can tell the leaderelection code when we
 	// want to step down
 	modeCtx, cancel := context.WithCancel(ctx)
@@ -360,10 +366,14 @@ func (sm *Manager) startMode(ctx context.Context) error {
 	}
 
 	// Shutdown function that will wait on this signal, unless we call it ourselves
-	go sm.waitForShutdown(modeCtx, cancel, cpCluster)
+	wg.Go(func() {
+		sm.waitForShutdown(modeCtx, cancel, cpCluster)
+	})
 
 	if sm.config.EnableControlPlane {
-		go w.StartControlPlane(modeCtx, sm.electionMgr)
+		wg.Go(func() {
+			w.StartControlPlane(modeCtx, sm.electionMgr)
+		})
 	}
 
 	if sm.config.EnableServices {
@@ -375,7 +385,6 @@ func (sm *Manager) startMode(ctx context.Context) error {
 	}
 
 	<-sm.shutdownChan
-	log.Info("Shutting down Kube-Vip")
 
 	return nil
 }

@@ -49,6 +49,9 @@ func (cluster *Cluster) vipService(ctx context.Context, c *kubevip.Config, sm *e
 		shouldClose = true
 	}
 
+	var wg sync.WaitGroup
+	defer wg.Wait()
+
 	go func() {
 		<-ctx.Done()
 		signalChan <- syscall.SIGINT
@@ -59,13 +62,11 @@ func (cluster *Cluster) vipService(ctx context.Context, c *kubevip.Config, sm *e
 
 	loadbalancers := []*loadbalancer.IPVSLoadBalancer{}
 
-	var arpWG sync.WaitGroup
-
 	for i := range cluster.Network {
 		network := cluster.Network[i]
 
 		if network.IsDDNS() {
-			if err := cluster.StartDDNS(ctx, cluster.Network[i], c.DHCPBackoffAttempts); err != nil {
+			if err := cluster.StartDDNS(ctx, cluster.Network[i], c.DHCPBackoffAttempts, &wg); err != nil {
 				log.Error("failed to start DDNS", "err", err)
 			}
 		}
@@ -117,8 +118,9 @@ func (cluster *Cluster) vipService(ctx context.Context, c *kubevip.Config, sm *e
 		}
 
 		if c.EnableARP {
-			arpWG.Add(1)
-			go cluster.layer2Update(ctx, network, c, &arpWG)
+			wg.Go(func() {
+				cluster.layer2Update(ctx, network, c)
+			})
 		}
 	}
 
@@ -260,7 +262,7 @@ func (cluster *Cluster) vipService(ctx context.Context, c *kubevip.Config, sm *e
 	}
 
 	if c.EnableARP {
-		arpWG.Wait()
+		wg.Wait()
 	}
 
 	if c.EnableBGP {
@@ -302,7 +304,7 @@ func (cluster *Cluster) StartLoadBalancerService(ctx context.Context, c *kubevip
 	cluster.stop = make(chan bool, 1)
 	cluster.completed = make(chan bool, 1)
 
-	var arpWG sync.WaitGroup
+	var wg sync.WaitGroup
 
 	log.Debug("StartLoadBalancerService", "networks", len(cluster.Network))
 	for i := range cluster.Network {
@@ -310,19 +312,19 @@ func (cluster *Cluster) StartLoadBalancerService(ctx context.Context, c *kubevip
 
 		if network.IsDDNS() {
 			ddnsReady := make(chan struct{})
-			go func() {
+			wg.Go(func() {
 				ctxDDNS, ddnsCancel := context.WithCancel(ctx)
 				defer ddnsCancel()
 
 				// start the DDNS if requested
 				log.Debug("(svcs) start DDNS", "name", network.DNSName())
-				if err := cluster.StartDDNS(ctxDDNS, cluster.Network[i], c.DHCPBackoffAttempts); err != nil {
+				if err := cluster.StartDDNS(ctxDDNS, cluster.Network[i], c.DHCPBackoffAttempts, &wg); err != nil {
 					log.Error("failed to start DDNS", "err", err)
 				}
 
 				close(ddnsReady)
 				<-cluster.stop
-			}()
+			})
 			<-ddnsReady
 		}
 
@@ -355,8 +357,9 @@ func (cluster *Cluster) StartLoadBalancerService(ctx context.Context, c *kubevip
 		}
 
 		if c.EnableARP {
-			arpWG.Add(1)
-			go cluster.layer2Update(ctxArp, network, c, &arpWG)
+			wg.Go(func() {
+				cluster.layer2Update(ctxArp, network, c)
+			})
 		}
 
 		if c.EnableBGP && (c.EnableLeaderElection || c.EnableServicesElection) {
@@ -388,7 +391,7 @@ func (cluster *Cluster) StartLoadBalancerService(ctx context.Context, c *kubevip
 		// Stop the Arp context if it is running
 		cancelArp()
 
-		arpWG.Wait() // wait for all cluster ARP/NDP to be finished
+		wg.Wait() // wait for all cluster ARP/NDP to be finished
 
 		log.Info("[LOADBALANCER] Stopping load balancers", "name", name)
 
@@ -449,8 +452,7 @@ func (cluster *Cluster) StartLoadBalancerService(ctx context.Context, c *kubevip
 }
 
 // Layer2Update, handles the creation of the
-func (cluster *Cluster) layer2Update(ctx context.Context, network vip.Network, c *kubevip.Config, arpWG *sync.WaitGroup) {
-	defer arpWG.Done()
+func (cluster *Cluster) layer2Update(ctx context.Context, network vip.Network, c *kubevip.Config) {
 	var ndp *vip.NdpResponder
 	var err error
 	ipString := network.IP()
