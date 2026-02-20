@@ -52,13 +52,13 @@ func (cluster *Cluster) vipService(ctx context.Context, c *kubevip.Config, sm *e
 	var wg sync.WaitGroup
 	defer wg.Wait()
 
-	go func() {
+	wg.Go(func() {
 		<-ctx.Done()
 		signalChan <- syscall.SIGINT
 		if shouldClose {
 			defer close(cluster.completed)
 		}
-	}()
+	})
 
 	loadbalancers := []*loadbalancer.IPVSLoadBalancer{}
 
@@ -79,7 +79,9 @@ func (cluster *Cluster) vipService(ctx context.Context, c *kubevip.Config, sm *e
 		if network.IsDNS() {
 			log.Info("starting the DNS updater", "address", network.DNSName())
 			ipUpdater := vip.NewIPUpdater(network)
-			go ipUpdater.Run(ctx)
+			wg.Go(func() {
+				ipUpdater.Run(ctx)
+			})
 		}
 
 		if !c.EnableRoutingTable {
@@ -104,7 +106,7 @@ func (cluster *Cluster) vipService(ctx context.Context, c *kubevip.Config, sm *e
 				return fmt.Errorf("creating IPVS LoadBalance: %w", err)
 			}
 
-			go func() {
+			wg.Go(func() {
 				err = sm.NodeWatcher(ctx, lb, c.Port)
 				if err != nil {
 					log.Error("Error watching node labels", "err", err)
@@ -112,7 +114,7 @@ func (cluster *Cluster) vipService(ctx context.Context, c *kubevip.Config, sm *e
 						signalChan <- syscall.SIGINT
 					}
 				}
-			}()
+			})
 
 			loadbalancers = append(loadbalancers, lb)
 		}
@@ -184,10 +186,10 @@ func (cluster *Cluster) vipService(ctx context.Context, c *kubevip.Config, sm *e
 		stop := make(chan struct{})
 
 		// will wait for system interrupt and will send stop signal to backend watch
-		go func() {
+		wg.Go(func() {
 			<-signalChan
 			stop <- struct{}{}
-		}()
+		})
 
 		backend.Watch(func() {
 			for i := range cluster.Network {
@@ -259,10 +261,6 @@ func (cluster *Cluster) vipService(ctx context.Context, c *kubevip.Config, sm *e
 				}
 			}
 		}, c.BackendHealthCheckInterval, stop)
-	}
-
-	if c.EnableARP {
-		wg.Wait()
 	}
 
 	if c.EnableBGP {
@@ -383,7 +381,9 @@ func (cluster *Cluster) StartLoadBalancerService(ctx context.Context, c *kubevip
 			if network.IsDNS() {
 				log.Info("(svcs) starting the DNS updater", "address", network.DNSName(), "ip", network.IP())
 				ipUpdater := vip.NewIPUpdater(network)
-				go ipUpdater.Run(ctxDNS)
+				wg.Go(func() {
+					ipUpdater.Run(ctxDNS)
+				})
 			}
 		}
 

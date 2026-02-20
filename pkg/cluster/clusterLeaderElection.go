@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"sync"
 	"syscall"
 
 	"github.com/kube-vip/kube-vip/pkg/bgp"
@@ -31,14 +32,17 @@ func (cluster *Cluster) StartCluster(ctx context.Context, c *kubevip.Config,
 	objLease := leaseMgr.Add(ctx, leaseID)
 	isNew := objLease.Add(objectName)
 
+	wg := sync.WaitGroup{}
+	defer wg.Wait()
+
 	// Start a goroutine that will delete the lease when the service context is cancelled.
 	// This is important for proper cleanup when a service is deleted - it ensures that
 	// the lease context (svcLease.Ctx) gets cancelled, which causes RunOrDie to return.
 	// Without this, RunOrDie would continue running until leadership is naturally lost.
-	go func() {
+	wg.Go(func() {
 		<-objLease.Ctx.Done()
 		leaseMgr.Delete(leaseID, objectName)
-	}()
+	})
 
 	if !isNew {
 		log.Debug("this election was already done, waiting for it to finish", "lease", leaseName)
@@ -65,7 +69,7 @@ func (cluster *Cluster) StartCluster(ctx context.Context, c *kubevip.Config,
 		cluster.stop = make(chan bool, 1)
 	}
 
-	go func() {
+	wg.Go(func() {
 		select {
 		case <-signalChan:
 		case <-cluster.stop:
@@ -74,7 +78,7 @@ func (cluster *Cluster) StartCluster(ctx context.Context, c *kubevip.Config,
 		log.Info("Received termination, signaling cluster shutdown")
 		// Cancel the leader context, which will in turn cancel the leadership
 		objLease.Cancel()
-	}()
+	})
 
 	// (attempt to) Remove the virtual IP, in case it already exists
 
