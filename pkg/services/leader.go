@@ -3,6 +3,7 @@ package services
 import (
 	"context"
 	"fmt"
+	"sync"
 
 	log "log/slog"
 
@@ -36,7 +37,7 @@ func (p *Processor) StartServicesWatchForLeaderElection(ctx context.Context) err
 }
 
 // The startServicesWatchForLeaderElection function will start a services watcher, the
-func (p *Processor) StartServicesLeaderElection(svcCtx *servicecontext.Context, service *v1.Service) error {
+func (p *Processor) StartServicesLeaderElection(svcCtx *servicecontext.Context, service *v1.Service, _ *sync.WaitGroup) error {
 	if svcCtx == nil {
 		return fmt.Errorf("no context context for service %q with UID %q: nil context", service.Name, service.UID)
 	}
@@ -79,6 +80,9 @@ func (p *Processor) StartServicesLeaderElection(svcCtx *servicecontext.Context, 
 		p.leaseMgr.Delete(id, objectName)
 	}()
 
+	wg := sync.WaitGroup{}
+	defer wg.Wait()
+
 	// this service is sharing lease with another service
 	if svcLease.Elected.Load() {
 		svcLease.Unlock()
@@ -95,7 +99,7 @@ func (p *Processor) StartServicesLeaderElection(svcCtx *servicecontext.Context, 
 
 		// Common lease handling: sync the service and wait for context cancellation
 		if !svcCtx.IsActive {
-			if err := p.SyncServices(svcCtx, service); err != nil {
+			if err := p.SyncServices(svcCtx, service, &wg); err != nil {
 				log.Error("service sync", "err", err, "uid", service.UID)
 				svcLease.Cancel()
 			}
@@ -148,7 +152,7 @@ func (p *Processor) StartServicesLeaderElection(svcCtx *servicecontext.Context, 
 			// Mark this service as active (as we've started leading)
 			// we run this in background as it's blocking
 			svcCtx.IsActive = true
-			if err := p.SyncServices(svcCtx, service); err != nil {
+			if err := p.SyncServices(svcCtx, service, &wg); err != nil {
 				log.Error("service sync", "uid", service.UID, "err", err)
 				svcLease.Cancel()
 			}

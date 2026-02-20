@@ -6,6 +6,7 @@ import (
 	"net"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	log "log/slog"
@@ -41,7 +42,7 @@ const (
 	defaultUPNPLeaseDuration = 1 * time.Hour
 )
 
-func (p *Processor) SyncServices(ctx *servicecontext.Context, svc *v1.Service) error {
+func (p *Processor) SyncServices(ctx *servicecontext.Context, svc *v1.Service, wg *sync.WaitGroup) error {
 	log.Debug("[STARTING] Service Sync", "namespace", svc.Namespace, "name", svc.Name, "uid", svc.UID)
 
 	// Iterate through the synchronising services
@@ -60,7 +61,7 @@ func (p *Processor) SyncServices(ctx *servicecontext.Context, svc *v1.Service) e
 		}
 	case ActionAdd:
 		log.Debug("[service] add", "namespace", svc.Namespace, "name", svc.Name, "uid", svc.UID)
-		if err := p.addService(ctx.Ctx, svc); err != nil {
+		if err := p.addService(ctx.Ctx, svc, wg); err != nil {
 			return fmt.Errorf("error adding service %s/%s: %w", svc.Namespace, svc.Name, err)
 		}
 
@@ -149,7 +150,7 @@ func comparePortsAndPortStatuses(svc *v1.Service) bool {
 	return true
 }
 
-func (p *Processor) addService(ctx context.Context, svc *v1.Service) error {
+func (p *Processor) addService(ctx context.Context, svc *v1.Service, wg *sync.WaitGroup) error {
 	// protect against addService while reading
 	p.mutex.Lock()
 	defer p.mutex.Unlock()
@@ -163,7 +164,7 @@ func (p *Processor) addService(ctx context.Context, svc *v1.Service) error {
 
 	for x := range newService.VIPConfigs {
 		log.Debug("starting loadbalancer for service", "name", svc.Name, "namespace", svc.Namespace, "uid", svc.UID)
-		if err := newService.Clusters[x].StartLoadBalancerService(ctx, newService.VIPConfigs[x], p.bgpServer, svc.Name, p.CountRouteReferences); err != nil {
+		if err := newService.Clusters[x].StartLoadBalancerService(ctx, newService.VIPConfigs[x], p.bgpServer, svc.Name, p.CountRouteReferences, wg); err != nil {
 			return fmt.Errorf("failed to start lb: %w", err)
 		}
 	}
