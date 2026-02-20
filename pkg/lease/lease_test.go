@@ -228,10 +228,18 @@ func TestManager_ConcurrentAccess(t *testing.T) {
 	ctx1, leaseID1 := getSvcData(svc)
 	lease1 := mgr.Add(ctx1, leaseID1)
 
+	added := lease1.Add(objectName1)
+	if !added {
+		t.Error("expected lease to be added")
+	}
+
 	// Concurrent adds
 	for range numGoroutines {
 		wg.Go(func() {
-			lease1.Add(objectName1)
+			added := lease1.Add(objectName1)
+			if added {
+				t.Error("expected lease to already exist")
+			}
 		})
 	}
 	wg.Wait()
