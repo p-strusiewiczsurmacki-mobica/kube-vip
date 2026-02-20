@@ -157,7 +157,7 @@ func (p *Processor) addService(ctx context.Context, svc *v1.Service, wg *sync.Wa
 
 	startTime := time.Now()
 
-	newService, err := instance.NewInstance(ctx, svc, p.config, p.intfMgr, p.arpMgr)
+	newService, err := instance.NewInstance(ctx, svc, p.config, p.intfMgr, p.arpMgr, wg)
 	if err != nil {
 		return err
 	}
