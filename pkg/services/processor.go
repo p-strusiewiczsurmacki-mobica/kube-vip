@@ -68,7 +68,7 @@ type labelManager interface {
 func NewServicesProcessor(config *kubevip.Config, bgpServer *bgp.Server,
 	clientSet *kubernetes.Clientset, rwClientSet *kubernetes.Clientset, shutdownChan chan struct{},
 	intfMgr *networkinterface.Manager, arpMgr *arp.Manager, nodeLabelManager labelManager,
-	electionMgr *election.Manager) *Processor {
+	electionMgr *election.Manager, leaseMgr *lease.Manager) *Processor {
 	lbClassFilterFunc := lbClassFilter
 	if config.LoadBalancerClassLegacyHandling {
 		lbClassFilterFunc = lbClassFilterLegacy
@@ -91,13 +91,13 @@ func NewServicesProcessor(config *kubevip.Config, bgpServer *bgp.Server,
 
 		intfMgr:          intfMgr,
 		arpMgr:           arpMgr,
-		leaseMgr:         lease.NewManager(),
+		leaseMgr:         leaseMgr,
 		nodeLabelManager: nodeLabelManager,
 		electionMgr:      electionMgr,
 	}
 }
 
-func (p *Processor) AddOrModify(ctx context.Context, event watch.Event, serviceFunc func(*servicecontext.Context, *v1.Service) error) (bool, error) {
+func (p *Processor) AddOrModify(ctx context.Context, event watch.Event, serviceFunc func(*servicecontext.Context, *v1.Service, *sync.WaitGroup) error, wg *sync.WaitGroup) (bool, error) {
 	// log.Debugf("Endpoints for service [%s] have been Created or modified", s.service.ServiceName)
 	svc, ok := event.Object.(*v1.Service)
 	if !ok {
@@ -201,7 +201,10 @@ func (p *Processor) AddOrModify(ctx context.Context, event watch.Event, serviceF
 		log.Debug("(svcs) has been added/modified with addresses", "service name", svc.Name, "ips", ips, "hostnames", hostnames)
 
 		if svcCtx == nil {
-			svcCtx = servicecontext.New(ctx)
+			ns, name := lease.ServiceName(svc)
+			leaseID := lease.NewID(p.config.LeaderElectionType, ns, name)
+			lease := p.leaseMgr.Add(ctx, leaseID)
+			svcCtx = servicecontext.New(lease.Ctx)
 			p.svcMap.Store(svc.UID, svcCtx)
 		}
 
@@ -216,7 +219,7 @@ func (p *Processor) AddOrModify(ctx context.Context, event watch.Event, serviceF
 				if !svcCtx.IsWatched {
 					// background the endpoint watcher
 					if (p.config.EnableRoutingTable || p.config.EnableBGP) && (!p.config.EnableLeaderElection && !p.config.EnableServicesElection) {
-						err = serviceFunc(svcCtx, svc)
+						err = serviceFunc(svcCtx, svc, wg)
 						if err != nil {
 							log.Error(err.Error())
 							if errors.Is(err, &utils.PanicError{}) {
@@ -250,7 +253,7 @@ func (p *Processor) AddOrModify(ctx context.Context, event watch.Event, serviceF
 					svcCtx.IsWatched = true
 				}
 			} else if (p.config.EnableBGP || p.config.EnableRoutingTable) && (!p.config.EnableLeaderElection && !p.config.EnableServicesElection) {
-				err = serviceFunc(svcCtx, svc)
+				err = serviceFunc(svcCtx, svc, wg)
 				if err != nil {
 					log.Error(err.Error())
 					if errors.Is(err, &utils.PanicError{}) {
@@ -290,7 +293,7 @@ func (p *Processor) AddOrModify(ctx context.Context, event watch.Event, serviceF
 						default:
 							if !svcCtx.IsActive {
 								log.Info("(svcs) restartable service watcher starting", "uid", svc.UID)
-								err = serviceFunc(svcCtx, svc)
+								err = serviceFunc(svcCtx, svc, wg)
 								if err != nil {
 									log.Error(err.Error())
 									if errors.Is(err, &utils.PanicError{}) {
@@ -305,7 +308,7 @@ func (p *Processor) AddOrModify(ctx context.Context, event watch.Event, serviceF
 			}
 		} else {
 			// Increment the waitGroup before the service Func is called (Done is completed in there)
-			err = serviceFunc(svcCtx, svc)
+			err = serviceFunc(svcCtx, svc, wg)
 			if err != nil {
 				log.Error(err.Error())
 				if errors.Is(err, &utils.PanicError{}) {
