@@ -82,8 +82,13 @@ func (p *Processor) getServiceInstanceAction(svc *v1.Service) ServiceInstanceAct
 	addresses, hostnames := instance.FetchServiceAddresses(svc)
 	// get the status information of the LB Service
 	statusAddresses, _ := instance.FetchLoadBalancerIngress(svc)
+	log.Debug("LOCK getServiceInstanceAction", "service", svc.Name)
 	p.mutex.Lock()
-	defer p.mutex.Unlock()
+	log.Debug("LOCKED getServiceInstanceAction", "service", svc.Name)
+	defer func() {
+		log.Debug("UNLOCK getServiceInstanceAction", "service", svc.Name)
+		p.mutex.Unlock()
+	}()
 
 	for _, instance := range p.ServiceInstances {
 		if instance != nil && instance.ServiceSnapshot.UID == svc.UID {
@@ -152,15 +157,37 @@ func comparePortsAndPortStatuses(svc *v1.Service) bool {
 
 func (p *Processor) addService(ctx context.Context, svc *v1.Service, wg *sync.WaitGroup) error {
 	// protect against addService while reading
+	log.Debug("LOCK addService", "service", svc.Name)
 	p.mutex.Lock()
-	defer p.mutex.Unlock()
+	log.Debug("LOCKED addService", "service", svc.Name)
+	defer func() {
+		log.Debug("UNLOCK addService", "service", svc.Name)
+		p.mutex.Unlock()
+	}()
 
 	startTime := time.Now()
+
+	log.Debug("1")
 
 	newService, err := instance.NewInstance(ctx, svc, p.config, p.intfMgr, p.arpMgr, wg)
 	if err != nil {
 		return err
 	}
+
+	p.ServiceInstances = append(p.ServiceInstances, newService)
+
+	if svc.Spec.ExternalTrafficPolicy == v1.ServiceExternalTrafficPolicyCluster {
+		for _, c := range newService.Clusters {
+			for _, n := range c.Network {
+				n.SetHasEndpoints(true)
+				newService.CloseEndpointsReady()
+			}
+		}
+	}
+
+	<-newService.EndpointsReady
+
+	log.Debug("2")
 
 	for x := range newService.VIPConfigs {
 		log.Debug("starting loadbalancer for service", "name", svc.Name, "namespace", svc.Namespace, "uid", svc.UID)
@@ -168,6 +195,8 @@ func (p *Processor) addService(ctx context.Context, svc *v1.Service, wg *sync.Wa
 			return fmt.Errorf("failed to start lb: %w", err)
 		}
 	}
+
+	log.Debug("3")
 
 	p.upnpMap(ctx, newService)
 
@@ -200,6 +229,8 @@ func (p *Processor) addService(ctx context.Context, svc *v1.Service, wg *sync.Wa
 		})
 	}
 
+	log.Debug("4")
+
 	if newService.IsDHCPv6 {
 		wg.Go(func() {
 			index := -1
@@ -228,7 +259,7 @@ func (p *Processor) addService(ctx context.Context, svc *v1.Service, wg *sync.Wa
 		})
 	}
 
-	p.ServiceInstances = append(p.ServiceInstances, newService)
+	log.Debug("5")
 
 	if !p.config.DisableServiceUpdates {
 		log.Debug("[service] update", "namespace", newService.ServiceSnapshot.Namespace, "name", newService.ServiceSnapshot.Name)
@@ -236,6 +267,8 @@ func (p *Processor) addService(ctx context.Context, svc *v1.Service, wg *sync.Wa
 			log.Error("[service] updating status", "namespace", newService.ServiceSnapshot.Namespace, "name", newService.ServiceSnapshot.Name, "err", err)
 		}
 	}
+
+	log.Debug("6")
 
 	serviceIPs, _ := instance.FetchServiceAddresses(svc)
 	// Check if we need to flush any conntrack connections (due to some dangling conntrack connections)
@@ -253,6 +286,8 @@ func (p *Processor) addService(ctx context.Context, svc *v1.Service, wg *sync.Wa
 			}
 		}
 	}
+
+	log.Debug("7")
 
 	// Check if egress is enabled on the service, if so we'll need to configure some rules
 	if svc.Annotations[kubevip.Egress] == "true" && len(serviceIPs) > 0 {
@@ -335,8 +370,13 @@ func (p *Processor) addService(ctx context.Context, svc *v1.Service, wg *sync.Wa
 
 func (p *Processor) deleteService(ctx context.Context, uid types.UID) error {
 	// protect multiple calls
+	log.Debug("LOCK deleteService", "service", uid)
 	p.mutex.Lock()
-	defer p.mutex.Unlock()
+	log.Debug("LOCKED deleteService", "service", uid)
+	defer func() {
+		log.Debug("UNLOCK deleteService", "service", uid)
+		p.mutex.Unlock()
+	}()
 
 	var updatedInstances []*instance.Instance
 	var serviceInstance *instance.Instance
@@ -383,9 +423,6 @@ func (p *Processor) deleteService(ctx context.Context, uid types.UID) error {
 		}
 	}
 	if !shared {
-		for x := range serviceInstance.Clusters {
-			serviceInstance.Clusters[x].Stop()
-		}
 		if serviceInstance.IsDHCPv4 || serviceInstance.IsDHCPv6 {
 			if serviceInstance.IsDHCPv4 {
 				serviceInstance.DHCPv4Client.Stop()
@@ -407,7 +444,7 @@ func (p *Processor) deleteService(ctx context.Context, uid types.UID) error {
 		}
 
 		if p.config.EnableBGP {
-			endpoints.ClearBGPHostsByInstance(ctx, serviceInstance, p.bgpServer)
+			endpoints.ClearBGPHostsByInstance(ctx, serviceInstance, &p.ServiceInstances, p.bgpServer)
 		}
 		if p.config.EnableRoutingTable && (p.config.EnableLeaderElection || p.config.EnableServicesElection) {
 			if errs := endpoints.ClearRoutesByInstance(serviceInstance.ServiceSnapshot, serviceInstance, &p.ServiceInstances); len(errs) > 0 {

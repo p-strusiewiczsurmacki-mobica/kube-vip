@@ -42,20 +42,27 @@ func NewEndpointProcessor(config *kubevip.Config, provider providers.Provider, b
 func (p *Processor) AddOrModify(svcCtx *servicecontext.Context, event watch.Event,
 	lastKnownGoodEndpoint *string, service *v1.Service, id string,
 	serviceFunc func(*servicecontext.Context, *v1.Service, *sync.WaitGroup) error, wg *sync.WaitGroup) (bool, error) {
+	log.Debug("epProcessor AddOrModify", "event", event.Type, "svc", service.Name)
 
 	var err error
 	if err = p.provider.LoadObject(event.Object, svcCtx.Cancel); err != nil {
 		return false, fmt.Errorf("[%s] error loading k8s object: %w", p.provider.GetLabel(), err)
 	}
 
+	log.Debug("AddOrModify - getting endpoints", "event", event.Type, "svc", service.Name)
 	endpoints, err := p.worker.getEndpoints(service, id)
 	if err != nil {
 		return false, err
 	}
 
-	if err := p.worker.setInstanceEndpointsStatus(service, endpoints); err != nil {
-		log.Error("updating instance", "err", err)
-	}
+	log.Debug("AddOrModify - setting instance endpoint status", "event", event.Type, "svc", service.Name)
+	pwg := sync.WaitGroup{}
+	defer pwg.Wait()
+	pwg.Go(func() {
+		if err := p.worker.setInstanceEndpointsStatus(service, endpoints); err != nil {
+			log.Error("updating instance", "err", err)
+		}
+	})
 
 	// Find out if we have any local endpoints
 	// if out endpoint is empty then populate it
@@ -75,6 +82,7 @@ func (p *Processor) AddOrModify(svcCtx *servicecontext.Context, event watch.Even
 		// start leader election if it's enabled and not already started
 		if !svcCtx.IsActive && p.config.EnableServicesElection {
 			wg.Go(func() {
+				log.Debug("STARTING LEADERELECTION in EP Processor", "service", service.Name)
 				startLeaderElection(svcCtx, service, serviceFunc, wg)
 			})
 		}

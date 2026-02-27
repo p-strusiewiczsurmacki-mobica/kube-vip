@@ -1,8 +1,6 @@
 package cluster
 
 import (
-	"sync"
-
 	log "log/slog"
 
 	"github.com/kube-vip/kube-vip/pkg/arp"
@@ -13,11 +11,8 @@ import (
 
 // Cluster - The Cluster object manages the state of the cluster for a particular node
 type Cluster struct {
-	stop      chan bool
-	completed chan bool
-	once      sync.Once
-	Network   []vip.Network
-	arpMgr    *arp.Manager
+	Network []vip.Network
+	arpMgr  *arp.Manager
 }
 
 // InitCluster - Will attempt to initialise all of the required settings for the cluster
@@ -34,10 +29,8 @@ func InitCluster(c *kubevip.Config, disableVIP bool, intfMgr *networkinterface.M
 	}
 	// Initialise the Cluster structure
 	newCluster := &Cluster{
-		Network:   networks,
-		arpMgr:    arpMgr,
-		completed: make(chan bool),
-		stop:      make(chan bool),
+		Network: networks,
+		arpMgr:  arpMgr,
 	}
 
 	log.Debug("service security", "enabled", c.EnableServiceSecurity)
@@ -69,14 +62,14 @@ func startNetworking(c *kubevip.Config, intfMgr *networkinterface.Manager) ([]vi
 }
 
 // Stop - Will stop the Cluster and release VIP if needed
-func (cluster *Cluster) Stop() {
-	// Close the stop channel, which will shut down the VIP (if needed)
-	if cluster.stop != nil {
-		cluster.once.Do(func() { // Ensure that the close channel can only ever be called once
-			close(cluster.stop)
-		})
-	}
+// func (cluster *Cluster) Stop() {
+// 	// Close the stop channel, which will shut down the VIP (if needed)
+// 	if cluster.stop != nil {
+// 		cluster.once.Do(func() { // Ensure that the close channel can only ever be called once
+// 			close(cluster.stop)
+// 		})
+// 	}
 
-	// Wait until the completed channel is closed, signallign all shutdown tasks completed
-	<-cluster.completed
-}
+// 	// Wait until the completed channel is closed, signalling all shutdown tasks completed
+// 	<-cluster.completed
+// }

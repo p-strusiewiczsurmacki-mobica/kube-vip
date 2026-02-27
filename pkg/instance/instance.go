@@ -51,6 +51,9 @@ type Instance struct {
 	ServiceSnapshot *v1.Service
 
 	dnsAddresses []string
+
+	EndpointsReady chan struct{}
+	epConfigured   sync.Once
 }
 
 type Port struct {
@@ -60,7 +63,7 @@ type Port struct {
 
 func NewInstance(ctx context.Context, svc *v1.Service, config *kubevip.Config, intfMgr *networkinterface.Manager, arpMgr *arp.Manager, wg *sync.WaitGroup) (*Instance, error) {
 	instanceAddresses, instanceHostnames := FetchServiceAddresses(svc)
-	log.Info("NewInstance used", "instanceAddresses", instanceAddresses, "instanceHostnames", instanceHostnames)
+	log.Info("NewInstance used", "instanceAddresses", instanceAddresses, "instanceHostnames", instanceHostnames, "service", svc.Name)
 
 	var newVips []*kubevip.Config
 	var link netlink.Link
@@ -238,6 +241,7 @@ func NewInstance(ctx context.Context, svc *v1.Service, config *kubevip.Config, i
 	instance := &Instance{
 		ServiceSnapshot: svc,
 		dnsAddresses:    dnsAddresses,
+		EndpointsReady:  make(chan struct{}),
 	}
 
 	if svc.Annotations != nil {
@@ -641,7 +645,7 @@ func FindServiceInstance(svc *v1.Service, instances []*Instance) *Instance {
 	return nil
 }
 
-func FindServiceInstanceWithTimeout(svc *v1.Service, instances []*Instance) *Instance {
+func FindServiceInstanceWithTimeout(svc *v1.Service, instances *[]*Instance) *Instance {
 	log.Debug("finding service with timeout", "namespace", svc.Namespace, "name", svc.Name, "UID", svc.UID)
 	ticker := time.NewTicker(time.Millisecond * 200)
 	defer ticker.Stop()
@@ -652,11 +656,17 @@ func FindServiceInstanceWithTimeout(svc *v1.Service, instances []*Instance) *Ins
 		case <-to.C:
 			return nil
 		case <-ticker.C:
-			for i := range instances {
-				if instances[i].ServiceSnapshot.UID == svc.UID {
-					return instances[i]
+			for i := range *instances {
+				if (*instances)[i].ServiceSnapshot.UID == svc.UID {
+					return (*instances)[i]
 				}
 			}
 		}
 	}
+}
+
+func (i *Instance) CloseEndpointsReady() {
+	i.epConfigured.Do(func() {
+		close(i.EndpointsReady)
+	})
 }

@@ -8,7 +8,6 @@ import (
 	"os/signal"
 	"path/filepath"
 	"sync"
-	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -16,7 +15,6 @@ import (
 
 	"github.com/kube-vip/kube-vip/pkg/arp"
 	"github.com/kube-vip/kube-vip/pkg/bgp"
-	"github.com/kube-vip/kube-vip/pkg/cluster"
 	"github.com/kube-vip/kube-vip/pkg/election"
 	"github.com/kube-vip/kube-vip/pkg/k8s"
 	"github.com/kube-vip/kube-vip/pkg/kubevip"
@@ -48,8 +46,7 @@ type Manager struct {
 	// This channel is used to catch an OS signal and trigger a shutdown
 	signalChan chan os.Signal
 
-	// This channel is used to signal a shutdown
-	shutdownChan chan struct{}
+	sigint sync.Once
 
 	svcProcessor *services.Processor
 
@@ -74,9 +71,6 @@ type Manager struct {
 	// implementation will be decided in constructor
 	// based on config.EnableNodeLabeling
 	nodeLabelManager node.LabelManager
-
-	// This variable reports if manager is being closed
-	closing atomic.Bool
 
 	// Will be used for leaderelection when required
 	electionMgr *election.Manager
@@ -198,8 +192,8 @@ func New(configMap string, config *kubevip.Config) (*Manager, error) {
 	// Add Notification for SIGTERM (sent from Kubernetes)
 	signal.Notify(signalChan, syscall.SIGTERM)
 
-	// All watchers and other goroutines should have an additional goroutine that blocks on this, to shut things down
-	shutdownChan := make(chan struct{})
+	// Add Notification for SIGUSR1 (for configuration dump)
+	signal.Notify(signalChan, syscall.SIGUSR1)
 
 	intfMgr := networkinterface.NewManager()
 	arpMgr := arp.NewManager(config)
@@ -216,7 +210,7 @@ func New(configMap string, config *kubevip.Config) (*Manager, error) {
 		}
 	}
 
-	electionMgr, err := election.NewManager(config, clientset, rwClientSet, signalChan)
+	electionMgr, err := election.NewManager(config, clientset, rwClientSet)
 	if err != nil {
 		return nil, fmt.Errorf("creating election manager: %w", err)
 	}
@@ -224,7 +218,7 @@ func New(configMap string, config *kubevip.Config) (*Manager, error) {
 	leaseMgr := lease.NewManager()
 
 	svcProcessor := services.NewServicesProcessor(config, bgpServer, clientset, rwClientSet,
-		shutdownChan, intfMgr, arpMgr, nodeLabelManager, electionMgr, leaseMgr)
+		intfMgr, arpMgr, nodeLabelManager, electionMgr, leaseMgr)
 
 	return &Manager{
 		clientSet:   clientset,
@@ -244,7 +238,6 @@ func New(configMap string, config *kubevip.Config) (*Manager, error) {
 			Help:      "Display state of session by setting metric for label value with current state to 1",
 		}, []string{"state", "peer"}),
 		signalChan:       signalChan,
-		shutdownChan:     shutdownChan,
 		svcProcessor:     svcProcessor,
 		intfMgr:          intfMgr,
 		arpMgr:           arpMgr,
@@ -257,22 +250,6 @@ func New(configMap string, config *kubevip.Config) (*Manager, error) {
 
 // Start will begin the Manager, which will start services and watch the configmap
 func (sm *Manager) Start(ctx context.Context) error {
-	// listen for interrupts or the Linux SIGTERM signal and cancel
-	// our context, which the leader election code will observe and
-	// step down
-	sm.signalChan = make(chan os.Signal, 1)
-	// Add Notification for Userland interrupt
-	signal.Notify(sm.signalChan, syscall.SIGINT)
-
-	// Add Notification for SIGTERM (sent from Kubernetes)
-	signal.Notify(sm.signalChan, syscall.SIGTERM)
-
-	// Add Notification for SIGUSR1 (for configuration dump)
-	signal.Notify(sm.signalChan, syscall.SIGUSR1)
-
-	// All watchers and other goroutines should have an additional goroutine that blocks on this, to shut things down
-	sm.shutdownChan = make(chan struct{})
-
 	wg := sync.WaitGroup{}
 	defer wg.Wait()
 
@@ -340,8 +317,12 @@ func (sm *Manager) Start(ctx context.Context) error {
 
 // Start will begin the Manager, which will start services and watch the configmap
 func (sm *Manager) startMode(ctx context.Context) error {
-	var cpCluster *cluster.Cluster
 	var err error
+
+	// use a Go context so we can tell the leaderelection code when we
+	// want to step down
+	modeCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
 
 	wg := sync.WaitGroup{}
 	defer func() {
@@ -349,12 +330,7 @@ func (sm *Manager) startMode(ctx context.Context) error {
 		log.Info("Shutting down Kube-Vip")
 	}()
 
-	// use a Go context so we can tell the leaderelection code when we
-	// want to step down
-	modeCtx, cancel := context.WithCancel(ctx)
-	defer cancel()
-
-	w := worker.New(sm.arpMgr, sm.intfMgr, sm.config, &sm.closing, sm.signalChan,
+	w := worker.New(sm.arpMgr, sm.intfMgr, sm.config, sm.Kill,
 		sm.svcProcessor, &sm.mutex, sm.clientSet, sm.bgpServer, sm.bgpSessionInfoGauge,
 		sm.electionMgr, sm.leaseMgr)
 
@@ -373,7 +349,7 @@ func (sm *Manager) startMode(ctx context.Context) error {
 
 	// Shutdown function that will wait on this signal, unless we call it ourselves
 	wg.Go(func() {
-		sm.waitForShutdown(modeCtx, cancel, cpCluster)
+		sm.waitForShutdown(modeCtx, cancel)
 	})
 
 	if sm.config.EnableControlPlane {
@@ -389,8 +365,6 @@ func (sm *Manager) startMode(ctx context.Context) error {
 			return fmt.Errorf("failed to start services: %w", err)
 		}
 	}
-
-	<-sm.shutdownChan
 
 	return nil
 }
@@ -408,8 +382,7 @@ func (sm *Manager) parseAnnotations(ctx context.Context) error {
 	return nil
 }
 
-func (sm *Manager) waitForShutdown(ctx context.Context, cancel context.CancelFunc, cpCluster *cluster.Cluster) {
-	defer close(sm.shutdownChan)
+func (sm *Manager) waitForShutdown(ctx context.Context, cancel context.CancelFunc) {
 	for {
 		sig := <-sm.signalChan
 		switch sig {
@@ -417,14 +390,16 @@ func (sm *Manager) waitForShutdown(ctx context.Context, cancel context.CancelFun
 			log.Info("Received SIGUSR1, dumping configuration")
 			sm.dumpConfiguration(ctx)
 		case syscall.SIGINT, syscall.SIGTERM:
-			sm.closing.Store(true)
 			log.Info("Received kube-vip termination, signaling shutdown")
-			if cpCluster != nil {
-				cpCluster.Stop()
-			}
 			// Cancel the context, which will in turn cancel the leadership and all goroutines
 			cancel()
 			return
 		}
 	}
+}
+
+func (sm *Manager) Kill() {
+	sm.sigint.Do(func() {
+		sm.signalChan <- syscall.SIGINT
+	})
 }

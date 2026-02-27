@@ -103,11 +103,11 @@ func (b *BGP) setInstanceEndpointsStatus(_ *v1.Service, _ []string) error {
 
 func ClearBGPHosts(ctx context.Context, service *v1.Service, instances *[]*instance.Instance, bgpServer *bgp.Server) {
 	if instance := instance.FindServiceInstance(service, *instances); instance != nil {
-		ClearBGPHostsByInstance(ctx, instance, bgpServer)
+		ClearBGPHostsByInstance(ctx, instance, instances, bgpServer)
 	}
 }
 
-func ClearBGPHostsByInstance(ctx context.Context, instance *instance.Instance, bgpServer *bgp.Server) {
+func ClearBGPHostsByInstance(ctx context.Context, instance *instance.Instance, instances *[]*instance.Instance, bgpServer *bgp.Server) {
 	if instance == nil {
 		log.Error("failed to clear BGP host for nil instance")
 		return
@@ -115,13 +115,29 @@ func ClearBGPHostsByInstance(ctx context.Context, instance *instance.Instance, b
 	for _, cluster := range instance.Clusters {
 		for i := range cluster.Network {
 			network := cluster.Network[i]
-			err := bgpServer.DelHost(ctx, network.CIDR())
-			if err != nil {
-				log.Error("[endpoint] error deleting BGP host", "err", err)
-			} else {
-				log.Debug("[endpoint] deleted BGP host", "ip",
-					network.CIDR(), "service name", instance.ServiceSnapshot.Name, "namespace", instance.ServiceSnapshot.Namespace)
+			if CountHostReferences(network.CIDR(), instances) <= 1 {
+				err := bgpServer.DelHost(ctx, network.CIDR())
+				if err != nil {
+					log.Error("[endpoint] error deleting BGP host", "err", err)
+				} else {
+					log.Debug("[endpoint] deleted BGP host", "ip",
+						network.CIDR(), "service name", instance.ServiceSnapshot.Name, "namespace", instance.ServiceSnapshot.Namespace)
+				}
 			}
 		}
 	}
+}
+
+func CountHostReferences(cidr string, instances *[]*instance.Instance) int {
+	cnt := 0
+	for _, instance := range *instances {
+		for _, cluster := range instance.Clusters {
+			for n := range cluster.Network {
+				if cluster.Network[n].HasEndpoints() && cluster.Network[n].CIDR() == cidr {
+					cnt++
+				}
+			}
+		}
+	}
+	return cnt
 }

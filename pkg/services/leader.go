@@ -58,9 +58,11 @@ func (p *Processor) StartServicesLeaderElection(svcCtx *servicecontext.Context, 
 		// Wait for either the service context or lease context to be done
 		select {
 		case <-svcCtx.Ctx.Done():
+			log.Debug("SVC CTSX DONE in not new")
 			// Service was deleted
 			p.leaseMgr.Delete(id, objectName)
 		case <-svcLease.Ctx.Done():
+			log.Debug("LEASE CTSX DONE in not new")
 			// Leader election ended (leadership lost or context cancelled)
 		}
 		return nil
@@ -81,6 +83,7 @@ func (p *Processor) StartServicesLeaderElection(svcCtx *servicecontext.Context, 
 	// Without this, RunOrDie would continue running until leadership is naturally lost.
 	wg.Go(func() {
 		<-svcCtx.Ctx.Done()
+		log.Debug("SVC CTSX DONE")
 		p.leaseMgr.Delete(id, objectName)
 	})
 
@@ -135,6 +138,7 @@ func (p *Processor) StartServicesLeaderElection(svcCtx *servicecontext.Context, 
 		// 1. Leadership loss (e.g., network timeout)
 		// 2. Context cancellation
 		// 3. Any other reason RunOrDie returns
+		log.Debug("DELETING LEASE 1")
 		p.leaseMgr.Delete(id, objectName)
 	}()
 
@@ -170,6 +174,7 @@ func (p *Processor) StartServicesLeaderElection(svcCtx *servicecontext.Context, 
 			}
 			// Mark this service is inactive
 			svcCtx.IsActive = false
+			log.Debug("CANCEL LEASE", "service", service.Name)
 			svcLease.Cancel()
 		},
 		OnNewLeader: func(identity string) {
