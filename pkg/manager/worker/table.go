@@ -4,10 +4,8 @@ import (
 	"context"
 	"fmt"
 	log "log/slog"
-	"os"
 	"sync"
 	"sync/atomic"
-	"syscall"
 	"time"
 
 	"github.com/kube-vip/kube-vip/pkg/arp"
@@ -28,26 +26,26 @@ type Table struct {
 }
 
 func NewTable(arpMgr *arp.Manager, intfMgr *networkinterface.Manager,
-	config *kubevip.Config, closing *atomic.Bool, signalChan chan os.Signal,
+	config *kubevip.Config, closing *atomic.Bool, killFUnc func(),
 	svcProcessor *services.Processor, mutex *sync.Mutex, clientSet *kubernetes.Clientset,
 	electionMgr *election.Manager, leaseMgr *lease.Manager) *Table {
 	return &Table{
-		Common: *newCommon(arpMgr, intfMgr, config, closing, signalChan,
+		Common: *newCommon(arpMgr, intfMgr, config, closing, killFUnc,
 			svcProcessor, mutex, clientSet, electionMgr, leaseMgr),
 	}
 }
 
-func (t *Table) Configure(ctx context.Context) error {
+func (t *Table) Configure(ctx context.Context, wg *sync.WaitGroup) error {
 	log.Info("destination for routes", "table", t.config.RoutingTableID, "protocol", t.config.RoutingProtocol)
 
 	if t.config.CleanRoutingTable {
-		go func() {
+		wg.Go(func() {
 			// we assume that after 10s all services should be configured so we can delete redundant routes
 			time.Sleep(time.Second * 10)
 			if err := t.cleanRoutes(); err != nil {
 				log.Error("error checking for old routes", "err", err)
 			}
-		}()
+		})
 	}
 
 	if t.config.EgressClean {
@@ -60,12 +58,10 @@ func (t *Table) Configure(ctx context.Context) error {
 }
 
 func (t *Table) StartControlPlane(ctx context.Context, electionManager *election.Manager) {
-	if err := t.cpCluster.StartVipService(ctx, t.config, electionManager, nil); err != nil {
+	if err := t.cpCluster.StartVipService(ctx, t.config, electionManager, nil, t.killFunc); err != nil {
 		log.Error("Control Plane", "err", err)
 		// Trigger the shutdown of this manager instance
-		if !t.closing.Load() {
-			t.signalChan <- syscall.SIGINT
-		}
+		t.killFunc()
 	} else {
 		log.Debug("start VipServer for cluster manager successful")
 	}

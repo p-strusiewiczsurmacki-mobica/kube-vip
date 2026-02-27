@@ -54,12 +54,13 @@ type IPVSLoadBalancer struct {
 	stop                chan struct{}
 	networkInterface    string
 	leaderCancel        context.CancelFunc
-	signal              chan os.Signal
+	killFunc            func()
 	address             string
 	family              ipvs.AddressFamily
 }
 
-func NewIPVSLB(address string, port uint16, forwardingMethod string, backendHealthCheckInterval int, networkInterface string, leaderCancel context.CancelFunc, signal chan os.Signal) (*IPVSLoadBalancer, error) {
+func NewIPVSLB(address string, port uint16, forwardingMethod string, backendHealthCheckInterval int, networkInterface string,
+	leaderCancel context.CancelFunc, killFunc func(), wg *sync.WaitGroup) (*IPVSLoadBalancer, error) {
 	log.Info("Starting IPVS LoadBalancer", "address", address)
 
 	// Create IPVS client
@@ -143,12 +144,14 @@ func NewIPVSLB(address string, port uint16, forwardingMethod string, backendHeal
 		stop:                make(chan struct{}),
 		networkInterface:    networkInterface,
 		leaderCancel:        leaderCancel,
-		signal:              signal,
+		killFunc:            killFunc,
 		address:             address,
 		family:              family,
 	}
 
-	go lb.healthCheck()
+	wg.Go(func() {
+		lb.healthCheck()
+	})
 
 	// Return our created load-balancer
 	return lb, nil
@@ -345,8 +348,8 @@ func (lb *IPVSLoadBalancer) healthCheck() {
 					lb.backendMap[backend] = newStatus
 				}
 				if lb.forwardingMethod == ipvs.Local && !lb.localBackendExists() {
-					if lb.signal != nil {
-						close(lb.signal)
+					if lb.killFunc != nil {
+						lb.killFunc()
 					}
 
 					if lb.leaderCancel != nil {

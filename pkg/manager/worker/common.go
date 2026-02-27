@@ -4,10 +4,8 @@ import (
 	"context"
 	"fmt"
 	log "log/slog"
-	"os"
 	"sync"
 	"sync/atomic"
-	"syscall"
 	"time"
 
 	"github.com/kube-vip/kube-vip/pkg/arp"
@@ -26,7 +24,7 @@ type Common struct {
 	intfMgr      *networkinterface.Manager
 	config       *kubevip.Config
 	closing      *atomic.Bool
-	signalChan   chan os.Signal
+	killFunc     func()
 	svcProcessor *services.Processor
 	mutex        *sync.Mutex
 	clientSet    *kubernetes.Clientset
@@ -35,7 +33,7 @@ type Common struct {
 }
 
 func newCommon(arpMgr *arp.Manager, intfMgr *networkinterface.Manager,
-	config *kubevip.Config, closing *atomic.Bool, signalChan chan os.Signal,
+	config *kubevip.Config, closing *atomic.Bool, killFunc func(),
 	svcProcessor *services.Processor, mutex *sync.Mutex, clientSet *kubernetes.Clientset,
 	electionMgr *election.Manager, leaseMgr *lease.Manager) *Common {
 	return &Common{
@@ -43,7 +41,7 @@ func newCommon(arpMgr *arp.Manager, intfMgr *networkinterface.Manager,
 		intfMgr:      intfMgr,
 		config:       config,
 		closing:      closing,
-		signalChan:   signalChan,
+		killFunc:     killFunc,
 		svcProcessor: svcProcessor,
 		mutex:        mutex,
 		clientSet:    clientSet,
@@ -83,13 +81,15 @@ func (c *Common) ServicesNoLeader(ctx context.Context) error {
 	return nil
 }
 
+func (c *Common) Cleanup() {
+	// NOT IMPLEMENTED
+}
+
 func (c *Common) OnStartedLeading(ctx context.Context) {
 	err := c.svcProcessor.ServicesWatcher(ctx, c.svcProcessor.SyncServices)
 	if err != nil {
 		log.Error("service watcher", "err", err)
-		if !c.closing.Load() {
-			c.signalChan <- syscall.SIGINT
-		}
+		c.killFunc()
 	}
 }
 
@@ -101,9 +101,7 @@ func (c *Common) OnStoppedLeading() {
 	c.svcProcessor.Stop()
 
 	log.Error("lost services leadership, restarting kube-vip")
-	if !c.closing.Load() {
-		c.signalChan <- syscall.SIGINT
-	}
+	c.killFunc()
 }
 
 func (c *Common) OnNewLeader(identity string) {
@@ -177,9 +175,7 @@ func (c *Common) runGlobalElection(ctx context.Context, a election.Actions, leas
 		a.OnStoppedLeading()
 
 		log.Error("lost leadership, restarting kube-vip", "lease", leaseID.Name())
-		if !c.closing.Load() {
-			c.signalChan <- syscall.SIGINT
-		}
+		c.killFunc()
 
 		return
 	}

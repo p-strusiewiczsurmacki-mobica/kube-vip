@@ -10,7 +10,6 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
-	"syscall"
 	"time"
 
 	"github.com/kube-vip/kube-vip/pkg/arp"
@@ -33,16 +32,16 @@ type WireGuard struct {
 }
 
 func NewWireGuard(arpMgr *arp.Manager, intfMgr *networkinterface.Manager,
-	config *kubevip.Config, closing *atomic.Bool, signalChan chan os.Signal,
+	config *kubevip.Config, closing *atomic.Bool, killFUnc func(),
 	svcProcessor *services.Processor, mutex *sync.Mutex, clientSet *kubernetes.Clientset,
 	electionMgr *election.Manager, leaseMgr *lease.Manager) *WireGuard {
 	return &WireGuard{
-		Common: *newCommon(arpMgr, intfMgr, config, closing, signalChan,
+		Common: *newCommon(arpMgr, intfMgr, config, closing, killFUnc,
 			svcProcessor, mutex, clientSet, electionMgr, leaseMgr),
 	}
 }
 
-func (w *WireGuard) Configure(ctx context.Context) error {
+func (w *WireGuard) Configure(ctx context.Context, _ *sync.WaitGroup) error {
 	log.Info("reading wireguard peer configuration from Kubernetes secret")
 	s, err := w.clientSet.CoreV1().Secrets(w.config.Namespace).Get(ctx, "wireguard", metav1.GetOptions{})
 	if err != nil {
@@ -113,9 +112,7 @@ func (w *WireGuard) OnStartedLeading(ctx context.Context) {
 	if err != nil {
 		log.Error("could not start wireguard", "err", err)
 		_ = w.wg.Down()
-		if !w.closing.Load() {
-			w.signalChan <- syscall.SIGINT
-		}
+		w.killFunc()
 	}
 
 	// Strip CIDR notation from VIP if present
@@ -125,9 +122,7 @@ func (w *WireGuard) OnStartedLeading(ctx context.Context) {
 		if err != nil {
 			log.Error("could not parse VIP CIDR", "err", err, "vip", vipIP)
 			_ = w.wg.Down()
-			if !w.closing.Load() {
-				w.signalChan <- syscall.SIGINT
-			}
+			w.killFunc()
 		}
 		vipIP = ip.String()
 	}
@@ -137,9 +132,7 @@ func (w *WireGuard) OnStartedLeading(ctx context.Context) {
 	if err != nil {
 		log.Error("could not parse KUBERNETES_SERVICE_PORT_HTTPS", "err", err, "port", w.kubeAPIPort)
 		_ = w.wg.Down()
-		if !w.closing.Load() {
-			w.signalChan <- syscall.SIGINT
-		}
+		w.killFunc()
 	}
 
 	// Apply nftables DNAT rule to route traffic from wg0:6443 to Kubernetes API service
@@ -148,9 +141,7 @@ func (w *WireGuard) OnStartedLeading(ctx context.Context) {
 	if err != nil {
 		log.Error("could not apply nftables DNAT rule, restarting kube-vip", "err", err)
 		_ = w.wg.Down()
-		if !w.closing.Load() {
-			w.signalChan <- syscall.SIGINT
-		}
+		w.killFunc()
 	}
 	log.Info("nftables DNAT rule applied successfully")
 }
@@ -175,9 +166,7 @@ func (w *WireGuard) OnStoppedLeading() {
 	}
 
 	log.Error("lost leadership, restarting kube-vip")
-	if !w.closing.Load() {
-		w.signalChan <- syscall.SIGINT
-	}
+	w.killFunc()
 }
 
 func (w *WireGuard) OnNewLeader(identity string) {
