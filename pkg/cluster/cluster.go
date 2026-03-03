@@ -11,7 +11,6 @@ import (
 
 // Cluster - The Cluster object manages the state of the cluster for a particular node
 type Cluster struct {
-	stop    chan bool
 	Network []vip.Network
 	arpMgr  *arp.Manager
 }
@@ -32,7 +31,6 @@ func InitCluster(c *kubevip.Config, disableVIP bool, intfMgr *networkinterface.M
 	newCluster := &Cluster{
 		Network: networks,
 		arpMgr:  arpMgr,
-		stop:    make(chan bool),
 	}
 
 	log.Debug("service security", "enabled", c.EnableServiceSecurity)
