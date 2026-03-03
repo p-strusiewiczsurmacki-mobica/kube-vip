@@ -176,7 +176,8 @@ func (p *Processor) addService(ctx context.Context, svc *v1.Service, wg *sync.Wa
 
 	p.ServiceInstances = append(p.ServiceInstances, newService)
 
-	if svc.Spec.ExternalTrafficPolicy == v1.ServiceExternalTrafficPolicyCluster {
+	if (p.config.EnableLeaderElection || p.config.EnableServicesElection) && svc.Spec.ExternalTrafficPolicy == v1.ServiceExternalTrafficPolicyCluster ||
+		(!p.config.EnableLeaderElection && !p.config.EnableServicesElection) {
 		for _, c := range newService.Clusters {
 			for _, n := range c.Network {
 				n.SetHasEndpoints(true)
