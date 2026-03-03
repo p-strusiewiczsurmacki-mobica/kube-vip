@@ -281,12 +281,9 @@ func (cluster *Cluster) StartLoadBalancerService(ctx context.Context, c *kubevip
 		if network.IsDDNS() {
 			ddnsReady := make(chan struct{})
 			lbWg.Go(func() {
-				ctxDDNS, ddnsCancel := context.WithCancel(ctx)
-				defer ddnsCancel()
-
 				// start the DDNS if requested
 				log.Debug("(svcs) start DDNS", "name", network.DNSName())
-				if err := cluster.StartDDNS(ctxDDNS, cluster.Network[i], c.DHCPBackoffAttempts, &lbWg); err != nil {
+				if err := cluster.StartDDNS(ctx, cluster.Network[i], c.DHCPBackoffAttempts, &lbWg); err != nil {
 					log.Error("failed to start DDNS", "err", err)
 				}
 
@@ -344,15 +341,12 @@ func (cluster *Cluster) StartLoadBalancerService(ctx context.Context, c *kubevip
 		for i := range cluster.Network {
 			network := cluster.Network[i]
 
-			ctxDNS, dnsCancel := context.WithCancel(ctx)
-			defer dnsCancel()
-
 			// start the dns updater if address is dns
 			if network.IsDNS() {
 				log.Info("(svcs) starting the DNS updater", "address", network.DNSName(), "ip", network.IP())
 				ipUpdater := vip.NewIPUpdater(network)
 				wg.Go(func() {
-					ipUpdater.Run(ctxDNS)
+					ipUpdater.Run(ctx)
 				})
 			}
 		}
