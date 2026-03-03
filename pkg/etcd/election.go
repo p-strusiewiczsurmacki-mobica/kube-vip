@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"hash/fnv"
+	"sync"
 	"time"
 
 	log "log/slog"
@@ -118,7 +119,12 @@ func RunElection(ctx context.Context, config *LeaderElectionConfig) error {
 		leaseTTL:       lease.TTL,
 	}
 
-	go m.tryToBeLeader(ctx)
+	wg := sync.WaitGroup{}
+	defer wg.Wait()
+
+	wg.Go(func() {
+		m.tryToBeLeader(ctx, &wg)
+	})
 	m.watchLeaderChanges(ctx)
 
 	return nil
@@ -137,9 +143,7 @@ type member struct {
 }
 
 func (m *member) watchLeaderChanges(ctx context.Context) {
-	observeCtx, observeCancel := context.WithCancel(ctx)
-	defer observeCancel()
-	changes := m.election.Observe(observeCtx)
+	changes := m.election.Observe(ctx)
 
 watcher:
 	for {
@@ -187,7 +191,7 @@ watcher:
 	log.Debug("Exiting watcher", "id", m.memberID)
 }
 
-func (m *member) tryToBeLeader(ctx context.Context) {
+func (m *member) tryToBeLeader(ctx context.Context, wg *sync.WaitGroup) {
 	if err := m.election.Campaign(ctx, m.memberID); err != nil {
 		log.Error("Failed trying to become the leader", "err", err)
 		// Resign just in case we acquired leadership just before failing
@@ -206,7 +210,9 @@ func (m *member) tryToBeLeader(ctx context.Context) {
 	m.weAreTheLeader <- struct{}{}
 
 	// Once we are the leader, start the routine to resign if context is canceled
-	go m.resignOnCancel(ctx)
+	wg.Go(func() {
+		m.resignOnCancel(ctx)
+	})
 
 	// After becoming the leader, we wait for at least a lease TTL to wait for
 	// the previous leader to detect the new leadership (if there was one) and

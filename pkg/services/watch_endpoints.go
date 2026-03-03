@@ -2,6 +2,7 @@ package services
 
 import (
 	"fmt"
+	"sync"
 
 	log "log/slog"
 
@@ -22,29 +23,11 @@ func (p *Processor) watchEndpoint(svcCtx *servicecontext.Context, id string, ser
 		return fmt.Errorf("[%s] error watching endpoints: %w", provider.GetLabel(), err)
 	}
 
-	exitFunction := make(chan struct{})
-	go func() {
-		select {
-		case <-svcCtx.Ctx.Done():
-			log.Debug("context cancelled", "provider", provider.GetLabel())
-			// Stop the retry watcher
-			rw.Stop()
-			return
-		case <-p.shutdownChan:
-			log.Debug("shutdown called", "provider", provider.GetLabel())
-			// Stop the retry watcher
-			rw.Stop()
-			// Cancel the context, which will in turn cancel the leadership
-			svcCtx.Cancel()
-			return
-		case <-exitFunction:
-			log.Debug("function ending", "provider", provider.GetLabel())
-			// Stop the retry watcher
-			rw.Stop()
-			// Cancel the context, which will in turn cancel the leadership
-			svcCtx.Cancel()
-			return
-		}
+	wg := sync.WaitGroup{}
+
+	defer func() {
+		rw.Stop()
+		wg.Wait()
 	}()
 
 	ch := rw.ResultChan()
@@ -57,7 +40,7 @@ func (p *Processor) watchEndpoint(svcCtx *servicecontext.Context, id string, ser
 		switch event.Type {
 
 		case watch.Added, watch.Modified:
-			restart, err := epProcessor.AddOrModify(svcCtx, event, &lastKnownGoodEndpoint, service, id, p.StartServicesLeaderElection)
+			restart, err := epProcessor.AddOrModify(svcCtx, event, &lastKnownGoodEndpoint, service, id, p.StartServicesLeaderElection, &wg)
 			if restart {
 				continue
 			} else if err != nil {
@@ -69,10 +52,7 @@ func (p *Processor) watchEndpoint(svcCtx *servicecontext.Context, id string, ser
 				return fmt.Errorf("[%s] error while processing delete event: %w", provider.GetLabel(), err)
 			}
 
-			// Close the goroutine that will end the retry watcher, then exit the endpoint watcher function
-			close(exitFunction)
 			log.Info("stopping watching", "provider", provider.GetLabel(), "service name", service.Name, "namespace", service.Namespace)
-
 			return nil
 		case watch.Error:
 			errObject := apierrors.FromObject(event.Object)
@@ -80,7 +60,6 @@ func (p *Processor) watchEndpoint(svcCtx *servicecontext.Context, id string, ser
 			log.Error("watch error", "provider", provider.GetLabel(), "err", statusErr)
 		}
 	}
-	close(exitFunction)
 	log.Info("stopping watching", "provider", provider.GetLabel(), "service name", service.Name, "namespace", service.Namespace)
 	return nil //nolint:govet
 }

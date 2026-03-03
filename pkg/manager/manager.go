@@ -16,7 +16,6 @@ import (
 
 	"github.com/kube-vip/kube-vip/pkg/arp"
 	"github.com/kube-vip/kube-vip/pkg/bgp"
-	"github.com/kube-vip/kube-vip/pkg/cluster"
 	"github.com/kube-vip/kube-vip/pkg/election"
 	"github.com/kube-vip/kube-vip/pkg/k8s"
 	"github.com/kube-vip/kube-vip/pkg/kubevip"
@@ -50,6 +49,8 @@ type Manager struct {
 
 	// This channel is used to signal a shutdown
 	shutdownChan chan struct{}
+
+	sigint sync.Once
 
 	svcProcessor *services.Processor
 
@@ -198,6 +199,9 @@ func New(configMap string, config *kubevip.Config) (*Manager, error) {
 	// Add Notification for SIGTERM (sent from Kubernetes)
 	signal.Notify(signalChan, syscall.SIGTERM)
 
+	// Add Notification for SIGUSR1 (for configuration dump)
+	signal.Notify(signalChan, syscall.SIGUSR1)
+
 	// All watchers and other goroutines should have an additional goroutine that blocks on this, to shut things down
 	shutdownChan := make(chan struct{})
 
@@ -216,7 +220,7 @@ func New(configMap string, config *kubevip.Config) (*Manager, error) {
 		}
 	}
 
-	electionMgr, err := election.NewManager(config, clientset, rwClientSet, signalChan)
+	electionMgr, err := election.NewManager(config, clientset, rwClientSet)
 	if err != nil {
 		return nil, fmt.Errorf("creating election manager: %w", err)
 	}
@@ -224,7 +228,7 @@ func New(configMap string, config *kubevip.Config) (*Manager, error) {
 	leaseMgr := lease.NewManager()
 
 	svcProcessor := services.NewServicesProcessor(config, bgpServer, clientset, rwClientSet,
-		shutdownChan, intfMgr, arpMgr, nodeLabelManager, electionMgr, leaseMgr)
+		intfMgr, arpMgr, nodeLabelManager, electionMgr, leaseMgr)
 
 	return &Manager{
 		clientSet:   clientset,
@@ -257,21 +261,11 @@ func New(configMap string, config *kubevip.Config) (*Manager, error) {
 
 // Start will begin the Manager, which will start services and watch the configmap
 func (sm *Manager) Start(ctx context.Context) error {
-	// listen for interrupts or the Linux SIGTERM signal and cancel
-	// our context, which the leader election code will observe and
-	// step down
-	sm.signalChan = make(chan os.Signal, 1)
-	// Add Notification for Userland interrupt
-	signal.Notify(sm.signalChan, syscall.SIGINT)
-
-	// Add Notification for SIGTERM (sent from Kubernetes)
-	signal.Notify(sm.signalChan, syscall.SIGTERM)
-
-	// Add Notification for SIGUSR1 (for configuration dump)
-	signal.Notify(sm.signalChan, syscall.SIGUSR1)
-
 	// All watchers and other goroutines should have an additional goroutine that blocks on this, to shut things down
 	sm.shutdownChan = make(chan struct{})
+
+	wg := sync.WaitGroup{}
+	defer wg.Wait()
 
 	// HealthCheck
 	if sm.config.HealthCheckPort != 0 {
@@ -281,7 +275,7 @@ func (sm *Manager) Start(ctx context.Context) error {
 		http.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
 			fmt.Fprintf(w, "OK")
 		})
-		go func() {
+		wg.Go(func() {
 			server := &http.Server{
 				Addr:              fmt.Sprintf(":%d", sm.config.HealthCheckPort),
 				ReadHeaderTimeout: 3 * time.Second,
@@ -290,7 +284,7 @@ func (sm *Manager) Start(ctx context.Context) error {
 			if err != nil {
 				log.Error("healthcheck", "unable to start", err)
 			}
-		}()
+		})
 	}
 
 	// on exit, clean up the node labels
@@ -317,7 +311,9 @@ func (sm *Manager) Start(ctx context.Context) error {
 				}
 			}
 			// TODO: It would be nice to run the UPNP refresh only on the leader.
-			go sm.svcProcessor.RefreshUPNPForwards(ctx)
+			wg.Go(func() {
+				sm.svcProcessor.RefreshUPNPForwards(ctx)
+			})
 		}
 	}
 
@@ -335,22 +331,28 @@ func (sm *Manager) Start(ctx context.Context) error {
 
 // Start will begin the Manager, which will start services and watch the configmap
 func (sm *Manager) startMode(ctx context.Context) error {
-	var cpCluster *cluster.Cluster
 	var err error
+
+	wg := sync.WaitGroup{}
+	defer func() {
+		wg.Wait()
+		log.Info("Shutting down Kube-Vip")
+	}()
 
 	// use a Go context so we can tell the leaderelection code when we
 	// want to step down
 	modeCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
-	w := worker.New(sm.arpMgr, sm.intfMgr, sm.config, &sm.closing, sm.signalChan,
+	w := worker.New(sm.arpMgr, sm.intfMgr, sm.config, &sm.closing, sm.Kill,
 		sm.svcProcessor, &sm.mutex, sm.clientSet, sm.bgpServer, sm.bgpSessionInfoGauge,
 		sm.electionMgr, sm.leaseMgr)
 
 	log.Info("starting Kube-vip Manager", "mode", w.Name())
-	if err := w.Configure(modeCtx); err != nil {
+	if err := w.Configure(modeCtx, &wg); err != nil {
 		return fmt.Errorf("failed to configure %s mode: %w", w.Name(), err)
 	}
+	defer w.Cleanup()
 
 	if sm.config.EnableControlPlane {
 		err = w.InitControlPlane()
@@ -360,10 +362,14 @@ func (sm *Manager) startMode(ctx context.Context) error {
 	}
 
 	// Shutdown function that will wait on this signal, unless we call it ourselves
-	go sm.waitForShutdown(modeCtx, cancel, cpCluster)
+	wg.Go(func() {
+		sm.waitForShutdown(modeCtx, cancel)
+	})
 
 	if sm.config.EnableControlPlane {
-		go w.StartControlPlane(modeCtx, sm.electionMgr)
+		wg.Go(func() {
+			w.StartControlPlane(modeCtx, sm.electionMgr)
+		})
 	}
 
 	if sm.config.EnableServices {
@@ -375,7 +381,6 @@ func (sm *Manager) startMode(ctx context.Context) error {
 	}
 
 	<-sm.shutdownChan
-	log.Info("Shutting down Kube-Vip")
 
 	return nil
 }
@@ -393,7 +398,7 @@ func (sm *Manager) parseAnnotations(ctx context.Context) error {
 	return nil
 }
 
-func (sm *Manager) waitForShutdown(ctx context.Context, cancel context.CancelFunc, cpCluster *cluster.Cluster) {
+func (sm *Manager) waitForShutdown(ctx context.Context, cancel context.CancelFunc) {
 	defer close(sm.shutdownChan)
 	for {
 		sig := <-sm.signalChan
@@ -404,12 +409,15 @@ func (sm *Manager) waitForShutdown(ctx context.Context, cancel context.CancelFun
 		case syscall.SIGINT, syscall.SIGTERM:
 			sm.closing.Store(true)
 			log.Info("Received kube-vip termination, signaling shutdown")
-			if cpCluster != nil {
-				cpCluster.Stop()
-			}
 			// Cancel the context, which will in turn cancel the leadership and all goroutines
 			cancel()
 			return
 		}
 	}
+}
+
+func (sm *Manager) Kill() {
+	sm.sigint.Do(func() {
+		sm.signalChan <- syscall.SIGINT
+	})
 }
