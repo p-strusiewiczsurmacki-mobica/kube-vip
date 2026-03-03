@@ -43,8 +43,6 @@ type Processor struct {
 	clientSet   *kubernetes.Clientset
 	rwClientSet *kubernetes.Clientset
 
-	shutdownChan chan struct{}
-
 	// This is a prometheus counter used to count the number of events received
 	// from the service watcher
 	CountServiceWatchEvent *prometheus.CounterVec
@@ -70,7 +68,7 @@ type labelManager interface {
 }
 
 func NewServicesProcessor(config *kubevip.Config, bgpServer *bgp.Server,
-	clientSet *kubernetes.Clientset, rwClientSet *kubernetes.Clientset, shutdownChan chan struct{},
+	clientSet *kubernetes.Clientset, rwClientSet *kubernetes.Clientset,
 	intfMgr *networkinterface.Manager, arpMgr *arp.Manager, nodeLabelManager labelManager,
 	electionMgr *election.Manager, leaseMgr *lease.Manager) *Processor {
 	lbClassFilterFunc := lbClassFilter
@@ -85,7 +83,6 @@ func NewServicesProcessor(config *kubevip.Config, bgpServer *bgp.Server,
 		bgpServer:        bgpServer,
 		clientSet:        clientSet,
 		rwClientSet:      rwClientSet,
-		shutdownChan:     shutdownChan,
 		CountServiceWatchEvent: prometheus.NewCounterVec(prometheus.CounterOpts{
 			Namespace: "kube_vip",
 			Subsystem: "manager",
@@ -102,12 +99,13 @@ func NewServicesProcessor(config *kubevip.Config, bgpServer *bgp.Server,
 	}
 }
 
-func (p *Processor) AddOrModify(ctx context.Context, event watch.Event, serviceFunc func(*servicecontext.Context, *v1.Service) error) (bool, error) {
-	// log.Debugf("Endpoints for service [%s] have been Created or modified", s.service.ServiceName)
+func (p *Processor) AddOrModify(ctx context.Context, event watch.Event, serviceFunc func(*servicecontext.Context, *v1.Service, *sync.WaitGroup) error, wg *sync.WaitGroup) (bool, error) {
 	svc, ok := event.Object.(*v1.Service)
 	if !ok {
 		return false, fmt.Errorf("unable to parse Kubernetes services from API watcher")
 	}
+
+	log.Debug("processor AddOrModify", "service", svc.Name, "event", event.Type)
 
 	// We only care about LoadBalancer services
 	if svc.Spec.Type != v1.ServiceTypeLoadBalancer {
@@ -217,7 +215,7 @@ func (p *Processor) AddOrModify(ctx context.Context, event watch.Event, serviceF
 		// This is independent of leader election settings (which are for control plane HA)
 		if p.config.EnableWireguard && !svcCtx.IsWatched {
 			// Call serviceFunc first to set up the WireGuard tunnel
-			err = serviceFunc(svcCtx, svc)
+			err = serviceFunc(svcCtx, svc, wg)
 			if err != nil {
 				log.Error(err.Error())
 				if errors.Is(err, &utils.PanicError{}) {
@@ -225,7 +223,7 @@ func (p *Processor) AddOrModify(ctx context.Context, event watch.Event, serviceF
 				}
 			}
 
-			go func() {
+			wg.Go(func() {
 				defer func() {
 					if svcCtx != nil {
 						svcCtx.IsWatched = false
@@ -242,7 +240,7 @@ func (p *Processor) AddOrModify(ctx context.Context, event watch.Event, serviceF
 				if err = p.watchEndpoint(svcCtx, p.config.NodeName, svc, provider); err != nil {
 					log.Error(err.Error())
 				}
-			}()
+			})
 
 			svcCtx.IsWatched = true
 		} else if p.config.EnableServicesElection || // Service Election
@@ -251,12 +249,15 @@ func (p *Processor) AddOrModify(ctx context.Context, event watch.Event, serviceF
 
 			// If this load balancer Traffic Policy is "local"
 			if svc.Spec.ExternalTrafficPolicy == v1.ServiceExternalTrafficPolicyTypeLocal {
+				log.Debug("111111111111")
 
 				// Start an endpoint watcher if we're not watching it already
 				if !svcCtx.IsWatched {
+					log.Debug("4444444444444444444")
 					// background the endpoint watcher
 					if (p.config.EnableRoutingTable || p.config.EnableBGP) && (!p.config.EnableLeaderElection && !p.config.EnableServicesElection) {
-						err = serviceFunc(svcCtx, svc)
+						log.Debug("STARTING LEADERELECTION in SVC Processor", "service", svc.Name)
+						err = serviceFunc(svcCtx, svc, wg)
 						if err != nil {
 							log.Error(err.Error())
 							if errors.Is(err, &utils.PanicError{}) {
@@ -265,7 +266,8 @@ func (p *Processor) AddOrModify(ctx context.Context, event watch.Event, serviceF
 						}
 					}
 
-					go func() {
+					wg.Go(func() {
+						log.Debug("55555555555555555555555")
 						defer func() {
 							if svcCtx != nil {
 								svcCtx.IsWatched = false
@@ -284,13 +286,15 @@ func (p *Processor) AddOrModify(ctx context.Context, event watch.Event, serviceF
 								log.Error(err.Error())
 							}
 						}
-					}()
+					})
+					log.Debug("6666666666666666666")
 
 					// We're now watching this service
 					svcCtx.IsWatched = true
 				}
 			} else if (p.config.EnableBGP || p.config.EnableRoutingTable) && (!p.config.EnableLeaderElection && !p.config.EnableServicesElection) {
-				err = serviceFunc(svcCtx, svc)
+				log.Debug("22222222222222222")
+				err = serviceFunc(svcCtx, svc, wg)
 				if err != nil {
 					log.Error(err.Error())
 					if errors.Is(err, &utils.PanicError{}) {
@@ -298,7 +302,7 @@ func (p *Processor) AddOrModify(ctx context.Context, event watch.Event, serviceF
 					}
 				}
 
-				go func() {
+				wg.Go(func() {
 					defer func() {
 						if svcCtx != nil {
 							svcCtx.IsWatched = false
@@ -317,11 +321,14 @@ func (p *Processor) AddOrModify(ctx context.Context, event watch.Event, serviceF
 							log.Error(err.Error())
 						}
 					}
-				}()
+					log.Debug("XDDDDDDDDDDDDDDDDDDDDDDDDDDD")
+				})
+				log.Debug("XDDDDDDDDDDDDDDDDDDDDDDDDDDD22222222222222222")
 				// We're now watching this service
 				svcCtx.IsWatched = true
 			} else {
-				go func() {
+				log.Debug("3333333333333")
+				wg.Go(func() {
 					for {
 						select {
 						case <-svcCtx.Ctx.Done():
@@ -330,7 +337,7 @@ func (p *Processor) AddOrModify(ctx context.Context, event watch.Event, serviceF
 						default:
 							if !svcCtx.IsActive {
 								log.Info("(svcs) restartable service watcher starting", "uid", svc.UID)
-								err = serviceFunc(svcCtx, svc)
+								err = serviceFunc(svcCtx, svc, wg)
 								if err != nil {
 									log.Error(err.Error())
 									if errors.Is(err, &utils.PanicError{}) {
@@ -341,11 +348,11 @@ func (p *Processor) AddOrModify(ctx context.Context, event watch.Event, serviceF
 							}
 						}
 					}
-				}()
+				})
 			}
 		} else {
 			// Increment the waitGroup before the service Func is called (Done is completed in there)
-			err = serviceFunc(svcCtx, svc)
+			err = serviceFunc(svcCtx, svc, wg)
 			if err != nil {
 				log.Error(err.Error())
 				if errors.Is(err, &utils.PanicError{}) {
@@ -358,6 +365,8 @@ func (p *Processor) AddOrModify(ctx context.Context, event watch.Event, serviceF
 			svcCtx.IsActive = true
 		}
 	}
+
+	log.Debug("processor AddOrModify ending")
 
 	return false, nil
 }
@@ -412,14 +421,6 @@ func (p *Processor) Delete(event watch.Event) (bool, error) {
 	log.Info("(svcs) deleted", "service name", svc.Name, "namespace", svc.Namespace)
 
 	return true, nil
-}
-
-func (p *Processor) Stop() {
-	for _, instance := range p.ServiceInstances {
-		for _, cluster := range instance.Clusters {
-			cluster.Stop()
-		}
-	}
 }
 
 func (p *Processor) getServiceContext(uid types.UID) (*servicecontext.Context, error) {

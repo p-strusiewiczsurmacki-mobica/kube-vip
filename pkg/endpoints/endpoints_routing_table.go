@@ -49,6 +49,7 @@ func (rt *RoutingTable) processInstance(ctx *servicecontext.Context, service *v1
 								log.Info("route already present", "provider",
 									rt.provider.GetLabel(), "ip", cluster.Network[i].IP(), "service name", service.Name, "namespace",
 									service.Namespace, "interface", cluster.Network[i].Interface(), "tableID", rt.config.RoutingTableID)
+								ctx.ConfiguredNetworks.Store(cluster.Network[i].IP(), true)
 							}
 						} else {
 							// If other error occurs, return error
@@ -116,7 +117,7 @@ func (rt *RoutingTable) deleteAction(service *v1.Service) {
 }
 
 func (rt *RoutingTable) setInstanceEndpointsStatus(service *v1.Service, endpoints []string) error {
-	instance := instance.FindServiceInstanceWithTimeout(service, *rt.instances)
+	instance := instance.FindServiceInstanceWithTimeout(service, rt.instances)
 	if instance == nil {
 		log.Error("failed to find the instance", "namespace", service.Namespace, "name", service.Name, "uid", service.UID, "provider", rt.provider.GetLabel())
 	} else {
@@ -137,6 +138,8 @@ func (rt *RoutingTable) setInstanceEndpointsStatus(service *v1.Service, endpoint
 			}
 		}
 	}
+
+	instance.CloseEndpointsReady()
 
 	return nil
 }

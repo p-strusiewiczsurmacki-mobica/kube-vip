@@ -2,9 +2,7 @@ package worker
 
 import (
 	"context"
-	"os"
 	"sync"
-	"sync/atomic"
 
 	"github.com/kube-vip/kube-vip/pkg/arp"
 	"github.com/kube-vip/kube-vip/pkg/bgp"
@@ -18,37 +16,38 @@ import (
 )
 
 type Worker interface {
-	Configure(context.Context) error
+	Configure(context.Context, *sync.WaitGroup) error
 	InitControlPlane() error
 	StartControlPlane(context.Context, *election.Manager)
 	ConfigureServices()
 	StartServices(ctx context.Context) error
 	Name() string
+	Cleanup()
 }
 
 func New(arpMgr *arp.Manager, intfMgr *networkinterface.Manager,
-	config *kubevip.Config, closing *atomic.Bool, signalChan chan os.Signal,
+	config *kubevip.Config, killFunc func(),
 	svcProcessor *services.Processor, mutex *sync.Mutex, clientSet *kubernetes.Clientset,
 	bgpServer *bgp.Server, bgpSessionInfoGauge *prometheus.GaugeVec,
 	electionMgr *election.Manager, leaseMgr *lease.Manager) Worker {
 	if config.EnableARP {
-		return NewARP(arpMgr, intfMgr, config, closing, signalChan,
+		return NewARP(arpMgr, intfMgr, config, killFunc,
 			svcProcessor, mutex, clientSet, electionMgr, leaseMgr)
 	}
 
 	if config.EnableBGP {
-		return NewBGP(arpMgr, intfMgr, config, closing, signalChan,
+		return NewBGP(arpMgr, intfMgr, config, killFunc,
 			svcProcessor, mutex, clientSet, bgpServer, bgpSessionInfoGauge,
 			electionMgr, leaseMgr)
 	}
 
 	if config.EnableRoutingTable {
-		return NewTable(arpMgr, intfMgr, config, closing, signalChan,
+		return NewTable(arpMgr, intfMgr, config, killFunc,
 			svcProcessor, mutex, clientSet, electionMgr, leaseMgr)
 	}
 
 	if config.EnableWireguard {
-		return NewWireGuard(arpMgr, intfMgr, config, closing, signalChan,
+		return NewWireGuard(arpMgr, intfMgr, config, killFunc,
 			svcProcessor, mutex, clientSet, electionMgr, leaseMgr)
 	}
 

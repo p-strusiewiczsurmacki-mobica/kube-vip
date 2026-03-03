@@ -7,6 +7,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	log "log/slog"
@@ -50,6 +51,9 @@ type Instance struct {
 	ServiceSnapshot *v1.Service
 
 	dnsAddresses []string
+
+	EndpointsReady chan struct{}
+	epConfigured   sync.Once
 }
 
 type Port struct {
@@ -57,9 +61,9 @@ type Port struct {
 	Type string
 }
 
-func NewInstance(ctx context.Context, svc *v1.Service, config *kubevip.Config, intfMgr *networkinterface.Manager, arpMgr *arp.Manager) (*Instance, error) {
+func NewInstance(ctx context.Context, svc *v1.Service, config *kubevip.Config, intfMgr *networkinterface.Manager, arpMgr *arp.Manager, wg *sync.WaitGroup) (*Instance, error) {
 	instanceAddresses, instanceHostnames := FetchServiceAddresses(svc)
-	log.Info("NewInstance used", "instanceAddresses", instanceAddresses, "instanceHostnames", instanceHostnames)
+	log.Info("NewInstance used", "instanceAddresses", instanceAddresses, "instanceHostnames", instanceHostnames, "service", svc.Name)
 
 	var newVips []*kubevip.Config
 	var link netlink.Link
@@ -237,6 +241,7 @@ func NewInstance(ctx context.Context, svc *v1.Service, config *kubevip.Config, i
 	instance := &Instance{
 		ServiceSnapshot: svc,
 		dnsAddresses:    dnsAddresses,
+		EndpointsReady:  make(chan struct{}),
 	}
 
 	if svc.Annotations != nil {
@@ -286,7 +291,7 @@ func NewInstance(ctx context.Context, svc *v1.Service, config *kubevip.Config, i
 	}
 	for i := range instance.VIPConfigs {
 		if instance.VIPConfigs[i].VIP == "0.0.0.0" {
-			err := instance.startDHCP(ctx, i, config.DHCPBackoffAttempts)
+			err := instance.startDHCP(ctx, i, config.DHCPBackoffAttempts, wg)
 			if err != nil {
 				return nil, err
 			}
@@ -301,7 +306,7 @@ func NewInstance(ctx context.Context, svc *v1.Service, config *kubevip.Config, i
 			}
 		}
 		if instance.VIPConfigs[i].VIP == "::" {
-			err := instance.startDHCP(ctx, i, config.DHCPBackoffAttempts)
+			err := instance.startDHCP(ctx, i, config.DHCPBackoffAttempts, wg)
 			if err != nil {
 				return nil, err
 			}
@@ -426,7 +431,7 @@ func getAutoInterfaceName(link netlink.Link, defaultInterface string) string {
 	return link.Attrs().Name
 }
 
-func (i *Instance) startDHCP(ctx context.Context, index int, backoffAttempts uint) error {
+func (i *Instance) startDHCP(ctx context.Context, index int, backoffAttempts uint, wg *sync.WaitGroup) error {
 	if len(i.VIPConfigs) > 2 {
 		return fmt.Errorf("DHCP can be used with 2 VIP config maximally, got: %v", len(i.VIPConfigs))
 	}
@@ -543,11 +548,11 @@ func (i *Instance) startDHCP(ctx context.Context, index int, backoffAttempts uin
 		client.WithHostName(i.DHCPHostname)
 	}
 
-	go func() {
+	wg.Go(func() {
 		if err := client.Start(ctx); err != nil {
 			log.Error("[instance] DHCP client error: %w")
 		}
-	}()
+	})
 
 	// Set the name of the interface so that it can be removed on Service deletion
 	i.DHCPInterface = interfaceName
@@ -640,7 +645,7 @@ func FindServiceInstance(svc *v1.Service, instances []*Instance) *Instance {
 	return nil
 }
 
-func FindServiceInstanceWithTimeout(svc *v1.Service, instances []*Instance) *Instance {
+func FindServiceInstanceWithTimeout(svc *v1.Service, instances *[]*Instance) *Instance {
 	log.Debug("finding service with timeout", "namespace", svc.Namespace, "name", svc.Name, "UID", svc.UID)
 	ticker := time.NewTicker(time.Millisecond * 200)
 	defer ticker.Stop()
@@ -651,11 +656,17 @@ func FindServiceInstanceWithTimeout(svc *v1.Service, instances []*Instance) *Ins
 		case <-to.C:
 			return nil
 		case <-ticker.C:
-			for i := range instances {
-				if instances[i].ServiceSnapshot.UID == svc.UID {
-					return instances[i]
+			for i := range *instances {
+				if (*instances)[i].ServiceSnapshot.UID == svc.UID {
+					return (*instances)[i]
 				}
 			}
 		}
 	}
+}
+
+func (i *Instance) CloseEndpointsReady() {
+	i.epConfigured.Do(func() {
+		close(i.EndpointsReady)
+	})
 }
