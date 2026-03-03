@@ -16,7 +16,6 @@ import (
 
 	"github.com/kube-vip/kube-vip/pkg/arp"
 	"github.com/kube-vip/kube-vip/pkg/bgp"
-	"github.com/kube-vip/kube-vip/pkg/cluster"
 	"github.com/kube-vip/kube-vip/pkg/election"
 	"github.com/kube-vip/kube-vip/pkg/k8s"
 	"github.com/kube-vip/kube-vip/pkg/kubevip"
@@ -332,7 +331,6 @@ func (sm *Manager) Start(ctx context.Context) error {
 
 // Start will begin the Manager, which will start services and watch the configmap
 func (sm *Manager) startMode(ctx context.Context) error {
-	var cpCluster *cluster.Cluster
 	var err error
 
 	wg := sync.WaitGroup{}
@@ -365,7 +363,7 @@ func (sm *Manager) startMode(ctx context.Context) error {
 
 	// Shutdown function that will wait on this signal, unless we call it ourselves
 	wg.Go(func() {
-		sm.waitForShutdown(modeCtx, cancel, cpCluster)
+		sm.waitForShutdown(modeCtx, cancel)
 	})
 
 	if sm.config.EnableControlPlane {
@@ -400,7 +398,7 @@ func (sm *Manager) parseAnnotations(ctx context.Context) error {
 	return nil
 }
 
-func (sm *Manager) waitForShutdown(ctx context.Context, cancel context.CancelFunc, cpCluster *cluster.Cluster) {
+func (sm *Manager) waitForShutdown(ctx context.Context, cancel context.CancelFunc) {
 	defer close(sm.shutdownChan)
 	for {
 		sig := <-sm.signalChan
