@@ -1,8 +1,6 @@
 package cluster
 
 import (
-	"sync"
-
 	log "log/slog"
 
 	"github.com/kube-vip/kube-vip/pkg/arp"
@@ -14,7 +12,6 @@ import (
 // Cluster - The Cluster object manages the state of the cluster for a particular node
 type Cluster struct {
 	stop    chan bool
-	once    sync.Once
 	Network []vip.Network
 	arpMgr  *arp.Manager
 }
