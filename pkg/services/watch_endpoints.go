@@ -1,7 +1,6 @@
 package services
 
 import (
-	"context"
 	"fmt"
 	"sync"
 
@@ -19,10 +18,7 @@ func (p *Processor) watchEndpoint(svcCtx *servicecontext.Context, id string, ser
 	log.Info("watching", "provider", provider.GetLabel(), "service_name", service.Name, "namespace", service.Namespace)
 	// Use a restartable watcher, as this should help in the event of etcd or timeout issues
 
-	rwCtx, rwCancel := context.WithCancel(svcCtx.Ctx)
-	defer rwCancel()
-
-	rw, err := provider.CreateRetryWatcher(rwCtx, p.rwClientSet, service)
+	rw, err := provider.CreateRetryWatcher(svcCtx.Ctx, p.rwClientSet, service)
 	if err != nil {
 		return fmt.Errorf("[%s] error watching endpoints: %w", provider.GetLabel(), err)
 	}
@@ -33,12 +29,6 @@ func (p *Processor) watchEndpoint(svcCtx *servicecontext.Context, id string, ser
 		rw.Stop()
 		wg.Wait()
 	}()
-
-	wg.Go(func() {
-		<-rwCtx.Done()
-		svcCtx.Cancel()
-		log.Debug("context cancelled", "provider", provider.GetLabel())
-	})
 
 	ch := rw.ResultChan()
 
