@@ -143,9 +143,7 @@ type member struct {
 }
 
 func (m *member) watchLeaderChanges(ctx context.Context) {
-	observeCtx, observeCancel := context.WithCancel(ctx)
-	defer observeCancel()
-	changes := m.election.Observe(observeCtx)
+	changes := m.election.Observe(ctx)
 
 watcher:
 	for {
