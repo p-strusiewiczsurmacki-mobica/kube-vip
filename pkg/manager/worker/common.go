@@ -97,10 +97,7 @@ func (c *Common) OnStoppedLeading() {
 	// we can do cleanup here
 	c.mutex.Lock()
 	defer c.mutex.Unlock()
-	log.Info("leader lost", "former leader", c.config.NodeName)
-	c.svcProcessor.Stop()
-
-	log.Error("lost services leadership, restarting kube-vip")
+	log.Error("lost services leadership, restarting kube-vip", "former leader", c.config.NodeName)
 	c.killFunc()
 }
 

@@ -59,7 +59,6 @@ func (p *Processor) ServicesWatcher(ctx context.Context, serviceFunc func(*servi
 		<-ctx.Done()
 		log.Debug("(svcs) context cancelled")
 		rw.Stop()
-		p.Stop()
 	})
 	ch := rw.ResultChan()
 

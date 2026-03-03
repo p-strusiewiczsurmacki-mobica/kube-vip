@@ -411,9 +411,6 @@ func (sm *Manager) waitForShutdown(ctx context.Context, cancel context.CancelFun
 		case syscall.SIGINT, syscall.SIGTERM:
 			sm.closing.Store(true)
 			log.Info("Received kube-vip termination, signaling shutdown")
-			if cpCluster != nil {
-				cpCluster.Stop()
-			}
 			// Cancel the context, which will in turn cancel the leadership and all goroutines
 			cancel()
 			return

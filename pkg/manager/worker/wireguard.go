@@ -181,9 +181,6 @@ func (w *WireGuard) OnStoppedLeading() {
 	if err != nil {
 		log.Error("failed to tear down tunnels", "err", err)
 	}
-	if w.config.EnableServices && !w.config.EnableServicesElection {
-		w.svcProcessor.Stop()
-	}
 	log.Error("lost control plane leadership, restarting kube-vip")
 	w.killFunc()
 }

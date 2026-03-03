@@ -65,13 +65,3 @@ func startNetworking(c *kubevip.Config, intfMgr *networkinterface.Manager) ([]vi
 
 	return networks, nil
 }
-
-// Stop - Will stop the Cluster and release VIP if needed
-func (cluster *Cluster) Stop() {
-	// Close the stop channel, which will shut down the VIP (if needed)
-	if cluster.stop != nil {
-		cluster.once.Do(func() { // Ensure that the close channel can only ever be called once
-			close(cluster.stop)
-		})
-	}
-}

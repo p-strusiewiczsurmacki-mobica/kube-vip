@@ -291,7 +291,7 @@ func (cluster *Cluster) StartLoadBalancerService(ctx context.Context, c *kubevip
 				}
 
 				close(ddnsReady)
-				<-cluster.stop
+				<-ctx.Done()
 			})
 			<-ddnsReady
 		}
@@ -357,7 +357,7 @@ func (cluster *Cluster) StartLoadBalancerService(ctx context.Context, c *kubevip
 			}
 		}
 
-		<-cluster.stop
+		<-ctx.Done()
 		// Stop the loadbalancer context if it is running
 		lbCancel()
 

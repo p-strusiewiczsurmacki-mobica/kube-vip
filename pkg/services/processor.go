@@ -411,14 +411,6 @@ func (p *Processor) Delete(event watch.Event) (bool, error) {
 	return true, nil
 }
 
-func (p *Processor) Stop() {
-	for _, instance := range p.ServiceInstances {
-		for _, cluster := range instance.Clusters {
-			cluster.Stop()
-		}
-	}
-}
-
 func (p *Processor) getServiceContext(uid types.UID) (*servicecontext.Context, error) {
 	svcCtx, ok := p.svcMap.Load(uid)
 	if !ok {

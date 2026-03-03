@@ -383,9 +383,6 @@ func (p *Processor) deleteService(ctx context.Context, uid types.UID) error {
 		}
 	}
 	if !shared {
-		for x := range serviceInstance.Clusters {
-			serviceInstance.Clusters[x].Stop()
-		}
 		if serviceInstance.IsDHCPv4 || serviceInstance.IsDHCPv6 {
 			if serviceInstance.IsDHCPv4 {
 				serviceInstance.DHCPv4Client.Stop()
