@@ -25,14 +25,23 @@ func (p *Processor) watchEndpoint(svcCtx *servicecontext.Context, id string, ser
 
 	wg := sync.WaitGroup{}
 
+	stopChan := make(chan any)
+
 	defer func() {
+		close(stopChan)
 		rw.Stop()
 		wg.Wait()
 	}()
 
 	wg.Go(func() {
-		<-svcCtx.Ctx.Done()
-		log.Debug("context cancelled", "provider", provider.GetLabel())
+		select {
+		case <-svcCtx.Ctx.Done():
+			log.Debug("context cancelled", "provider", provider.GetLabel())
+			rw.Stop()
+		case <-stopChan:
+			svcCtx.Cancel()
+			log.Debug("exiting endpoint watcher", "namespace", service.Namespace, "service", service.Name, "provider", provider.GetLabel())
+		}
 	})
 
 	ch := rw.ResultChan()
@@ -45,13 +54,12 @@ func (p *Processor) watchEndpoint(svcCtx *servicecontext.Context, id string, ser
 		switch event.Type {
 
 		case watch.Added, watch.Modified:
-			restart, err := epProcessor.AddOrModify(svcCtx, event, &lastKnownGoodEndpoint, service, id, p.StartServicesLeaderElection, &wg)
+			restart, err := epProcessor.AddOrModify(svcCtx, event, &lastKnownGoodEndpoint, service, id, p.StartServicesLeaderElection)
 			if restart {
 				continue
 			} else if err != nil {
 				return fmt.Errorf("[%s] error while processing add/modify event: %w", provider.GetLabel(), err)
 			}
-
 		case watch.Deleted:
 			if err := epProcessor.Delete(svcCtx.Ctx, service, id); err != nil {
 				return fmt.Errorf("[%s] error while processing delete event: %w", provider.GetLabel(), err)
