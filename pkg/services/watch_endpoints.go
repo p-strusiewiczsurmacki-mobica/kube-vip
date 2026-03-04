@@ -33,6 +33,7 @@ func (p *Processor) watchEndpoint(svcCtx *servicecontext.Context, id string, ser
 	wg.Go(func() {
 		<-svcCtx.Ctx.Done()
 		log.Debug("context cancelled", "provider", provider.GetLabel())
+		rw.Stop()
 	})
 
 	ch := rw.ResultChan()
@@ -51,7 +52,6 @@ func (p *Processor) watchEndpoint(svcCtx *servicecontext.Context, id string, ser
 			} else if err != nil {
 				return fmt.Errorf("[%s] error while processing add/modify event: %w", provider.GetLabel(), err)
 			}
-
 		case watch.Deleted:
 			if err := epProcessor.Delete(svcCtx.Ctx, service, id); err != nil {
 				return fmt.Errorf("[%s] error while processing delete event: %w", provider.GetLabel(), err)
