@@ -10,6 +10,7 @@ import (
 	log "log/slog"
 
 	"github.com/kube-vip/kube-vip/pkg/bgp"
+	"github.com/kube-vip/kube-vip/pkg/debauncer"
 	"github.com/kube-vip/kube-vip/pkg/endpoints/providers"
 	"github.com/kube-vip/kube-vip/pkg/instance"
 	"github.com/kube-vip/kube-vip/pkg/kubevip"
@@ -18,7 +19,6 @@ import (
 	"github.com/kube-vip/kube-vip/pkg/utils"
 	"github.com/kube-vip/kube-vip/pkg/wireguard"
 	v1 "k8s.io/api/core/v1"
-	"k8s.io/apimachinery/pkg/watch"
 	"k8s.io/client-go/kubernetes"
 )
 
@@ -43,15 +43,17 @@ func NewEndpointProcessor(config *kubevip.Config, provider providers.Provider, b
 	}
 }
 
-func (p *Processor) AddOrModify(svcCtx *servicecontext.Context, event watch.Event,
+func (p *Processor) AddOrModify(svcCtx *servicecontext.Context, events debauncer.AggregatedEvent,
 	lastKnownGoodEndpoint *string, service *v1.Service, id string,
 	serviceFunc func(*servicecontext.Context, *v1.Service, *sync.WaitGroup, bool) error, wg *sync.WaitGroup,
 	clientSet *kubernetes.Clientset,
 	egressUpdateFunc func(context.Context, *v1.Service) error) (bool, error) {
 
 	var err error
-	if err = p.provider.LoadObject(event.Object, svcCtx.Cancel); err != nil {
-		return false, fmt.Errorf("[%s] error loading k8s object: %w", p.provider.GetLabel(), err)
+	for _, event := range events.Events {
+		if err = p.provider.LoadObject(event.Object, svcCtx.Cancel); err != nil {
+			return false, fmt.Errorf("[%s] error loading k8s object: %w", p.provider.GetLabel(), err)
+		}
 	}
 
 	endpoints, err := p.worker.getEndpoints(service, id)

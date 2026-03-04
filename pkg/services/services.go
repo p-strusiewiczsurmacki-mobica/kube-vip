@@ -2,6 +2,7 @@ package services
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"slices"
@@ -316,6 +317,7 @@ func (p *Processor) addService(ctx context.Context, inst *instance.Instance, svc
 				if !p.config.EnableEndpoints && utils.IsIPv6(serviceIP) {
 					podIPs = svc.Annotations[kubevip.ActiveEndpointIPv6]
 				}
+				log.Debug("[service] configuring egress IPv4", "service ip", serviceIP, "pod ip", podIPs)
 				err = p.configureEgress(ctx, serviceIP, podIPs, svc.Namespace, string(svc.UID), svc.Annotations)
 				if err != nil {
 					errList = append(errList, err)
@@ -714,104 +716,108 @@ func (p *Processor) updateStatus(ctx context.Context, i *instance.Instance) erro
 		Jitter:   0.1,
 	}
 	// will retry for every error encountered, TODO: should a list of errors that will trigger retry be specified?
-	err := retry.OnError(retryConfig, func(error) bool { return true }, func() error {
-		// Retrieve the latest version of Deployment before attempting update
-		// RetryOnConflict uses exponential backoff to avoid exhausting the apiserver
-		currentService, err := p.clientSet.CoreV1().Services(i.ServiceSnapshot.Namespace).Get(ctx, i.ServiceSnapshot.Name, metav1.GetOptions{})
-		if err != nil {
-			return err
-		}
-
-		currentServiceCopy := currentService.DeepCopy()
-		if currentServiceCopy.Annotations == nil {
-			currentServiceCopy.Annotations = make(map[string]string)
-		}
-
-		// If we're using ARP then we can only broadcast the VIP from one place, also useful for other software when running BGP, add an annotation to the service
-		if p.config.EnableARP || p.config.EnableBGP {
-			// Add the current host
-			currentServiceCopy.Annotations[kubevip.VipHost] = p.config.NodeName
-		}
-		if i.DHCPInterfaceHwaddr != "" || i.DHCPInterfaceIPv4 != "" || i.DHCPInterfaceIPv6 != "" {
-			currentServiceCopy.Annotations[kubevip.HwAddrKey] = i.DHCPInterfaceHwaddr
-			dhcpInterfaceIP := ""
-			if i.DHCPInterfaceIPv4 != "" {
-				dhcpInterfaceIP = i.DHCPInterfaceIPv4
-				if i.DHCPInterfaceIPv6 != "" {
-					dhcpInterfaceIP += ","
-				}
-			}
-			if i.DHCPInterfaceIPv6 != "" {
-				dhcpInterfaceIP += i.DHCPInterfaceIPv6
-			}
-			currentServiceCopy.Annotations[kubevip.RequestedIP] = dhcpInterfaceIP
-		}
-
-		if currentService.Annotations["development.kube-vip.io/synthetic-api-server-error-on-update"] == "true" {
-			log.Error("(Synthetic error ) updating Spec", "service", i.ServiceSnapshot.Name, "err", err)
-			return fmt.Errorf("(Synthetic) simulating api server errors")
-		}
-
-		if !cmp.Equal(currentService, currentServiceCopy) {
-			currentService, err = p.clientSet.CoreV1().Services(currentServiceCopy.Namespace).Update(ctx, currentServiceCopy, metav1.UpdateOptions{})
+	err := retry.OnError(retryConfig,
+		func(err error) bool {
+			return !errors.Is(err, context.Canceled)
+		},
+		func() error {
+			// Retrieve the latest version of Deployment before attempting update
+			// RetryOnConflict uses exponential backoff to avoid exhausting the apiserver
+			currentService, err := p.clientSet.CoreV1().Services(i.ServiceSnapshot.Namespace).Get(ctx, i.ServiceSnapshot.Name, metav1.GetOptions{})
 			if err != nil {
-				log.Error("updating Spec", "service", i.ServiceSnapshot.Name, "err", err)
 				return err
 			}
-		}
 
-		ports := make([]v1.PortStatus, 0, len(i.ServiceSnapshot.Spec.Ports))
-		for _, port := range i.ServiceSnapshot.Spec.Ports {
-			ports = append(ports, v1.PortStatus{
-				Port:     port.Port,
-				Protocol: port.Protocol,
-			})
-		}
+			currentServiceCopy := currentService.DeepCopy()
+			if currentServiceCopy.Annotations == nil {
+				currentServiceCopy.Annotations = make(map[string]string)
+			}
 
-		ingresses := []v1.LoadBalancerIngress{}
+			// If we're using ARP then we can only broadcast the VIP from one place, also useful for other software when running BGP, add an annotation to the service
+			if p.config.EnableARP || p.config.EnableBGP {
+				// Add the current host
+				currentServiceCopy.Annotations[kubevip.VipHost] = p.config.NodeName
+			}
+			if i.DHCPInterfaceHwaddr != "" || i.DHCPInterfaceIPv4 != "" || i.DHCPInterfaceIPv6 != "" {
+				currentServiceCopy.Annotations[kubevip.HwAddrKey] = i.DHCPInterfaceHwaddr
+				dhcpInterfaceIP := ""
+				if i.DHCPInterfaceIPv4 != "" {
+					dhcpInterfaceIP = i.DHCPInterfaceIPv4
+					if i.DHCPInterfaceIPv6 != "" {
+						dhcpInterfaceIP += ","
+					}
+				}
+				if i.DHCPInterfaceIPv6 != "" {
+					dhcpInterfaceIP += i.DHCPInterfaceIPv6
+				}
+				currentServiceCopy.Annotations[kubevip.RequestedIP] = dhcpInterfaceIP
+			}
 
-		for _, c := range i.VIPConfigs {
-			if !utils.IsIP(c.VIP) {
-				ips, err := utils.LookupHost(c.VIP, c.DNSMode, *i.ServiceSnapshot.Spec.IPFamilyPolicy == v1.IPFamilyPolicyRequireDualStack)
+			if currentService.Annotations["development.kube-vip.io/synthetic-api-server-error-on-update"] == "true" {
+				log.Error("(Synthetic error) updating Spec", "service", i.ServiceSnapshot.Name, "err", err)
+				return fmt.Errorf("(Synthetic) simulating api server errors")
+			}
+
+			if !cmp.Equal(currentService, currentServiceCopy) {
+				currentService, err = p.clientSet.CoreV1().Services(currentServiceCopy.Namespace).Update(ctx, currentServiceCopy, metav1.UpdateOptions{})
 				if err != nil {
+					log.Error("updating Spec", "service", i.ServiceSnapshot.Name, "err", err)
 					return err
 				}
-				for _, ip := range ips {
+			}
+
+			ports := make([]v1.PortStatus, 0, len(i.ServiceSnapshot.Spec.Ports))
+			for _, port := range i.ServiceSnapshot.Spec.Ports {
+				ports = append(ports, v1.PortStatus{
+					Port:     port.Port,
+					Protocol: port.Protocol,
+				})
+			}
+
+			ingresses := []v1.LoadBalancerIngress{}
+
+			for _, c := range i.VIPConfigs {
+				if !utils.IsIP(c.VIP) {
+					ips, err := utils.LookupHost(c.VIP, c.DNSMode, *i.ServiceSnapshot.Spec.IPFamilyPolicy == v1.IPFamilyPolicyRequireDualStack)
+					if err != nil {
+						return err
+					}
+					for _, ip := range ips {
+						i := v1.LoadBalancerIngress{
+							IP:    ip,
+							Ports: ports,
+						}
+						ingresses = append(ingresses, i)
+					}
+				} else {
 					i := v1.LoadBalancerIngress{
-						IP:    ip,
+						IP:    c.VIP,
 						Ports: ports,
 					}
 					ingresses = append(ingresses, i)
 				}
-			} else {
-				i := v1.LoadBalancerIngress{
-					IP:    c.VIP,
-					Ports: ports,
-				}
-				ingresses = append(ingresses, i)
-			}
-			if isUPNPEnabled(currentService) {
-				for _, ip := range i.UPNPGatewayIPs {
-					i := v1.LoadBalancerIngress{
-						IP:    ip,
-						Ports: ports,
+				if isUPNPEnabled(currentService) {
+					for _, ip := range i.UPNPGatewayIPs {
+						i := v1.LoadBalancerIngress{
+							IP:    ip,
+							Ports: ports,
+						}
+						ingresses = append(ingresses, i)
 					}
-					ingresses = append(ingresses, i)
 				}
 			}
-		}
-		log.Debug("LB status", "current", currentService.Status.LoadBalancer.Ingress, "new", ingresses)
-		if !ingressEqual(currentService.Status.LoadBalancer.Ingress, ingresses) {
-			currentService.Status.LoadBalancer.Ingress = ingresses
-			log.Debug("updating service status", "namespace", currentService.Namespace, "name", currentService.Name, "uid", currentService.UID)
-			_, err = p.clientSet.CoreV1().Services(currentService.Namespace).UpdateStatus(ctx, currentService, metav1.UpdateOptions{})
-			if err != nil && !apierrors.IsInvalid(err) {
-				log.Error("updating Service", "namespace", i.ServiceSnapshot.Namespace, "name", i.ServiceSnapshot.Name, "err", err)
-				return err
+			log.Debug("LB status", "current", currentService.Status.LoadBalancer.Ingress, "new", ingresses)
+			if !ingressEqual(currentService.Status.LoadBalancer.Ingress, ingresses) {
+				currentService.Status.LoadBalancer.Ingress = ingresses
+				log.Debug("updating service status", "namespace", currentService.Namespace, "name", currentService.Name, "uid", currentService.UID)
+				_, err = p.clientSet.CoreV1().Services(currentService.Namespace).UpdateStatus(ctx, currentService, metav1.UpdateOptions{})
+				if err != nil && !apierrors.IsInvalid(err) {
+					log.Error("updating Service", "namespace", i.ServiceSnapshot.Namespace, "name", i.ServiceSnapshot.Name, "err", err)
+					return err
+				}
 			}
-		}
-		return nil
-	})
+			return nil
+		})
 
 	return err
 }

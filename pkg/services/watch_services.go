@@ -102,10 +102,9 @@ func (p *Processor) ServicesWatcher(ctx context.Context, serviceFunc *Callback) 
 		rw.Stop()
 		p.Stop()
 	})
-	ch := rw.ResultChan()
 
 	// Used for tracking an active endpoint / pod
-	for event := range ch {
+	for event := range rw.ResultChan() {
 		p.CountServiceWatchEvent.With(prometheus.Labels{"type": string(event.Type)}).Add(1)
 
 		// We need to inspect the event and get ResourceVersion out of it

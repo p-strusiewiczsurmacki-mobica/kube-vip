@@ -51,6 +51,7 @@ func (b *BGP) clear(svcCtx *servicecontext.Context, lastKnownGoodEndpoint *strin
 		if instance := instance.FindServiceInstance(service, *b.instances); instance != nil {
 			for _, cluster := range instance.Clusters {
 				for i := range cluster.Network {
+					log.Debug("DELET HOST 1", "servie", service.Name, "cidr", cluster.Network[i].CIDR())
 					err := b.bgpServer.DelHost(svcCtx.Ctx, cluster.Network[i].CIDR())
 					if err != nil {
 						log.Error("deleting BGP host", "service", fmt.Sprintf("%s/%s", service.Namespace, service.Name), "provider", b.provider.GetLabel(), "ip", cluster.Network[i].IP(), "err", err)
@@ -120,6 +121,7 @@ func ClearBGPHostsByInstance(ctx context.Context, instance *instance.Instance, b
 	for _, cluster := range instance.Clusters {
 		for i := range cluster.Network {
 			network := cluster.Network[i]
+			log.Debug("DELET HOST 2", "cidr", network.CIDR())
 			err := bgpServer.DelHost(ctx, network.CIDR())
 			if err != nil {
 				log.Error("[endpoint] error deleting BGP host", "err", err)
