@@ -13,11 +13,10 @@ import (
 
 // Cluster - The Cluster object manages the state of the cluster for a particular node
 type Cluster struct {
-	stop      chan bool
-	completed chan bool
-	once      sync.Once
-	Network   []vip.Network
-	arpMgr    *arp.Manager
+	stop    chan bool
+	once    sync.Once
+	Network []vip.Network
+	arpMgr  *arp.Manager
 }
 
 // InitCluster - Will attempt to initialise all of the required settings for the cluster
@@ -36,6 +35,7 @@ func InitCluster(c *kubevip.Config, disableVIP bool, intfMgr *networkinterface.M
 	newCluster := &Cluster{
 		Network: networks,
 		arpMgr:  arpMgr,
+		stop:    make(chan bool),
 	}
 
 	log.Debug("service security", "enabled", c.EnableServiceSecurity)
@@ -64,17 +64,4 @@ func startNetworking(c *kubevip.Config, intfMgr *networkinterface.Manager) ([]vi
 	}
 
 	return networks, nil
-}
-
-// Stop - Will stop the Cluster and release VIP if needed
-func (cluster *Cluster) Stop() {
-	// Close the stop channel, which will shut down the VIP (if needed)
-	if cluster.stop != nil {
-		cluster.once.Do(func() { // Ensure that the close channel can only ever be called once
-			close(cluster.stop)
-		})
-	}
-
-	// Wait until the completed channel is closed, signallign all shutdown tasks completed
-	<-cluster.completed
 }
