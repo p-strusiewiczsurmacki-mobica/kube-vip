@@ -38,6 +38,7 @@ func (d *debauncer) Run(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case tmp := <-d.input:
+			log.Debug("EVENT", "got", tmp)
 			event = &tmp
 			t.Reset(time.Second * 2)
 		case <-t.C:
@@ -87,6 +88,7 @@ func (p *Processor) watchEndpoint(svcCtx *servicecontext.Context, id string, ser
 		switch event.Type {
 
 		case watch.Added, watch.Modified:
+			log.Debug("EVENT EXECUTION - ADD OR MODIFY")
 			restart, err := epProcessor.AddOrModify(svcCtx, event, &lastKnownGoodEndpoint, service, id, p.StartServicesLeaderElection, &wg)
 			if restart {
 				continue
@@ -94,6 +96,7 @@ func (p *Processor) watchEndpoint(svcCtx *servicecontext.Context, id string, ser
 				return fmt.Errorf("[%s] error while processing add/modify event: %w", provider.GetLabel(), err)
 			}
 		case watch.Deleted:
+			log.Debug("EVENT EXECUTION - DELETED")
 			if err := epProcessor.Delete(svcCtx.Ctx, service, id); err != nil {
 				return fmt.Errorf("[%s] error while processing delete event: %w", provider.GetLabel(), err)
 			}
@@ -101,6 +104,7 @@ func (p *Processor) watchEndpoint(svcCtx *servicecontext.Context, id string, ser
 			log.Info("stopping watching", "provider", provider.GetLabel(), "service name", service.Name, "namespace", service.Namespace)
 			return nil
 		case watch.Error:
+			log.Debug("EVENT EXECUTION - ERROR")
 			errObject := apierrors.FromObject(event.Object)
 			statusErr, _ := errObject.(*apierrors.StatusError)
 			log.Error("watch error", "provider", provider.GetLabel(), "err", statusErr)
