@@ -19,6 +19,7 @@ import (
 type debauncer struct {
 	input  <-chan watch.Event
 	output chan watch.Event
+	closed chan any
 }
 
 func newDebauncer(input <-chan watch.Event) *debauncer {
@@ -36,6 +37,7 @@ func (d *debauncer) Run(ctx context.Context) {
 	for {
 		select {
 		case <-ctx.Done():
+			close(d.closed)
 			return
 		case tmp := <-d.input:
 			log.Debug("EVENT", "got", tmp)
@@ -60,6 +62,10 @@ func (p *Processor) watchEndpoint(svcCtx *servicecontext.Context, id string, ser
 		return fmt.Errorf("[%s] error watching endpoints: %w", provider.GetLabel(), err)
 	}
 
+	ch := rw.ResultChan()
+
+	debauncer := newDebauncer(ch)
+
 	wg := sync.WaitGroup{}
 
 	defer func() {
@@ -68,19 +74,14 @@ func (p *Processor) watchEndpoint(svcCtx *servicecontext.Context, id string, ser
 	}()
 
 	wg.Go(func() {
+		debauncer.Run(svcCtx.Ctx)
 		<-svcCtx.Ctx.Done()
 		log.Debug("context cancelled", "provider", provider.GetLabel())
+		<-debauncer.closed
 		rw.Stop()
 	})
 
-	ch := rw.ResultChan()
-
 	epProcessor := endpoints.NewEndpointProcessor(p.config, provider, p.bgpServer, &p.ServiceInstances, p.leaseMgr, p.TunnelMgr)
-
-	debauncer := newDebauncer(ch)
-	wg.Go(func() {
-		debauncer.Run(svcCtx.Ctx)
-	})
 
 	var lastKnownGoodEndpoint string
 	for event := range debauncer.output {
