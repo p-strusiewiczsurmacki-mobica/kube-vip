@@ -85,6 +85,7 @@ func (p *Processor) watchEndpoint(svcCtx *servicecontext.Context, id string, ser
 		rw.Stop()
 		log.Debug("RW STOPPED")
 		wg.Wait()
+		log.Debug("WG READY")
 	}()
 
 	wg.Go(func() {
@@ -92,7 +93,9 @@ func (p *Processor) watchEndpoint(svcCtx *servicecontext.Context, id string, ser
 		// <-svcCtx.Ctx.Done()
 		// log.Debug("context cancelled", "provider", provider.GetLabel())
 		<-debauncer.closed
+		log.Debug("WG RW STOP")
 		rw.Stop()
+		log.Debug("WG RW STOPPED")
 	})
 
 	epProcessor := endpoints.NewEndpointProcessor(p.config, provider, p.bgpServer, &p.ServiceInstances, p.leaseMgr, p.TunnelMgr)
