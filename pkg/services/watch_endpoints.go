@@ -1,8 +1,10 @@
 package services
 
 import (
+	"context"
 	"fmt"
 	"sync"
+	"time"
 
 	log "log/slog"
 
@@ -13,6 +15,40 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/watch"
 )
+
+type debauncer struct {
+	input  <-chan watch.Event
+	output chan watch.Event
+}
+
+func newDebauncer(input <-chan watch.Event) *debauncer {
+	return &debauncer{
+		input:  input,
+		output: make(chan watch.Event),
+	}
+}
+
+func (d *debauncer) Run(ctx context.Context) {
+	t := time.NewTicker(time.Second * 2)
+	defer t.Stop()
+	var event *watch.Event
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case tmp := <-d.input:
+			event = &tmp
+			t.Reset(time.Second * 2)
+		case <-t.C:
+			if event != nil {
+				d.output <- *event
+				event = nil
+			}
+
+		}
+	}
+}
 
 func (p *Processor) watchEndpoint(svcCtx *servicecontext.Context, id string, service *v1.Service, provider providers.Provider) error {
 	log.Info("watching", "provider", provider.GetLabel(), "service_name", service.Name, "namespace", service.Namespace)
@@ -40,8 +76,13 @@ func (p *Processor) watchEndpoint(svcCtx *servicecontext.Context, id string, ser
 
 	epProcessor := endpoints.NewEndpointProcessor(p.config, provider, p.bgpServer, &p.ServiceInstances, p.leaseMgr, p.TunnelMgr)
 
+	debauncer := newDebauncer(ch)
+	wg.Go(func() {
+		debauncer.Run(svcCtx.Ctx)
+	})
+
 	var lastKnownGoodEndpoint string
-	for event := range ch {
+	for event := range debauncer.output {
 		// We need to inspect the event and get ResourceVersion out of it
 		switch event.Type {
 
