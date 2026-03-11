@@ -18,21 +18,22 @@ import (
 )
 
 type debauncer struct {
-	rw     *watchtools.RetryWatcher
-	input  <-chan watch.Event
-	output chan watch.Event
-	closed chan any
+	rw       *watchtools.RetryWatcher
+	input    <-chan watch.Event
+	output   chan watch.Event
+	stopChan chan any
 }
 
 func newDebauncer(rw *watchtools.RetryWatcher) *debauncer {
 	return &debauncer{
-		rw:     rw,
-		input:  rw.ResultChan(),
-		output: make(chan watch.Event),
+		rw:       rw,
+		input:    rw.ResultChan(),
+		output:   make(chan watch.Event),
+		stopChan: make(chan any),
 	}
 }
 
-func (d *debauncer) Run(ctx context.Context) {
+func (d *debauncer) run(ctx context.Context) {
 	t := time.NewTicker(time.Second * 2)
 	defer func() {
 		close(d.output)
@@ -44,6 +45,8 @@ func (d *debauncer) Run(ctx context.Context) {
 	for {
 		select {
 		case <-ctx.Done():
+			return
+		case <-d.stopChan:
 			return
 		case tmp := <-d.input:
 			log.Debug("EVENT", "got", tmp)
@@ -58,6 +61,10 @@ func (d *debauncer) Run(ctx context.Context) {
 	}
 }
 
+func (d *debauncer) stop() {
+	close(d.stopChan)
+}
+
 func (p *Processor) watchEndpoint(svcCtx *servicecontext.Context, id string, service *v1.Service, provider providers.Provider) error {
 	log.Info("watching", "provider", provider.GetLabel(), "service_name", service.Name, "namespace", service.Namespace)
 	// Use a restartable watcher, as this should help in the event of etcd or timeout issues
@@ -67,23 +74,22 @@ func (p *Processor) watchEndpoint(svcCtx *servicecontext.Context, id string, ser
 		return fmt.Errorf("[%s] error watching endpoints: %w", provider.GetLabel(), err)
 	}
 
-	dbCtx, dbCancel := context.WithCancel(svcCtx.Ctx)
+	d := newDebauncer(rw)
 
 	wg := sync.WaitGroup{}
 	defer func() {
-		dbCancel()
+		d.stop()
 		wg.Wait()
 	}()
 
-	d := newDebauncer(rw)
-
 	wg.Go(func() {
-		d.Run(dbCtx)
+		d.run(svcCtx.Ctx)
 	})
 
 	wg.Go(func() {
 		<-svcCtx.Ctx.Done()
 		log.Debug("context cancelled", "provider", provider.GetLabel())
+		d.stop()
 	})
 
 	epProcessor := endpoints.NewEndpointProcessor(p.config, provider, p.bgpServer, &p.ServiceInstances, p.leaseMgr, p.TunnelMgr)
