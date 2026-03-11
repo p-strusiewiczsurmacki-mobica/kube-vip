@@ -44,7 +44,6 @@ func (d *debauncer) Run(ctx context.Context) {
 	for {
 		select {
 		case <-ctx.Done():
-			fmt.Println("RETURNING FROM DEBAUNCER")
 			return
 		case tmp := <-d.input:
 			log.Debug("EVENT", "got", tmp)
@@ -68,13 +67,18 @@ func (p *Processor) watchEndpoint(svcCtx *servicecontext.Context, id string, ser
 		return fmt.Errorf("[%s] error watching endpoints: %w", provider.GetLabel(), err)
 	}
 
+	dbCtx, dbCancel := context.WithCancel(svcCtx.Ctx)
+
 	wg := sync.WaitGroup{}
-	defer wg.Wait()
+	defer func() {
+		dbCancel()
+		wg.Wait()
+	}()
 
 	d := newDebauncer(rw)
 
 	wg.Go(func() {
-		d.Run(svcCtx.Ctx)
+		d.Run(dbCtx)
 	})
 
 	wg.Go(func() {
