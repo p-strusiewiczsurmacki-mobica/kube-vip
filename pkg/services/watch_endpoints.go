@@ -14,30 +14,31 @@ import (
 	v1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/watch"
+	watchtools "k8s.io/client-go/tools/watch"
 )
 
 type debauncer struct {
+	rw     *watchtools.RetryWatcher
 	input  <-chan watch.Event
 	output chan watch.Event
 	closed chan any
 }
 
-func newDebauncer(input <-chan watch.Event) *debauncer {
+func newDebauncer(rw *watchtools.RetryWatcher) *debauncer {
 	return &debauncer{
-		input:  input,
+		rw:     rw,
+		input:  rw.ResultChan(),
 		output: make(chan watch.Event),
-		closed: make(chan any),
 	}
 }
 
 func (d *debauncer) Run(ctx context.Context) {
-	defer func() {
-		close(d.closed)
-		close(d.output)
-		fmt.Println("CLOSED DEBAUNCER CHANS")
-	}()
 	t := time.NewTicker(time.Second * 2)
-	defer t.Stop()
+	defer func() {
+		close(d.output)
+		d.rw.Stop()
+	}()
+
 	var event *watch.Event
 
 	for {
@@ -68,29 +69,17 @@ func (p *Processor) watchEndpoint(svcCtx *servicecontext.Context, id string, ser
 	}
 
 	wg := sync.WaitGroup{}
+	defer wg.Wait()
 
-	d := newDebauncer(rw.ResultChan())
+	d := newDebauncer(rw)
 
-	defer func() {
-		<-d.closed
-		rw.Stop()
-		wg.Wait()
-	}()
-
-	dbCtx, dbCancel := context.WithCancel(svcCtx.Ctx)
-	defer func() {
-		dbCancel()
-		fmt.Println("CANCELLED DEBAUNCER CTX")
-	}()
-
-	go d.Run(dbCtx)
+	wg.Go(func() {
+		d.Run(svcCtx.Ctx)
+	})
 
 	wg.Go(func() {
 		<-svcCtx.Ctx.Done()
 		log.Debug("context cancelled", "provider", provider.GetLabel())
-		dbCancel()
-		<-d.closed
-		rw.Stop()
 	})
 
 	epProcessor := endpoints.NewEndpointProcessor(p.config, provider, p.bgpServer, &p.ServiceInstances, p.leaseMgr, p.TunnelMgr)
