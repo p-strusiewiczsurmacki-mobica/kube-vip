@@ -26,6 +26,7 @@ func newDebauncer(input <-chan watch.Event) *debauncer {
 	return &debauncer{
 		input:  input,
 		output: make(chan watch.Event),
+		closed: make(chan any),
 	}
 }
 
