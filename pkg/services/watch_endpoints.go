@@ -22,6 +22,7 @@ type debauncer struct {
 	input    <-chan watch.Event
 	output   chan watch.Event
 	stopChan chan any
+	stopOnce sync.Once
 }
 
 func newDebauncer(rw *watchtools.RetryWatcher) *debauncer {
@@ -62,7 +63,9 @@ func (d *debauncer) run(ctx context.Context) {
 }
 
 func (d *debauncer) stop() {
-	close(d.stopChan)
+	d.stopOnce.Do(func() {
+		close(d.stopChan)
+	})
 }
 
 func (p *Processor) watchEndpoint(svcCtx *servicecontext.Context, id string, service *v1.Service, provider providers.Provider) error {
