@@ -41,9 +41,14 @@ func (d *debauncer) Run(ctx context.Context) {
 			close(d.closed)
 			return
 		case tmp := <-d.input:
-			log.Debug("EVENT", "got", tmp)
-			event = &tmp
-			t.Reset(time.Second * 2)
+			if tmp.Object != nil {
+				log.Debug("EVENT", "got", tmp)
+				event = &tmp
+				t.Reset(time.Second * 2)
+			} else {
+				close(d.closed)
+				return
+			}
 		case <-t.C:
 			if event != nil {
 				d.output <- *event
