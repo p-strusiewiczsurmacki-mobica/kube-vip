@@ -2,6 +2,7 @@ package services
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"slices"
@@ -42,12 +43,12 @@ const (
 	defaultUPNPLeaseDuration = 1 * time.Hour
 )
 
-func (p *Processor) SyncServices(ctx *servicecontext.Context, svc *v1.Service, wg *sync.WaitGroup) error {
+func (p *Processor) SyncServices(ctx *servicecontext.Context, svc *v1.Service, wg *sync.WaitGroup, usesLeaderElection bool) error {
 	log.Debug("[STARTING] Service Sync", "namespace", svc.Namespace, "name", svc.Name, "uid", svc.UID)
 
 	// Iterate through the synchronising services
 
-	action := p.getServiceInstanceAction(svc)
+	action, instance := p.getServiceInstanceAction(svc)
 	switch action {
 	case ActionDelete:
 		// remove the label from the node before deleting the service
@@ -61,7 +62,19 @@ func (p *Processor) SyncServices(ctx *servicecontext.Context, svc *v1.Service, w
 		}
 	case ActionAdd:
 		log.Debug("[service] add", "namespace", svc.Namespace, "name", svc.Name, "uid", svc.UID)
-		if err := p.addService(ctx.Ctx, svc, wg); err != nil {
+		if instance != nil {
+			instance.AddCalled = true
+		}
+
+		if !usesLeaderElection {
+			select {
+			case <-ctx.Ctx.Done():
+				return nil
+			case <-ctx.EndpointsReady:
+			}
+		}
+
+		if err := p.addService(ctx.Ctx, instance, svc, wg); err != nil {
 			return fmt.Errorf("error adding service %s/%s: %w", svc.Namespace, svc.Name, err)
 		}
 
@@ -76,7 +89,7 @@ func (p *Processor) SyncServices(ctx *servicecontext.Context, svc *v1.Service, w
 	return nil
 }
 
-func (p *Processor) getServiceInstanceAction(svc *v1.Service) ServiceInstanceAction {
+func (p *Processor) getServiceInstanceAction(svc *v1.Service) (ServiceInstanceAction, *instance.Instance) {
 	// protect against multiple calls
 	// get the annotations or legacy values from manual configuration
 	addresses, hostnames := instance.FetchServiceAddresses(svc)
@@ -87,51 +100,54 @@ func (p *Processor) getServiceInstanceAction(svc *v1.Service) ServiceInstanceAct
 
 	for _, instance := range p.ServiceInstances {
 		if instance != nil && instance.ServiceSnapshot.UID == svc.UID {
+			if !instance.AddCalled {
+				return ActionAdd, instance
+			}
 			for _, address := range addresses {
 				// handle the case where the service instance needs to be deleted
 				if instance.IsDHCPv4 {
 					if address != "0.0.0.0" {
-						return ActionDelete
+						return ActionDelete, instance
 					}
 					if len(svc.Status.LoadBalancer.Ingress) > 0 && !slices.Contains(statusAddresses, instance.DHCPInterfaceIPv4) {
-						return ActionDelete
+						return ActionDelete, instance
 					}
 				} else {
 					if address == "0.0.0.0" {
-						return ActionDelete
+						return ActionDelete, instance
 					}
 					if len(svc.Status.LoadBalancer.Ingress) > 0 && !slices.Contains(statusAddresses, address) {
-						return ActionDelete
+						return ActionDelete, instance
 					}
 				}
 				if instance.IsDHCPv6 {
 					if address != "::" {
-						return ActionDelete
+						return ActionDelete, instance
 					}
 					if len(svc.Status.LoadBalancer.Ingress) > 0 && !slices.Contains(statusAddresses, instance.DHCPInterfaceIPv6) {
-						return ActionDelete
+						return ActionDelete, instance
 					}
 				} else {
 					if address == "::" {
-						return ActionDelete
+						return ActionDelete, instance
 					}
 					if len(svc.Status.LoadBalancer.Ingress) > 0 && !slices.Contains(statusAddresses, address) {
-						return ActionDelete
+						return ActionDelete, instance
 					}
 				}
 				if len(svc.Status.LoadBalancer.Ingress) > 0 && !comparePortsAndPortStatuses(svc) {
-					return ActionDelete
+					return ActionDelete, instance
 				}
 			}
 			// If we reach here, it means the service instance matches the service UID and is not a DHCP service, so we can return "no action"
-			return ActionNone
+			return ActionNone, instance
 		}
 	}
 	if len(addresses) > 0 || len(hostnames) > 0 {
 		log.Debug("no matching service instance found", "service", svc.Name, "namespace", svc.Namespace, "uid", svc.UID, "addresses", addresses, "hostnames", hostnames)
-		return ActionAdd // If no matching instance is found, we need to add a new service instance
+		return ActionAdd, nil // If no matching instance is found, we need to add a new service instance
 	}
-	return ActionNone
+	return ActionNone, nil
 }
 
 func comparePortsAndPortStatuses(svc *v1.Service) bool {
@@ -150,32 +166,38 @@ func comparePortsAndPortStatuses(svc *v1.Service) bool {
 	return true
 }
 
-func (p *Processor) addService(ctx context.Context, svc *v1.Service, wg *sync.WaitGroup) error {
+func (p *Processor) addService(ctx context.Context, inst *instance.Instance, svc *v1.Service, wg *sync.WaitGroup) error {
 	// protect against addService while reading
 	p.mutex.Lock()
 	defer p.mutex.Unlock()
 
 	startTime := time.Now()
 
-	newService, err := instance.NewInstance(ctx, svc, p.config, p.intfMgr, p.arpMgr, wg)
-	if err != nil {
-		return err
+	var err error
+	if inst == nil {
+		inst, err = instance.NewInstance(ctx, svc, p.config, p.intfMgr, p.arpMgr, wg)
+		if err != nil {
+			return err
+		}
+		inst.AddCalled = true
+
+		p.ServiceInstances = append(p.ServiceInstances, inst)
 	}
 
-	for x := range newService.VIPConfigs {
+	for x := range inst.VIPConfigs {
 		log.Debug("starting loadbalancer for service", "name", svc.Name, "namespace", svc.Namespace, "uid", svc.UID)
-		if err := newService.Clusters[x].StartLoadBalancerService(ctx, newService.VIPConfigs[x], p.bgpServer, svc.Name, p.CountRouteReferences, wg); err != nil {
+		if err := inst.Clusters[x].StartLoadBalancerService(ctx, inst.VIPConfigs[x], p.bgpServer, svc.Name, p.CountRouteReferences, wg); err != nil {
 			return fmt.Errorf("failed to start lb: %w", err)
 		}
 	}
 
-	p.upnpMap(ctx, newService)
+	p.upnpMap(ctx, inst)
 
-	if newService.IsDHCPv4 {
+	if inst.IsDHCPv4 {
 		wg.Go(func() {
 			index := -1
-			for i := range newService.VIPConfigs {
-				ip := net.ParseIP(newService.VIPConfigs[i].VIP)
+			for i := range inst.VIPConfigs {
+				ip := net.ParseIP(inst.VIPConfigs[i].VIP)
 				if ip.To4() != nil {
 					index = i
 					break
@@ -184,12 +206,12 @@ func (p *Processor) addService(ctx context.Context, svc *v1.Service, wg *sync.Wa
 			if index == -1 {
 				log.Error("unable to find proper VIPConfig for the DHCPv4")
 			} else {
-				for ip := range newService.DHCPv4Client.IPChannel() {
+				for ip := range inst.DHCPv4Client.IPChannel() {
 					log.Debug("IP changed", "ip", ip)
-					newService.VIPConfigs[index].VIP = ip
-					newService.DHCPInterfaceIPv4 = ip
+					inst.VIPConfigs[index].VIP = ip
+					inst.DHCPInterfaceIPv4 = ip
 					if !p.config.DisableServiceUpdates {
-						if err := p.updateStatus(ctx, newService); err != nil {
+						if err := p.updateStatus(ctx, inst); err != nil {
 							log.Warn("updating svc", "err", err)
 						}
 					}
@@ -200,11 +222,11 @@ func (p *Processor) addService(ctx context.Context, svc *v1.Service, wg *sync.Wa
 		})
 	}
 
-	if newService.IsDHCPv6 {
+	if inst.IsDHCPv6 {
 		wg.Go(func() {
 			index := -1
-			for i := range newService.VIPConfigs {
-				ip := net.ParseIP(newService.VIPConfigs[i].VIP)
+			for i := range inst.VIPConfigs {
+				ip := net.ParseIP(inst.VIPConfigs[i].VIP)
 				if ip.To4() == nil {
 					index = i
 					break
@@ -213,12 +235,12 @@ func (p *Processor) addService(ctx context.Context, svc *v1.Service, wg *sync.Wa
 			if index == -1 {
 				log.Error("unable to find proper VIPConfig for the DHCPv6")
 			} else {
-				for ip := range newService.DHCPv4Client.IPChannel() {
+				for ip := range inst.DHCPv4Client.IPChannel() {
 					log.Debug("IP changed", "ip", ip)
-					newService.VIPConfigs[index].VIP = ip
-					newService.DHCPInterfaceIPv6 = ip
+					inst.VIPConfigs[index].VIP = ip
+					inst.DHCPInterfaceIPv6 = ip
 					if !p.config.DisableServiceUpdates {
-						if err := p.updateStatus(ctx, newService); err != nil {
+						if err := p.updateStatus(ctx, inst); err != nil {
 							log.Warn("updating svc", "err", err)
 						}
 					}
@@ -228,12 +250,10 @@ func (p *Processor) addService(ctx context.Context, svc *v1.Service, wg *sync.Wa
 		})
 	}
 
-	p.ServiceInstances = append(p.ServiceInstances, newService)
-
 	if !p.config.DisableServiceUpdates {
-		log.Debug("[service] update", "namespace", newService.ServiceSnapshot.Namespace, "name", newService.ServiceSnapshot.Name)
-		if err := p.updateStatus(ctx, newService); err != nil {
-			log.Error("[service] updating status", "namespace", newService.ServiceSnapshot.Namespace, "name", newService.ServiceSnapshot.Name, "err", err)
+		log.Debug("[service] update", "namespace", inst.ServiceSnapshot.Namespace, "name", inst.ServiceSnapshot.Name)
+		if err := p.updateStatus(ctx, inst); err != nil {
+			log.Error("[service] updating status", "namespace", inst.ServiceSnapshot.Namespace, "name", inst.ServiceSnapshot.Name, "err", err)
 		}
 	}
 
@@ -297,6 +317,7 @@ func (p *Processor) addService(ctx context.Context, svc *v1.Service, wg *sync.Wa
 				if !p.config.EnableEndpoints && utils.IsIPv6(serviceIP) {
 					podIPs = svc.Annotations[kubevip.ActiveEndpointIPv6]
 				}
+				log.Debug("[service] configuring egress IPv4", "service ip", serviceIP, "pod ip", podIPs)
 				err = p.configureEgress(ctx, serviceIP, podIPs, svc.Namespace, string(svc.UID), svc.Annotations)
 				if err != nil {
 					errList = append(errList, err)
@@ -406,9 +427,6 @@ func (p *Processor) deleteService(ctx context.Context, uid types.UID) error {
 			}
 		}
 
-		if p.config.EnableBGP {
-			endpoints.ClearBGPHostsByInstance(ctx, serviceInstance, p.bgpServer)
-		}
 		if p.config.EnableRoutingTable && (p.config.EnableLeaderElection || p.config.EnableServicesElection) {
 			if errs := endpoints.ClearRoutesByInstance(serviceInstance.ServiceSnapshot, serviceInstance, &p.ServiceInstances); len(errs) > 0 {
 				for _, err := range errs {
@@ -427,6 +445,10 @@ func (p *Processor) deleteService(ctx context.Context, uid types.UID) error {
 				}
 			}
 		}
+	}
+
+	if p.config.EnableBGP {
+		endpoints.ClearBGPHostsByInstance(ctx, serviceInstance, p.bgpServer)
 	}
 
 	// Update the service array
@@ -598,104 +620,108 @@ func (p *Processor) updateStatus(ctx context.Context, i *instance.Instance) erro
 		Jitter:   0.1,
 	}
 	// will retry for every error encountered, TODO: should a list of errors that will trigger retry be specified?
-	err := retry.OnError(retryConfig, func(error) bool { return true }, func() error {
-		// Retrieve the latest version of Deployment before attempting update
-		// RetryOnConflict uses exponential backoff to avoid exhausting the apiserver
-		currentService, err := p.clientSet.CoreV1().Services(i.ServiceSnapshot.Namespace).Get(ctx, i.ServiceSnapshot.Name, metav1.GetOptions{})
-		if err != nil {
-			return err
-		}
-
-		currentServiceCopy := currentService.DeepCopy()
-		if currentServiceCopy.Annotations == nil {
-			currentServiceCopy.Annotations = make(map[string]string)
-		}
-
-		// If we're using ARP then we can only broadcast the VIP from one place, also useful for other software when running BGP, add an annotation to the service
-		if p.config.EnableARP || p.config.EnableBGP {
-			// Add the current host
-			currentServiceCopy.Annotations[kubevip.VipHost] = p.config.NodeName
-		}
-		if i.DHCPInterfaceHwaddr != "" || i.DHCPInterfaceIPv4 != "" || i.DHCPInterfaceIPv6 != "" {
-			currentServiceCopy.Annotations[kubevip.HwAddrKey] = i.DHCPInterfaceHwaddr
-			dhcpInterfaceIP := ""
-			if i.DHCPInterfaceIPv4 != "" {
-				dhcpInterfaceIP = i.DHCPInterfaceIPv4
-				if i.DHCPInterfaceIPv6 != "" {
-					dhcpInterfaceIP += ","
-				}
-			}
-			if i.DHCPInterfaceIPv6 != "" {
-				dhcpInterfaceIP += i.DHCPInterfaceIPv6
-			}
-			currentServiceCopy.Annotations[kubevip.RequestedIP] = dhcpInterfaceIP
-		}
-
-		if currentService.Annotations["development.kube-vip.io/synthetic-api-server-error-on-update"] == "true" {
-			log.Error("(Synthetic error ) updating Spec", "service", i.ServiceSnapshot.Name, "err", err)
-			return fmt.Errorf("(Synthetic) simulating api server errors")
-		}
-
-		if !cmp.Equal(currentService, currentServiceCopy) {
-			currentService, err = p.clientSet.CoreV1().Services(currentServiceCopy.Namespace).Update(ctx, currentServiceCopy, metav1.UpdateOptions{})
+	err := retry.OnError(retryConfig,
+		func(err error) bool {
+			return !errors.Is(err, context.Canceled)
+		},
+		func() error {
+			// Retrieve the latest version of Deployment before attempting update
+			// RetryOnConflict uses exponential backoff to avoid exhausting the apiserver
+			currentService, err := p.clientSet.CoreV1().Services(i.ServiceSnapshot.Namespace).Get(ctx, i.ServiceSnapshot.Name, metav1.GetOptions{})
 			if err != nil {
-				log.Error("updating Spec", "service", i.ServiceSnapshot.Name, "err", err)
 				return err
 			}
-		}
 
-		ports := make([]v1.PortStatus, 0, len(i.ServiceSnapshot.Spec.Ports))
-		for _, port := range i.ServiceSnapshot.Spec.Ports {
-			ports = append(ports, v1.PortStatus{
-				Port:     port.Port,
-				Protocol: port.Protocol,
-			})
-		}
+			currentServiceCopy := currentService.DeepCopy()
+			if currentServiceCopy.Annotations == nil {
+				currentServiceCopy.Annotations = make(map[string]string)
+			}
 
-		ingresses := []v1.LoadBalancerIngress{}
+			// If we're using ARP then we can only broadcast the VIP from one place, also useful for other software when running BGP, add an annotation to the service
+			if p.config.EnableARP || p.config.EnableBGP {
+				// Add the current host
+				currentServiceCopy.Annotations[kubevip.VipHost] = p.config.NodeName
+			}
+			if i.DHCPInterfaceHwaddr != "" || i.DHCPInterfaceIPv4 != "" || i.DHCPInterfaceIPv6 != "" {
+				currentServiceCopy.Annotations[kubevip.HwAddrKey] = i.DHCPInterfaceHwaddr
+				dhcpInterfaceIP := ""
+				if i.DHCPInterfaceIPv4 != "" {
+					dhcpInterfaceIP = i.DHCPInterfaceIPv4
+					if i.DHCPInterfaceIPv6 != "" {
+						dhcpInterfaceIP += ","
+					}
+				}
+				if i.DHCPInterfaceIPv6 != "" {
+					dhcpInterfaceIP += i.DHCPInterfaceIPv6
+				}
+				currentServiceCopy.Annotations[kubevip.RequestedIP] = dhcpInterfaceIP
+			}
 
-		for _, c := range i.VIPConfigs {
-			if !utils.IsIP(c.VIP) {
-				ips, err := utils.LookupHost(c.VIP, c.DNSMode, *i.ServiceSnapshot.Spec.IPFamilyPolicy == v1.IPFamilyPolicyRequireDualStack)
+			if currentService.Annotations["development.kube-vip.io/synthetic-api-server-error-on-update"] == "true" {
+				log.Error("(Synthetic error) updating Spec", "service", i.ServiceSnapshot.Name, "err", err)
+				return fmt.Errorf("(Synthetic) simulating api server errors")
+			}
+
+			if !cmp.Equal(currentService, currentServiceCopy) {
+				currentService, err = p.clientSet.CoreV1().Services(currentServiceCopy.Namespace).Update(ctx, currentServiceCopy, metav1.UpdateOptions{})
 				if err != nil {
+					log.Error("updating Spec", "service", i.ServiceSnapshot.Name, "err", err)
 					return err
 				}
-				for _, ip := range ips {
+			}
+
+			ports := make([]v1.PortStatus, 0, len(i.ServiceSnapshot.Spec.Ports))
+			for _, port := range i.ServiceSnapshot.Spec.Ports {
+				ports = append(ports, v1.PortStatus{
+					Port:     port.Port,
+					Protocol: port.Protocol,
+				})
+			}
+
+			ingresses := []v1.LoadBalancerIngress{}
+
+			for _, c := range i.VIPConfigs {
+				if !utils.IsIP(c.VIP) {
+					ips, err := utils.LookupHost(c.VIP, c.DNSMode, *i.ServiceSnapshot.Spec.IPFamilyPolicy == v1.IPFamilyPolicyRequireDualStack)
+					if err != nil {
+						return err
+					}
+					for _, ip := range ips {
+						i := v1.LoadBalancerIngress{
+							IP:    ip,
+							Ports: ports,
+						}
+						ingresses = append(ingresses, i)
+					}
+				} else {
 					i := v1.LoadBalancerIngress{
-						IP:    ip,
+						IP:    c.VIP,
 						Ports: ports,
 					}
 					ingresses = append(ingresses, i)
 				}
-			} else {
-				i := v1.LoadBalancerIngress{
-					IP:    c.VIP,
-					Ports: ports,
-				}
-				ingresses = append(ingresses, i)
-			}
-			if isUPNPEnabled(currentService) {
-				for _, ip := range i.UPNPGatewayIPs {
-					i := v1.LoadBalancerIngress{
-						IP:    ip,
-						Ports: ports,
+				if isUPNPEnabled(currentService) {
+					for _, ip := range i.UPNPGatewayIPs {
+						i := v1.LoadBalancerIngress{
+							IP:    ip,
+							Ports: ports,
+						}
+						ingresses = append(ingresses, i)
 					}
-					ingresses = append(ingresses, i)
 				}
 			}
-		}
-		log.Debug("LB status", "current", currentService.Status.LoadBalancer.Ingress, "new", ingresses)
-		if !ingressEqual(currentService.Status.LoadBalancer.Ingress, ingresses) {
-			currentService.Status.LoadBalancer.Ingress = ingresses
-			log.Debug("updating service status", "namespace", currentService.Namespace, "name", currentService.Name, "uid", currentService.UID)
-			_, err = p.clientSet.CoreV1().Services(currentService.Namespace).UpdateStatus(ctx, currentService, metav1.UpdateOptions{})
-			if err != nil && !apierrors.IsInvalid(err) {
-				log.Error("updating Service", "namespace", i.ServiceSnapshot.Namespace, "name", i.ServiceSnapshot.Name, "err", err)
-				return err
+			log.Debug("LB status", "current", currentService.Status.LoadBalancer.Ingress, "new", ingresses)
+			if !ingressEqual(currentService.Status.LoadBalancer.Ingress, ingresses) {
+				currentService.Status.LoadBalancer.Ingress = ingresses
+				log.Debug("updating service status", "namespace", currentService.Namespace, "name", currentService.Name, "uid", currentService.UID)
+				_, err = p.clientSet.CoreV1().Services(currentService.Namespace).UpdateStatus(ctx, currentService, metav1.UpdateOptions{})
+				if err != nil && !apierrors.IsInvalid(err) {
+					log.Error("updating Service", "namespace", i.ServiceSnapshot.Namespace, "name", i.ServiceSnapshot.Name, "err", err)
+					return err
+				}
 			}
-		}
-		return nil
-	})
+			return nil
+		})
 
 	return err
 }

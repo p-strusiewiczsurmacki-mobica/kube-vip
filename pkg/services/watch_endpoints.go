@@ -1,8 +1,10 @@
 package services
 
 import (
+	"context"
 	"fmt"
 	"sync"
+	"time"
 
 	log "log/slog"
 
@@ -12,7 +14,59 @@ import (
 	v1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/watch"
+	watchtools "k8s.io/client-go/tools/watch"
 )
+
+type debauncer struct {
+	rw       *watchtools.RetryWatcher
+	input    <-chan watch.Event
+	output   chan watch.Event
+	stopChan chan any
+	stopOnce sync.Once
+}
+
+func newDebauncer(rw *watchtools.RetryWatcher) *debauncer {
+	return &debauncer{
+		rw:       rw,
+		input:    rw.ResultChan(),
+		output:   make(chan watch.Event),
+		stopChan: make(chan any),
+	}
+}
+
+func (d *debauncer) run(ctx context.Context) {
+	t := time.NewTicker(time.Second * 2)
+	defer func() {
+		close(d.output)
+		d.rw.Stop()
+	}()
+
+	var event *watch.Event
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-d.stopChan:
+			return
+		case tmp := <-d.input:
+			log.Debug("EVENT", "got", tmp)
+			event = &tmp
+			t.Reset(time.Second * 2)
+		case <-t.C:
+			if event != nil {
+				d.output <- *event
+				event = nil
+			}
+		}
+	}
+}
+
+func (d *debauncer) stop() {
+	d.stopOnce.Do(func() {
+		close(d.stopChan)
+	})
+}
 
 func (p *Processor) watchEndpoint(svcCtx *servicecontext.Context, id string, service *v1.Service, provider providers.Provider) error {
 	log.Info("watching", "provider", provider.GetLabel(), "service_name", service.Name, "namespace", service.Namespace)
@@ -23,24 +77,30 @@ func (p *Processor) watchEndpoint(svcCtx *servicecontext.Context, id string, ser
 		return fmt.Errorf("[%s] error watching endpoints: %w", provider.GetLabel(), err)
 	}
 
-	wg := sync.WaitGroup{}
+	d := newDebauncer(rw)
 
+	wg := sync.WaitGroup{}
 	defer func() {
-		rw.Stop()
+		d.stop()
+		log.Debug("WAITING FOR WG")
 		wg.Wait()
+		log.Debug("DONE WAITING FOR WG")
 	}()
+
+	wg.Go(func() {
+		d.run(svcCtx.Ctx)
+	})
 
 	wg.Go(func() {
 		<-svcCtx.Ctx.Done()
 		log.Debug("context cancelled", "provider", provider.GetLabel())
+		d.stop()
 	})
-
-	ch := rw.ResultChan()
 
 	epProcessor := endpoints.NewEndpointProcessor(p.config, provider, p.bgpServer, &p.ServiceInstances, p.leaseMgr, p.TunnelMgr)
 
 	var lastKnownGoodEndpoint string
-	for event := range ch {
+	for event := range d.output {
 		// We need to inspect the event and get ResourceVersion out of it
 		switch event.Type {
 
@@ -51,7 +111,6 @@ func (p *Processor) watchEndpoint(svcCtx *servicecontext.Context, id string, ser
 			} else if err != nil {
 				return fmt.Errorf("[%s] error while processing add/modify event: %w", provider.GetLabel(), err)
 			}
-
 		case watch.Deleted:
 			if err := epProcessor.Delete(svcCtx.Ctx, service, id); err != nil {
 				return fmt.Errorf("[%s] error while processing delete event: %w", provider.GetLabel(), err)
