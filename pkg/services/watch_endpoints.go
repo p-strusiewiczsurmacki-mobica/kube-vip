@@ -38,15 +38,16 @@ func (d *debauncer) Run(ctx context.Context) {
 	for {
 		select {
 		case <-ctx.Done():
+			log.Debug("CONTEXT DONE DEBAUNCER")
 			close(d.closed)
+			log.Debug("CONTEXT DONE DEBAUNCER CLOSED")
 			return
 		case tmp := <-d.input:
+			log.Debug("EVENT", "got", tmp)
 			if tmp.Object != nil {
-				log.Debug("EVENT", "got", tmp)
 				event = &tmp
 				t.Reset(time.Second * 2)
 			} else {
-				close(d.closed)
 				return
 			}
 		case <-t.C:
@@ -76,16 +77,20 @@ func (p *Processor) watchEndpoint(svcCtx *servicecontext.Context, id string, ser
 
 	debCtx, debCancel := context.WithCancel(svcCtx.Ctx)
 	defer func() {
+		log.Debug("DEFER")
 		debCancel()
+		log.Debug("DEBAUNCER CANCELLED")
 		<-debauncer.closed
+		log.Debug("DEBAUNCER CLOSED")
 		rw.Stop()
+		log.Debug("RW STOPPED")
 		wg.Wait()
 	}()
 
 	wg.Go(func() {
 		debauncer.Run(debCtx)
-		<-svcCtx.Ctx.Done()
-		log.Debug("context cancelled", "provider", provider.GetLabel())
+		// <-svcCtx.Ctx.Done()
+		// log.Debug("context cancelled", "provider", provider.GetLabel())
 		<-debauncer.closed
 		rw.Stop()
 	})
