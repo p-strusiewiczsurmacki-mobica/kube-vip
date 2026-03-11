@@ -82,7 +82,9 @@ func (p *Processor) watchEndpoint(svcCtx *servicecontext.Context, id string, ser
 	wg := sync.WaitGroup{}
 	defer func() {
 		d.stop()
+		log.Debug("WAITING FOR WG")
 		wg.Wait()
+		log.Debug("DONE WAITING FOR WG")
 	}()
 
 	wg.Go(func() {
