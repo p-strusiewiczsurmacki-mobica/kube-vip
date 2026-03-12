@@ -39,13 +39,16 @@ func NewEndpointProcessor(config *kubevip.Config, provider providers.Provider, b
 	}
 }
 
-func (p *Processor) AddOrModify(svcCtx *servicecontext.Context, event watch.Event,
+func (p *Processor) AddOrModify(svcCtx *servicecontext.Context, events AggregatedEvent,
 	lastKnownGoodEndpoint *string, service *v1.Service, id string,
 	serviceFunc func(*servicecontext.Context, *v1.Service, *sync.WaitGroup, bool) error) (bool, error) {
 
 	var err error
-	if err = p.provider.LoadObject(event.Object, svcCtx.Cancel); err != nil {
-		return false, fmt.Errorf("[%s] error loading k8s object: %w", p.provider.GetLabel(), err)
+
+	for _, event := range events.Events {
+		if err = p.provider.LoadObject(event.Object, svcCtx.Cancel); err != nil {
+			return false, fmt.Errorf("[%s] error loading k8s object: %w", p.provider.GetLabel(), err)
+		}
 	}
 
 	endpoints, err := p.worker.getEndpoints(service, id)
@@ -53,7 +56,7 @@ func (p *Processor) AddOrModify(svcCtx *servicecontext.Context, event watch.Even
 		return false, err
 	}
 
-	log.Debug("set instance endpoint status", "event", event.Type, "service", service.Name, "endpoints", endpoints)
+	log.Debug("set instance endpoint status", "event", events.Type, "service", service.Name, "endpoints", endpoints)
 	if err := p.worker.setInstanceEndpointsStatus(svcCtx.Ctx, service, endpoints); err != nil {
 		log.Error("updating instance", "err", err)
 	}
@@ -173,4 +176,9 @@ func getEndpoint(endpoints []string, family string) string {
 		}
 	}
 	return ""
+}
+
+type AggregatedEvent struct {
+	Type   watch.EventType
+	Events []*watch.Event
 }
