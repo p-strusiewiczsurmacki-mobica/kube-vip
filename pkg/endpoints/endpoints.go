@@ -17,7 +17,6 @@ import (
 	"github.com/kube-vip/kube-vip/pkg/utils"
 	"github.com/kube-vip/kube-vip/pkg/wireguard"
 	v1 "k8s.io/api/core/v1"
-	"k8s.io/apimachinery/pkg/watch"
 )
 
 type Processor struct {
@@ -176,9 +175,4 @@ func getEndpoint(endpoints []string, family string) string {
 		}
 	}
 	return ""
-}
-
-type AggregatedEvent struct {
-	Type   watch.EventType
-	Events []*watch.Event
 }

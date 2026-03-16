@@ -1,10 +1,8 @@
 package services
 
 import (
-	"context"
 	"fmt"
 	"sync"
-	"time"
 
 	log "log/slog"
 
@@ -14,7 +12,6 @@ import (
 	v1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/watch"
-	watchtools "k8s.io/client-go/tools/watch"
 )
 
 func (p *Processor) watchEndpoint(svcCtx *servicecontext.Context, id string, service *v1.Service, provider providers.Provider) error {
@@ -30,23 +27,23 @@ func (p *Processor) watchEndpoint(svcCtx *servicecontext.Context, id string, ser
 
 	stopChan := make(chan any)
 
-	d := newDebauncer(rw)
+	d := endpoints.NewDebauncer(rw)
 
 	defer func() {
 		close(stopChan)
-		d.stop()
+		d.Stop()
 		wg.Wait()
 	}()
 
 	wg.Go(func() {
-		d.run(svcCtx.Ctx)
+		d.Start(svcCtx.Ctx)
 	})
 
 	wg.Go(func() {
 		select {
 		case <-svcCtx.Ctx.Done():
 			log.Debug("context cancelled", "provider", provider.GetLabel())
-			d.stop()
+			d.Stop()
 		case <-stopChan:
 			svcCtx.Cancel()
 			log.Debug("exiting endpoint watcher", "namespace", service.Namespace, "service", service.Name, "provider", provider.GetLabel())
@@ -56,7 +53,7 @@ func (p *Processor) watchEndpoint(svcCtx *servicecontext.Context, id string, ser
 	epProcessor := endpoints.NewEndpointProcessor(p.config, provider, p.bgpServer, &p.ServiceInstances, p.leaseMgr, p.TunnelMgr)
 
 	var lastKnownGoodEndpoint string
-	for event := range d.output {
+	for event := range d.Output() {
 		// We need to inspect the event and get ResourceVersion out of it
 		switch event.Type {
 
@@ -82,70 +79,4 @@ func (p *Processor) watchEndpoint(svcCtx *servicecontext.Context, id string, ser
 	}
 	log.Info("stopping watching", "provider", provider.GetLabel(), "service name", service.Name, "namespace", service.Namespace)
 	return nil //nolint:govet
-}
-
-type debauncer struct {
-	rw       *watchtools.RetryWatcher
-	input    <-chan watch.Event
-	output   chan endpoints.AggregatedEvent
-	stopChan chan any
-	stopOnce sync.Once
-}
-
-func newDebauncer(rw *watchtools.RetryWatcher) *debauncer {
-	return &debauncer{
-		rw:       rw,
-		input:    rw.ResultChan(),
-		output:   make(chan endpoints.AggregatedEvent),
-		stopChan: make(chan any),
-	}
-}
-
-const debaunceTime = time.Second * 2
-
-func (d *debauncer) run(ctx context.Context) {
-	t := time.NewTicker(debaunceTime)
-	defer func() {
-		close(d.output)
-		d.rw.Stop()
-	}()
-
-	var aggregated *endpoints.AggregatedEvent
-
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-d.stopChan:
-			return
-		case tmp := <-d.input:
-			if tmp.Type == "" {
-				return
-			}
-			if aggregated != nil {
-				if tmp.Type != aggregated.Type {
-					d.output <- *aggregated
-					aggregated = nil
-				}
-			}
-			if aggregated == nil {
-				aggregated = &endpoints.AggregatedEvent{
-					Type: tmp.Type,
-				}
-			}
-			aggregated.Events = append(aggregated.Events, &tmp)
-			t.Reset(debaunceTime)
-		case <-t.C:
-			if aggregated != nil {
-				d.output <- *aggregated
-				aggregated = nil
-			}
-		}
-	}
-}
-
-func (d *debauncer) stop() {
-	d.stopOnce.Do(func() {
-		close(d.stopChan)
-	})
 }
