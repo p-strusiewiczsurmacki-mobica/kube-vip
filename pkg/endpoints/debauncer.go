@@ -2,6 +2,7 @@ package endpoints
 
 import (
 	"context"
+	"log/slog"
 	"sync"
 	"time"
 
@@ -56,10 +57,13 @@ func (d *Debauncer) Start(ctx context.Context) {
 	wg := sync.WaitGroup{}
 	debauncerCtx, cancel := context.WithCancel(ctx)
 	defer func() {
+		slog.Info("DEBAUNCER - Defere")
 		close(d.output)
 		d.rw.Stop()
 		cancel()
+		slog.Info("DEBAUNCER - waiting for goroutines")
 		wg.Wait()
+		slog.Info("DEBAUNCER - goroutines finished")
 	}()
 
 	for {
@@ -70,41 +74,52 @@ func (d *Debauncer) Start(ctx context.Context) {
 			return
 		case tmp := <-d.input:
 			if tmp.Type == "" {
-				return
+				slog.Info("DEBAUNCER - return no type")
+				continue
 			}
 
 			var namespace, name string
 			switch v := tmp.Object.(type) {
 			case *discoveryv1.EndpointSlice:
+				slog.Info("DEBAUNCER - endpointslice")
 				namespace = v.Namespace
 				name = v.Name
 			case *v1.Service:
+				slog.Info("DEBAUNCER - service")
 				namespace = v.Namespace
 				name = v.Name
 			default:
 				return
 			}
 
+			slog.Info("DEBAUNCER - event for", "namespace", namespace, "name", name)
+
 			nsEvent, exists := d.events[namespace]
 			if !exists {
+				slog.Info("DEBAUNCER - event for - namespace not exists", "namespace", namespace, "name", name)
 				d.events[namespace] = make(map[string]*item)
 				nsEvent = d.events[namespace]
 			}
 
 			nameEvent, exists := nsEvent[name]
 			if !exists {
+				slog.Info("DEBAUNCER - event for - name not exists", "namespace", namespace, "name", name)
 				nsEvent[name] = newItem(d.output)
 				nameEvent = nsEvent[name]
 
 				wg.Go(func() {
+					slog.Info("DEBAUNCER - event for - starting loop for name", "namespace", namespace, "name", name)
 					nameEvent.start(debauncerCtx)
+					slog.Info("DEBAUNCER - event for - finished loop for name, deleting", "namespace", namespace, "name", name)
 					delete(d.events[namespace], name)
 				})
 			}
 
+			slog.Info("DEBAUNCER - event for - sending data in", "namespace", namespace, "name", name)
 			nameEvent.input <- tmp
 
 			if tmp.Type == watch.Deleted {
+				slog.Info("DEBAUNCER - event for - type deleted, stopping", "namespace", namespace, "name", name)
 				nameEvent.stop()
 			}
 		}
@@ -113,6 +128,7 @@ func (d *Debauncer) Start(ctx context.Context) {
 
 func (d *Debauncer) Stop() {
 	d.stopOnce.Do(func() {
+		slog.Info("DEBAUNCER - context stop")
 		close(d.stopChan)
 	})
 }
@@ -122,7 +138,7 @@ func (d *Debauncer) Output() chan AggregatedEvent {
 }
 
 func (i *item) start(ctx context.Context) {
-
+	slog.Info("DEBAUNCER ITEM - start")
 	t := time.NewTicker(debaunceTime)
 
 	var aggregated *AggregatedEvent
@@ -130,12 +146,16 @@ func (i *item) start(ctx context.Context) {
 	for {
 		select {
 		case <-ctx.Done():
+			slog.Info("DEBAUNCER ITEM - context cancelled")
 			return
 		case <-i.stopChan:
+			slog.Info("DEBAUNCER ITEM - stop signal")
 			return
 		case tmp := <-i.input:
+			slog.Info("DEBAUNCER ITEM", "event", tmp)
 			if aggregated != nil {
 				if tmp.Type != aggregated.Type {
+					slog.Info("DEBAUNCER ITEM - sending aggregated - change")
 					i.output <- *aggregated
 					aggregated = nil
 				}
@@ -149,16 +169,17 @@ func (i *item) start(ctx context.Context) {
 			t.Reset(debaunceTime)
 		case <-t.C:
 			if aggregated != nil {
+				slog.Info("DEBAUNCER ITEM - sending aggregated - timer")
 				i.output <- *aggregated
 				aggregated = nil
 			}
-			t.Reset(debaunceTime)
 		}
 	}
 }
 
 func (i *item) stop() {
 	i.stopOnce.Do(func() {
+		slog.Info("DEBAUNCER ITEM - stop")
 		close(i.stopChan)
 	})
 }
