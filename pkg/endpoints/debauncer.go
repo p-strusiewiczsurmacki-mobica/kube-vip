@@ -83,11 +83,11 @@ func (d *Debauncer) Start(ctx context.Context) {
 			case *discoveryv1.EndpointSlice:
 				slog.Info("DEBAUNCER - endpointslice")
 				namespace = v.Namespace
-				name = v.Name
+				name = v.OwnerReferences[0].Name
 			case *v1.Service:
 				slog.Info("DEBAUNCER - service")
 				namespace = v.Namespace
-				name = v.Name
+				name = v.OwnerReferences[0].Name
 			default:
 				return
 			}
@@ -110,8 +110,12 @@ func (d *Debauncer) Start(ctx context.Context) {
 				wg.Go(func() {
 					slog.Info("DEBAUNCER - event for - starting loop for name", "namespace", namespace, "name", name)
 					nameEvent.start(debauncerCtx)
-					slog.Info("DEBAUNCER - event for - finished loop for name, deleting", "namespace", namespace, "name", name)
+					slog.Info("DEBAUNCER - event for - finished loop for name, deleting for name", "namespace", namespace, "name", name)
 					delete(d.events[namespace], name)
+					if len(d.events[namespace]) == 0 {
+						slog.Info("DEBAUNCER - event for - finished loop for name, deleting for namespace", "namespace", namespace, "name", name)
+						delete(d.events, namespace)
+					}
 				})
 			}
 
