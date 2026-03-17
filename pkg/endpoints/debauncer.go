@@ -36,11 +36,10 @@ func NewDebauncer(rw *watchtools.RetryWatcher) *Debauncer {
 }
 
 type item struct {
-	input     chan watch.Event
-	lastEvent *AggregatedEvent
-	output    chan<- AggregatedEvent
-	stopChan  chan any
-	stopOnce  sync.Once
+	input    chan watch.Event
+	output   chan<- AggregatedEvent
+	stopChan chan any
+	stopOnce sync.Once
 }
 
 func newItem(output chan<- AggregatedEvent) *item {
@@ -151,9 +150,6 @@ func (i *item) start(ctx context.Context) {
 		case <-t.C:
 			if aggregated != nil {
 				i.output <- *aggregated
-				if aggregated.Type == watch.Deleted {
-
-				}
 				aggregated = nil
 			}
 			t.Reset(debaunceTime)
