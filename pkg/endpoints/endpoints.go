@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"net"
-	"sync"
 
 	log "log/slog"
 
@@ -40,8 +39,7 @@ func NewEndpointProcessor(config *kubevip.Config, provider providers.Provider, b
 }
 
 func (p *Processor) AddOrModify(svcCtx *servicecontext.Context, event watch.Event,
-	lastKnownGoodEndpoint *string, service *v1.Service, id string,
-	serviceFunc func(*servicecontext.Context, *v1.Service, *sync.WaitGroup, bool) error) (bool, error) {
+	lastKnownGoodEndpoint *string, service *v1.Service, id string) (bool, error) {
 
 	var err error
 	if err = p.provider.LoadObject(event.Object, svcCtx.Cancel); err != nil {
