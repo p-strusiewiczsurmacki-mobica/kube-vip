@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"net"
-	"sync"
 
 	log "log/slog"
 
@@ -40,8 +39,7 @@ func NewEndpointProcessor(config *kubevip.Config, provider providers.Provider, b
 }
 
 func (p *Processor) AddOrModify(svcCtx *servicecontext.Context, event watch.Event,
-	lastKnownGoodEndpoint *string, service *v1.Service, id string,
-	serviceFunc func(*servicecontext.Context, *v1.Service, *sync.WaitGroup) error, wg *sync.WaitGroup) (bool, error) {
+	lastKnownGoodEndpoint *string, service *v1.Service, id string) (bool, error) {
 
 	var err error
 	if err = p.provider.LoadObject(event.Object, svcCtx.Cancel); err != nil {
@@ -53,7 +51,8 @@ func (p *Processor) AddOrModify(svcCtx *servicecontext.Context, event watch.Even
 		return false, err
 	}
 
-	if err := p.worker.setInstanceEndpointsStatus(service, endpoints); err != nil {
+	log.Debug("set instance endpoint status", "event", event.Type, "service", service.Name, "endpoints", endpoints)
+	if err := p.worker.setInstanceEndpointsStatus(svcCtx.Ctx, service, endpoints); err != nil {
 		log.Error("updating instance", "err", err)
 	}
 
@@ -70,21 +69,8 @@ func (p *Processor) AddOrModify(svcCtx *servicecontext.Context, event watch.Even
 			return true, nil
 		}
 
-		p.updateLastKnownGoodEndpoint(svcCtx, lastKnownGoodEndpoint, endpoints, service)
-		svcCtx.HasEndpoints.Store(true)
-		// start leader election if it's enabled and not already started
-		if !svcCtx.IsActive && p.config.EnableServicesElection {
-			wg.Go(func() {
-				for {
-					select {
-					case <-svcCtx.Ctx.Done():
-						return
-					default:
-						startLeaderElection(svcCtx, service, serviceFunc, wg)
-					}
-				}
-			})
-		}
+		p.updateLastKnownGoodEndpoint(lastKnownGoodEndpoint, endpoints, service)
+		svcCtx.SignalReadiness()
 
 		// There are local endpoints available on the node
 		// Process immediately if:
@@ -96,7 +82,6 @@ func (p *Processor) AddOrModify(svcCtx *servicecontext.Context, event watch.Even
 			}
 		}
 	} else {
-		svcCtx.HasEndpoints.Store(false)
 		// There are no local endpoints
 		p.worker.clear(svcCtx, lastKnownGoodEndpoint, service)
 	}
@@ -105,7 +90,7 @@ func (p *Processor) AddOrModify(svcCtx *servicecontext.Context, event watch.Even
 	p.updateAnnotations(service, lastKnownGoodEndpoint)
 
 	log.Debug("watcher", "provider",
-		p.provider.GetLabel(), "service name", service.Name, "namespace", service.Namespace, "endpoints", len(endpoints), "last endpoint", *lastKnownGoodEndpoint, "active leader election", svcCtx.IsActive)
+		p.provider.GetLabel(), "service name", service.Name, "namespace", service.Namespace, "endpoints", len(endpoints), "last endpoint", *lastKnownGoodEndpoint)
 
 	return false, nil
 }
@@ -117,7 +102,7 @@ func (p *Processor) Delete(ctx context.Context, service *v1.Service, id string) 
 	return nil
 }
 
-func (p *Processor) updateLastKnownGoodEndpoint(svcCtx *servicecontext.Context, lastKnownGoodEndpoint *string, endpoints []string, service *v1.Service) {
+func (p *Processor) updateLastKnownGoodEndpoint(lastKnownGoodEndpoint *string, endpoints []string, service *v1.Service) {
 	// if we haven't populated one, then do so
 	family := utils.IPv4Family
 	if service.Annotations[kubevip.EgressIPv6] == "true" {
@@ -139,15 +124,12 @@ func (p *Processor) updateLastKnownGoodEndpoint(svcCtx *servicecontext.Context, 
 			stillExists = true
 		}
 	}
-	// If the last endpoint no longer exists, we cancel our leader Election, and set another endpoint as last known good
+	// If the last endpoint no longer exists, we remove egress for that IP
 	if !stillExists {
-		p.worker.removeEgress(service, lastKnownGoodEndpoint)
-		if svcCtx.IsActive && (p.config.EnableServicesElection || p.config.EnableLeaderElection) {
-			log.Warn("existing endpoint has been removed, restarting leaderElection", "provider", p.provider.GetLabel(), "endpoint", *lastKnownGoodEndpoint)
-			// Stop the existing leaderElection
-			if svcCtx.Lease != nil {
-				svcCtx.Lease.Cancel()
-			}
+		ip := net.ParseIP(*lastKnownGoodEndpoint)
+		if (ip.To4() != nil && service.Annotations[kubevip.Egress] == "true") ||
+			(ip.To4() == nil && service.Annotations[kubevip.EgressIPv6] == "true") {
+			p.worker.removeEgress(service, lastKnownGoodEndpoint)
 		}
 		// Set our active endpoint to an existing one
 		*lastKnownGoodEndpoint = ep
@@ -163,25 +145,6 @@ func (p *Processor) updateAnnotations(service *v1.Service, lastKnownGoodEndpoint
 			activeEndpointAnnotation = kubevip.ActiveEndpointIPv6
 		}
 		service.Annotations[activeEndpointAnnotation] = *lastKnownGoodEndpoint
-	}
-}
-
-func startLeaderElection(svcCtx *servicecontext.Context, service *v1.Service, serviceFunc func(*servicecontext.Context, *v1.Service, *sync.WaitGroup) error, wg *sync.WaitGroup) {
-	// This is a blocking function, that will restart (in the event of failure)
-	for {
-		select {
-		case <-svcCtx.Ctx.Done():
-			return
-		default:
-			err := serviceFunc(svcCtx, service, wg)
-			if err != nil {
-				log.Error(err.Error())
-			}
-			if !svcCtx.HasEndpoints.Load() {
-				log.Debug("there are no available endpoints for this service, exiting watch", "service", service.Name, "uid", service.UID)
-				return
-			}
-		}
 	}
 }
 
