@@ -449,6 +449,7 @@ func (p *Processor) updateEgressConfiguration(ctx context.Context, svc *v1.Servi
 	p.mutex.Lock()
 	defer p.mutex.Unlock()
 
+	log.Debug("updating egress configuration", "namespace", svc.Namespace, "name", svc.Name, "uid", svc.UID)
 	i := instance.FindServiceInstance(svc, p.ServiceInstances)
 	if i == nil {
 		return fmt.Errorf("service instance not found for %s/%s", svc.Namespace, svc.Name)

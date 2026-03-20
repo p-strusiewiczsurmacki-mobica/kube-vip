@@ -87,6 +87,7 @@ func (p *Processor) AddOrModify(svcCtx *servicecontext.Context, event watch.Even
 		// - No services/leader election is enabled, OR
 		// - WireGuard is enabled (it always needs immediate DNAT rule updates)
 		if (!p.config.EnableServicesElection && !p.config.EnableLeaderElection) || p.config.EnableWireguard {
+			log.Debug("processing instance", "namespace", service.Namespace, "name", service.Name, "uid", service.UID)
 			if err := p.worker.processInstance(svcCtx, service); err != nil {
 				return false, fmt.Errorf("failed to process non-empty instance: %w", err)
 			}
@@ -153,6 +154,7 @@ func (p *Processor) updateLastKnownGoodEndpoint(svcCtx *servicecontext.Context, 
 func (p *Processor) updateAnnotations(service *v1.Service, lastKnownGoodEndpoint *string,
 	clientSet *kubernetes.Clientset,
 	egressUpdateFunc func(context.Context, *v1.Service) error) {
+	log.Debug("updating annotations for service", "namespace", service.Namespace, "name", service.Name, "uid", service.UID)
 	// Set the service accordingly
 	if service.Annotations[kubevip.Egress] == "true" {
 		ip := net.ParseIP(*lastKnownGoodEndpoint)
