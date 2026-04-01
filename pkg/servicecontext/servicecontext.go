@@ -12,6 +12,7 @@ type Context struct {
 	ConfiguredNetworks sync.Map
 	EndpointsReady     chan any
 	epReady            sync.Once
+	signalled          bool
 	LeaderCancel       context.CancelFunc
 }
 
@@ -41,5 +42,14 @@ func (ctx *Context) IsNetworkConfigured(ip string) bool {
 func (ctx *Context) SignalReadiness() {
 	ctx.epReady.Do(func() {
 		close(ctx.EndpointsReady)
+		ctx.signalled = true
 	})
+}
+
+func (ctx *Context) ResetReadiness() {
+	if ctx.signalled {
+		ctx.EndpointsReady = make(chan any)
+		ctx.epReady = sync.Once{}
+		ctx.signalled = false
+	}
 }

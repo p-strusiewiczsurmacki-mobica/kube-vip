@@ -52,8 +52,15 @@ func (p *Processor) StartServicesLeaderElection(svcCtx *servicecontext.Context, 
 
 	isNew := svcLease.Add(objectName)
 
+	svcLease.Lock()
+
+	defer func() {
+		svcLease.Unlock()
+	}()
+
 	// this service was already processed so we do not need to do anything
 	if !isNew && svcLease.Elected.Load() {
+		svcLease.Unlock()
 		log.Debug("this service was already handled, waiting for it to finish", "service", service.Name, "uid", service.UID)
 		// Wait for either the service context or lease context to be done
 		select {
@@ -62,12 +69,6 @@ func (p *Processor) StartServicesLeaderElection(svcCtx *servicecontext.Context, 
 		}
 		return nil
 	}
-
-	svcLease.Lock()
-
-	defer func() {
-		svcLease.Unlock()
-	}()
 
 	wg := sync.WaitGroup{}
 	defer wg.Wait()
@@ -83,7 +84,9 @@ func (p *Processor) StartServicesLeaderElection(svcCtx *servicecontext.Context, 
 
 	select {
 	case <-svcCtx.Ctx.Done():
-		return fmt.Errorf("context cancelled before election start: %w", svcCtx.Ctx.Err())
+		return fmt.Errorf("service context cancelled before election start: %w", svcCtx.Ctx.Err())
+	case <-svcLease.Ctx.Done():
+		return fmt.Errorf("lease context cancelled before election start: %w", svcLease.Ctx.Err())
 	case <-svcCtx.EndpointsReady:
 	}
 
@@ -145,6 +148,7 @@ func (p *Processor) StartServicesLeaderElection(svcCtx *servicecontext.Context, 
 			if err := p.onStoppedLeading(svcLease, service); err != nil {
 				leaderCancel()
 			}
+			svcLease.Started = make(chan any)
 		},
 		OnNewLeader: func(identity string) {
 			// we're notified when new leader elected

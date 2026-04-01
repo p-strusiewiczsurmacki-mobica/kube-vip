@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net"
 	"sync"
+	"time"
 
 	log "log/slog"
 
@@ -27,6 +28,7 @@ type Processor struct {
 	bgpServer *bgp.Server
 	worker    endpointWorker
 	instances *[]*instance.Instance
+	leaseMgr  *lease.Manager
 }
 
 func NewEndpointProcessor(config *kubevip.Config, provider providers.Provider, bgpServer *bgp.Server,
@@ -36,12 +38,14 @@ func NewEndpointProcessor(config *kubevip.Config, provider providers.Provider, b
 		provider:  provider,
 		bgpServer: bgpServer,
 		instances: instances,
+		leaseMgr:  leaseMgr,
 		worker:    newEndpointWorker(config, provider, bgpServer, instances, leaseMgr, tunnelMgr),
 	}
 }
 
 func (p *Processor) AddOrModify(svcCtx *servicecontext.Context, event watch.Event,
-	lastKnownGoodEndpoint *string, service *v1.Service, id string, wg *sync.WaitGroup,
+	lastKnownGoodEndpoint *string, service *v1.Service, id string,
+	serviceFunc func(*servicecontext.Context, *v1.Service, *sync.WaitGroup, bool) error, wg *sync.WaitGroup,
 	clientSet *kubernetes.Clientset,
 	egressUpdateFunc func(context.Context, *v1.Service) error) (bool, error) {
 
@@ -75,6 +79,12 @@ func (p *Processor) AddOrModify(svcCtx *servicecontext.Context, event watch.Even
 		p.updateLastKnownGoodEndpoint(lastKnownGoodEndpoint, endpoints, service)
 		svcCtx.SignalReadiness()
 
+		if p.config.EnableServicesElection {
+			wg.Go(func() {
+				p.startLeaderElection(svcCtx, service, serviceFunc, wg)
+			})
+		}
+
 		// There are local endpoints available on the node
 		// Process immediately if:
 		// - No services/leader election is enabled, OR
@@ -86,6 +96,7 @@ func (p *Processor) AddOrModify(svcCtx *servicecontext.Context, event watch.Even
 		}
 	} else {
 		// There are no local endpoints
+		svcCtx.ResetReadiness()
 		p.worker.clear(svcCtx, lastKnownGoodEndpoint, service)
 	}
 
@@ -202,6 +213,32 @@ func (p *Processor) updateAnnotations(service *v1.Service, lastKnownGoodEndpoint
 
 			if err := egressUpdateFunc(ctx, svcCopy); err != nil {
 				log.Error("failed to reconfigure egress", "service", service.Name, "namespace", service.Namespace, "err", err)
+			}
+		}
+	}
+}
+
+func (p *Processor) startLeaderElection(svcCtx *servicecontext.Context, service *v1.Service, serviceFunc func(*servicecontext.Context, *v1.Service, *sync.WaitGroup, bool) error, wg *sync.WaitGroup) {
+	// This is a blocking function, that will restart (in the event of failure)
+	for {
+		select {
+		case <-svcCtx.Ctx.Done():
+			return
+		default:
+			leaseNamespace, serviceLease := lease.ServiceName(service)
+			id := lease.NewID(p.config.LeaderElectionType, leaseNamespace, serviceLease)
+			l := p.leaseMgr.Get(id)
+			l.Lock()
+
+			if !l.Elected.Load() {
+				l.Unlock()
+				err := serviceFunc(svcCtx, service, wg, true)
+				if err != nil {
+					log.Error(err.Error())
+				}
+			} else {
+				l.Unlock()
+				time.Sleep(time.Millisecond * 200)
 			}
 		}
 	}
