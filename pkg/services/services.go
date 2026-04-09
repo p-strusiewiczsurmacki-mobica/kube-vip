@@ -388,6 +388,11 @@ func (p *Processor) deleteService(ctx context.Context, uid types.UID) error {
 			shared = true
 		}
 	}
+
+	if p.config.EnableBGP {
+		endpoints.ClearBGPHostsByInstance(ctx, serviceInstance, p.bgpServer)
+	}
+
 	if !shared {
 		for x := range serviceInstance.Clusters {
 			serviceInstance.Clusters[x].Stop()
@@ -412,9 +417,6 @@ func (p *Processor) deleteService(ctx context.Context, uid types.UID) error {
 			}
 		}
 
-		if p.config.EnableBGP {
-			endpoints.ClearBGPHostsByInstance(ctx, serviceInstance, p.bgpServer)
-		}
 		if p.config.EnableRoutingTable && (p.config.EnableLeaderElection || p.config.EnableServicesElection) {
 			if errs := endpoints.ClearRoutesByInstance(serviceInstance.ServiceSnapshot, serviceInstance, &p.ServiceInstances); len(errs) > 0 {
 				for _, err := range errs {
