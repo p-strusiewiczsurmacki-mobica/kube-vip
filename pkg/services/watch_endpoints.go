@@ -6,6 +6,7 @@ import (
 
 	log "log/slog"
 
+	"github.com/kube-vip/kube-vip/pkg/debauncer"
 	"github.com/kube-vip/kube-vip/pkg/endpoints"
 	"github.com/kube-vip/kube-vip/pkg/endpoints/providers"
 	"github.com/kube-vip/kube-vip/pkg/servicecontext"
@@ -23,35 +24,47 @@ func (p *Processor) watchEndpoint(svcCtx *servicecontext.Context, id string, ser
 		return fmt.Errorf("[%s] error watching endpoints: %w", provider.GetLabel(), err)
 	}
 
+	stopChan := make(chan any)
+
 	wg := sync.WaitGroup{}
+	d := debauncer.New(rw)
 
 	defer func() {
-		rw.Stop()
+		close(stopChan)
+		d.Stop()
 		wg.Wait()
 	}()
 
 	wg.Go(func() {
-		<-svcCtx.Ctx.Done()
-		log.Debug("[endpoint watcher] service context cancelled", "provider", provider.GetLabel())
+		d.Start(svcCtx.Ctx)
 	})
 
-	ch := rw.ResultChan()
+	wg.Go(func() {
+		select {
+		case <-svcCtx.Ctx.Done():
+			log.Debug("[endpoint watcher] context cancelled", "provider", provider.GetLabel())
+			d.Stop()
+		case <-stopChan:
+			svcCtx.Cancel()
+			log.Debug("[endpoint watcher] exiting endpoint watcher", "namespace", service.Namespace, "service", service.Name, "provider", provider.GetLabel())
+		}
+	})
 
 	epProcessor := endpoints.NewEndpointProcessor(p.config, provider, p.bgpServer, &p.ServiceInstances, p.leaseMgr, p.TunnelMgr)
 
 	var lastKnownGoodEndpoint string
-	for event := range ch {
+	for event := range d.Output() {
 		// We need to inspect the event and get ResourceVersion out of it
 		switch event.Type {
 
 		case watch.Added, watch.Modified:
-			restart, err := epProcessor.AddOrModify(svcCtx, event, &lastKnownGoodEndpoint, service, id, p.StartServicesLeaderElection, &wg, p.clientSet, p.updateEgressConfiguration)
+			restart, err := epProcessor.AddOrModify(svcCtx, event, &lastKnownGoodEndpoint, service, id,
+				p.StartServicesLeaderElection, &wg, p.clientSet, p.updateEgressConfiguration)
 			if restart {
 				continue
 			} else if err != nil {
 				return fmt.Errorf("[%s] error while processing add/modify event: %w", provider.GetLabel(), err)
 			}
-
 		case watch.Deleted:
 			if err := epProcessor.Delete(svcCtx.Ctx, service, id); err != nil {
 				return fmt.Errorf("[%s] error while processing delete event: %w", provider.GetLabel(), err)
@@ -60,7 +73,7 @@ func (p *Processor) watchEndpoint(svcCtx *servicecontext.Context, id string, ser
 			log.Info("[endpoint watcher] stopping watching - endpoint object deleted", "provider", provider.GetLabel(), "service name", service.Name, "namespace", service.Namespace)
 			return nil
 		case watch.Error:
-			errObject := apierrors.FromObject(event.Object)
+			errObject := apierrors.FromObject(event.Events[0].Object)
 			statusErr, _ := errObject.(*apierrors.StatusError)
 			log.Error("watch error", "provider", provider.GetLabel(), "err", statusErr)
 		}
