@@ -50,6 +50,8 @@ spec:
       value: "{{ .EnableNodeLabeling }}"
     - name: enable_endpoints
       value: "{{ .EnableEndpoints }}"
+    - name: debounce_time
+      value: "200ms"
     image: "{{ .ImagePath }}"
     imagePullPolicy: Never
     securityContext:

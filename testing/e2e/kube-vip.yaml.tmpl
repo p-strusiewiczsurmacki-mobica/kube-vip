@@ -106,6 +106,8 @@ spec:
       value: "{{ .ControlPlaneHealthCheckCAPath }}"
 {{- end }}
 {{- end }}
+    - name: debounce_time
+      value: "200ms"
     image: "{{ .ImagePath }}"
     imagePullPolicy: Never
     securityContext:

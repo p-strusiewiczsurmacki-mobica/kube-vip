@@ -9,6 +9,7 @@ import (
 	log "log/slog"
 
 	"github.com/davecgh/go-spew/spew"
+	"github.com/kube-vip/kube-vip/pkg/debouncer"
 	"github.com/kube-vip/kube-vip/pkg/kubevip"
 	"github.com/kube-vip/kube-vip/pkg/trafficmirror"
 	"github.com/kube-vip/kube-vip/pkg/utils"
@@ -55,22 +56,34 @@ func (p *Processor) ServicesWatcher(ctx context.Context, serviceFunc *Callback) 
 		return fmt.Errorf("error creating services watcher: %s", err.Error())
 	}
 
+	d, err := debouncer.New(rw.ResultChan(), p.config.DebounceTime)
+	if err != nil {
+		d.Stop()
+		return fmt.Errorf("failed to create debouncer for endpoints event: %w", err)
+	}
+
 	wg := sync.WaitGroup{}
-	defer wg.Wait()
+	defer func() {
+		d.Stop()
+		wg.Wait()
+	}()
 
 	watcherCtx, watcherCancel := context.WithCancel(ctx)
 	defer watcherCancel()
 
 	wg.Go(func() {
+		if err := d.Start(watcherCtx); err != nil {
+			log.Error("(svcs) debouncer, cancelling context", "error", err.Error())
+			watcherCancel()
+		}
 		<-watcherCtx.Done()
 		log.Debug("(svcs) watcher context cancelled")
-		rw.Stop()
+		d.Stop()
 		p.Stop()
 	})
-	ch := rw.ResultChan()
 
 	// Used for tracking an active endpoint / pod
-	for event := range ch {
+	for event := range d.Output() {
 		p.CountServiceWatchEvent.With(prometheus.Labels{"type": string(event.Type)}).Add(1)
 
 		// We need to inspect the event and get ResourceVersion out of it
