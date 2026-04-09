@@ -255,10 +255,8 @@ func (p *Processor) AddOrModify(ctx context.Context, event watch.Event, serviceF
 		} else if p.config.EnableServicesElection || // Service Election
 			((p.config.EnableRoutingTable || p.config.EnableBGP) && // Routing table mode or BGP
 				(!p.config.EnableLeaderElection && !p.config.EnableServicesElection)) { // No leaderelection or services election
-
 			// If this load balancer Traffic Policy is "local"
 			if svc.Spec.ExternalTrafficPolicy == v1.ServiceExternalTrafficPolicyTypeLocal {
-
 				// Start an endpoint watcher if we're not watching it already
 				if !svcCtx.IsWatched {
 					// background the endpoint watcher
@@ -297,6 +295,7 @@ func (p *Processor) AddOrModify(ctx context.Context, event watch.Event, serviceF
 					svcCtx.IsWatched = true
 				}
 			} else if (p.config.EnableBGP || p.config.EnableRoutingTable) && (!p.config.EnableLeaderElection && !p.config.EnableServicesElection) {
+
 				err = serviceFunc(svcCtx, svc, wg)
 				if err != nil {
 					log.Error(err.Error())
@@ -407,6 +406,10 @@ func (p *Processor) Delete(event watch.Event) error {
 				log.Error(err.Error())
 			}
 			svcCtx.IsActive = false
+		}
+
+		if p.config.EnableBGP {
+			endpoints.ClearBGPHosts(svcCtx.Ctx, svc, &p.ServiceInstances, p.bgpServer)
 		}
 
 		// Calls the cancel function of the context

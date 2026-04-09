@@ -6,6 +6,7 @@ import (
 
 	log "log/slog"
 
+	"github.com/kube-vip/kube-vip/pkg/debauncer"
 	"github.com/kube-vip/kube-vip/pkg/endpoints"
 	"github.com/kube-vip/kube-vip/pkg/endpoints/providers"
 	"github.com/kube-vip/kube-vip/pkg/servicecontext"
@@ -24,23 +25,24 @@ func (p *Processor) watchEndpoint(svcCtx *servicecontext.Context, id string, ser
 	}
 
 	wg := sync.WaitGroup{}
+	d := debauncer.New(rw)
 
 	defer func() {
-		rw.Stop()
+		d.Stop()
 		wg.Wait()
 	}()
 
 	wg.Go(func() {
+		d.Start(svcCtx.Ctx)
 		<-svcCtx.Ctx.Done()
 		log.Debug("[endpoint watcher] service context cancelled", "provider", provider.GetLabel())
+		d.Stop()
 	})
-
-	ch := rw.ResultChan()
 
 	epProcessor := endpoints.NewEndpointProcessor(p.config, provider, p.bgpServer, &p.ServiceInstances, p.leaseMgr, p.TunnelMgr)
 
 	var lastKnownGoodEndpoint string
-	for event := range ch {
+	for event := range d.Output() {
 		// We need to inspect the event and get ResourceVersion out of it
 		switch event.Type {
 
@@ -60,7 +62,7 @@ func (p *Processor) watchEndpoint(svcCtx *servicecontext.Context, id string, ser
 			log.Info("[endpoint watcher] stopping watching - endpoint object deleted", "provider", provider.GetLabel(), "service name", service.Name, "namespace", service.Namespace)
 			return nil
 		case watch.Error:
-			errObject := apierrors.FromObject(event.Object)
+			errObject := apierrors.FromObject(event.Events[len(event.Events)-1].Object)
 			statusErr, _ := errObject.(*apierrors.StatusError)
 			log.Error("watch error", "provider", provider.GetLabel(), "err", statusErr)
 		}
