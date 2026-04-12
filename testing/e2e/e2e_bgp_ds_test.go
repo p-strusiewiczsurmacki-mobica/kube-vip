@@ -244,7 +244,7 @@ var _ = Describe("kube-vip BGP when deployed as a regular pod", Ordered, func() 
 
 			BeforeAll(func() {
 				networking := &kindconfigv1alpha4.Networking{
-					IPFamily: kindconfigv1alpha4.IPv6Family, 
+					IPFamily: kindconfigv1alpha4.IPv6Family,
 				}
 
 				var err error
@@ -256,10 +256,14 @@ var _ = Describe("kube-vip BGP when deployed as a regular pod", Ordered, func() 
 			})
 
 			AfterAll(func() {
-				Eventually(func() error {
-					return e2e.GetLogs(ctx, client, tempDirPath)
-				}, "60s", "5s").Should(Succeed())
 				cleanupCluster(clusterName, ConfigMtx, logger)
+			})
+
+			AfterEach(func() {
+				tempDirPathLocal, err := os.MkdirTemp(tempDirPath, "kube-vip-test")
+				By(fmt.Sprintf("saving logs to %q", tempDirPathLocal))
+				err = e2e.GetLogs(ctx, client, tempDirPathLocal, clusterName)
+				Expect(err).ToNot(HaveOccurred())
 			})
 
 			It(clusterName+" exits gracefully when unnumbered BGP peers are configured", func() {
