@@ -24,7 +24,7 @@ type Server struct {
 	BGPSessionInfoGauge *prometheus.GaugeVec
 
 	mtx     sync.Mutex
-	tracker map[string]uint
+	tracker map[string]map[string]bool
 }
 
 // NewBGPServer takes a configuration and returns a running BGP server instance
@@ -44,7 +44,7 @@ func NewBGPServer(c kubevip.BGPConfig) (b *Server, err error) {
 	b = &Server{
 		s:       gobgp.NewBgpServer(),
 		c:       &c,
-		tracker: make(map[string]uint),
+		tracker: make(map[string]map[string]bool),
 
 		BGPSessionInfoGauge: prometheus.NewGaugeVec(prometheus.GaugeOpts{
 			Namespace: "kube_vip",

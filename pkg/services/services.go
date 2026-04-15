@@ -25,6 +25,7 @@ import (
 	"github.com/kube-vip/kube-vip/pkg/endpoints/providers"
 	"github.com/kube-vip/kube-vip/pkg/instance"
 	"github.com/kube-vip/kube-vip/pkg/kubevip"
+	"github.com/kube-vip/kube-vip/pkg/lease"
 	"github.com/kube-vip/kube-vip/pkg/servicecontext"
 	"github.com/kube-vip/kube-vip/pkg/upnp"
 	"github.com/kube-vip/kube-vip/pkg/utils"
@@ -172,7 +173,7 @@ func (p *Processor) addService(ctx context.Context, newService *instance.Instanc
 
 	for x := range newService.VIPConfigs {
 		log.Debug("starting loadbalancer for service", "name", svc.Name, "namespace", svc.Namespace, "uid", svc.UID)
-		if err := newService.Clusters[x].StartLoadBalancerService(ctx, newService.VIPConfigs[x], p.bgpServer, svc.Name, p.CountRouteReferences, wg); err != nil {
+		if err := newService.Clusters[x].StartLoadBalancerService(ctx, newService.VIPConfigs[x], p.bgpServer, lease.ServiceNamespacedName(svc), p.CountRouteReferences, wg); err != nil {
 			return fmt.Errorf("failed to start lb: %w", err)
 		}
 	}

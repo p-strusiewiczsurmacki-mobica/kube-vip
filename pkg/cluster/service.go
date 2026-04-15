@@ -75,7 +75,7 @@ func (cluster *Cluster) StartVipService(ctx context.Context, c *kubevip.Config, 
 		if c.EnableBGP {
 			// Lets advertise the VIP over BGP, the host needs to be passed using CIDR notation
 			log.Debug("Attempting to advertise over BGP", "address", network.CIDR())
-			err = bgpServer.AddHost(ctx, network.CIDR())
+			err = bgpServer.AddHost(ctx, network.CIDR(), "kube-vip-control-plane")
 			if err != nil {
 				log.Error(err.Error())
 			}
@@ -334,7 +334,7 @@ func (cluster *Cluster) StartLoadBalancerService(ctx context.Context, c *kubevip
 		if c.EnableBGP && (c.EnableLeaderElection || c.EnableServicesElection) {
 			// Lets advertise the VIP over BGP, the host needs to be passed using CIDR notation
 			log.Debug("(svcs) attempting to advertise over BGP", "address", network.CIDR())
-			err = bgp.AddHost(lbCtx, network.CIDR())
+			err = bgp.AddHost(lbCtx, network.CIDR(), name)
 			if err != nil {
 				log.Error(err.Error())
 			}

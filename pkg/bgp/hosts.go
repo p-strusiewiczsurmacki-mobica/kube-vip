@@ -10,13 +10,15 @@ import (
 )
 
 // AddHost will update peers of a host
-func (b *Server) AddHost(ctx context.Context, addr string) error {
+func (b *Server) AddHost(ctx context.Context, addr string, object string) error {
 	b.mtx.Lock()
 	defer b.mtx.Unlock()
 
-	cnt, exists := b.tracker[addr]
+	objects, exists := b.tracker[addr]
+
 	if !exists {
-		cnt = 0
+		b.tracker[addr] = make(map[string]bool)
+		objects = b.tracker[addr]
 
 		ip, _, err := net.ParseCIDR(addr)
 		if err != nil {
@@ -33,21 +35,20 @@ func (b *Server) AddHost(ctx context.Context, addr string) error {
 		}); err != nil {
 			return err
 		}
-		log.Debug("[BGP] added host", "addr", addr, "cnt", cnt)
+		log.Debug("[BGP] added host", "addr", addr, "cnt", len(objects))
 	}
 
-	cnt++
-	b.tracker[addr] = cnt
+	objects[object] = true
 
 	return nil
 }
 
 // DelHost will inform peers to remove a host
-func (b *Server) DelHost(ctx context.Context, addr string) error {
+func (b *Server) DelHost(ctx context.Context, addr string, object string) error {
 	b.mtx.Lock()
 	defer b.mtx.Unlock()
 
-	cnt, exists := b.tracker[addr]
+	objects, exists := b.tracker[addr]
 	if !exists {
 		log.Debug("[BGP] deleting host - nothing to delete", "addr", addr)
 		return nil
@@ -58,10 +59,9 @@ func (b *Server) DelHost(ctx context.Context, addr string) error {
 		return err
 	}
 
-	cnt--
-	b.tracker[addr] = cnt
+	delete(objects, object)
 
-	if cnt == 0 {
+	if len(objects) == 0 {
 		p := b.getPath(ip)
 		if p == nil {
 			return nil
@@ -73,7 +73,7 @@ func (b *Server) DelHost(ctx context.Context, addr string) error {
 			return err
 		}
 		delete(b.tracker, addr)
-		log.Debug("[BGP] deleted host", "addr", addr, "cnt", cnt)
+		log.Debug("[BGP] deleted host", "addr", addr, "cnt", objects)
 	}
 
 	return nil
