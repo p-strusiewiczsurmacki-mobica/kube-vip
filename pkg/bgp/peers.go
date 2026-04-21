@@ -152,7 +152,7 @@ func GetIPv6LinkLocalNeighborAddress(ifname string) (string, error) {
 			addr = neigh.IP
 			cnt++
 		}
-		log.Debug("PROCESS NEIGHBOUR", neigh.String(), "local", local, "state",
+		log.Debug("PROCESS NEIGHBOUR", "neigh", neigh.String(), "local", local, "state",
 			neigh.State&netlink.NUD_FAILED, "local-unicast", neigh.IP.IsLinkLocalUnicast(), "cnt", cnt)
 	}
 
