@@ -48,7 +48,6 @@ var _ = Describe("kube-vip BGP when deployed as a regular pod", Ordered, func() 
 			var err error
 			tempDirPathRoot, err = os.MkdirTemp("", "kube-vip-test-bgp-ds")
 			Expect(err).NotTo(HaveOccurred())
-
 		})
 
 		AfterAll(func() {
@@ -79,7 +78,7 @@ var _ = Describe("kube-vip BGP when deployed as a regular pod", Ordered, func() 
 			})
 
 			AfterAll(func() {
-				cleanupCluster(clusterName, ConfigMtx, logger)
+				cleanupCluster(clusterName, clusterName, ConfigMtx, logger)
 			})
 
 			AfterEach(func() {
@@ -256,7 +255,7 @@ var _ = Describe("kube-vip BGP when deployed as a regular pod", Ordered, func() 
 			})
 
 			AfterAll(func() {
-				cleanupCluster(clusterName, ConfigMtx, logger)
+				cleanupCluster(clusterName, clusterName, ConfigMtx, logger)
 			})
 
 			AfterEach(func() {
