@@ -3,6 +3,7 @@ package bgp
 import (
 	"context"
 	"fmt"
+	log "log/slog"
 	"net"
 	"strconv"
 
@@ -11,9 +12,9 @@ import (
 	"github.com/kube-vip/kube-vip/pkg/kubevip"
 	"github.com/kube-vip/kube-vip/pkg/vip"
 	api "github.com/osrg/gobgp/v3/api"
+	"github.com/vishvananda/netlink"
 
 	"github.com/kube-vip/kube-vip/pkg/utils"
-	"github.com/osrg/gobgp/v3/pkg/config/oc"
 	"github.com/osrg/gobgp/v3/pkg/server"
 	"google.golang.org/protobuf/types/known/anypb"
 )
@@ -50,7 +51,7 @@ func (b *Server) AddPeer(ctx context.Context, peer kubevip.BGPPeer) (err error) 
 	}
 
 	if peer.Interface != "" {
-		neighborAddress, err := oc.GetIPv6LinkLocalNeighborAddress(peer.Interface)
+		neighborAddress, err := GetIPv6LinkLocalNeighborAddress(peer.Interface)
 		if err != nil {
 			return fmt.Errorf("failed to get link-local address of interface %s: %w", peer.Interface, err)
 		}
@@ -129,6 +130,56 @@ func (b *Server) AddPeer(ctx context.Context, peer kubevip.BGPPeer) (err error) 
 	}
 
 	return nil
+}
+
+func GetIPv6LinkLocalNeighborAddress(ifname string) (string, error) {
+	ifi, err := net.InterfaceByName(ifname)
+	if err != nil {
+		return "", err
+	}
+	neighs, err := netlink.NeighList(ifi.Index, netlink.FAMILY_V6)
+	if err != nil {
+		return "", err
+	}
+	cnt := 0
+	var addr net.IP
+	for _, neigh := range neighs {
+		local, err := isLocalLinkLocalAddress(ifi.Index, neigh.IP)
+		if err != nil {
+			return "", err
+		}
+		if neigh.State&netlink.NUD_FAILED == 0 && neigh.IP.IsLinkLocalUnicast() && !local {
+			addr = neigh.IP
+			cnt++
+		}
+		log.Debug("PROCESS NEIGHBOUR", neigh.String(), "local", local, "state",
+			neigh.State&netlink.NUD_FAILED, "local-unicast", neigh.IP.IsLinkLocalUnicast(), "cnt", cnt)
+	}
+
+	if cnt == 0 {
+		return "", fmt.Errorf("no ipv6 link-local neighbor found")
+	} else if cnt > 1 {
+		return "", fmt.Errorf("found %d link-local neighbors. only support p2p link", cnt)
+	}
+
+	return fmt.Sprintf("%s%%%s", addr, ifname), nil
+}
+
+func isLocalLinkLocalAddress(ifindex int, addr net.IP) (bool, error) {
+	ifi, err := net.InterfaceByIndex(ifindex)
+	if err != nil {
+		return false, err
+	}
+	addrs, err := ifi.Addrs()
+	if err != nil {
+		return false, err
+	}
+	for _, a := range addrs {
+		if ip, _, _ := net.ParseCIDR(a.String()); addr.Equal(ip) {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 func (b *Server) getPath(ip net.IP) (path *api.Path) {
