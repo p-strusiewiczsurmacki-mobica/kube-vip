@@ -518,7 +518,7 @@ func testDS(ctx context.Context, manifestValues *e2e.KubevipManifestValues, clie
 		families = []corev1.IPFamily{corev1.IPv4Protocol, corev1.IPv6Protocol}
 	}
 
-	var cpVips, svcVips []string
+	var cpVips, svcVips, services []string
 	var cpHost, svcHost, svcVip string
 
 	if cpEnable {
@@ -542,7 +542,7 @@ func testDS(ctx context.Context, manifestValues *e2e.KubevipManifestValues, clie
 
 		svcVip = e2e.GenerateVIP(genFam, SOffset.Get(), clusterName)
 		var leases []string
-		_, leases = createTestServiceForDS(ctx, "test-svc", svcVip, leaseName,
+		services, leases = createTestServiceForDS(ctx, "test-svc", svcVip, leaseName,
 			corev1.ServiceExternalTrafficPolicyCluster, client, svcElection, families, 1)
 
 		if svcUseLease {
@@ -570,35 +570,35 @@ func testDS(ctx context.Context, manifestValues *e2e.KubevipManifestValues, clie
 	Expect(err).ToNot(HaveOccurred())
 	Expect(len(pods.Items)).To(Equal(1))
 
-	// removeKubeVipDS(ctx, client)
+	removeKubeVipDS(ctx, client)
 
-	// // check if kube-vip pod gets deleted within 10s
-	// Eventually(func() error {
-	// 	_, err := client.CoreV1().Pods("kube-system").Get(ctx, pods.Items[0].Name, metav1.GetOptions{})
-	// 	return err
-	// }, "10s", "200ms").ShouldNot(Succeed())
+	// check if kube-vip pod gets deleted within 10s
+	Eventually(func() error {
+		_, err := client.CoreV1().Pods("kube-system").Get(ctx, pods.Items[0].Name, metav1.GetOptions{})
+		return err
+	}, "10s", "200ms").ShouldNot(Succeed())
 
-	// if cpEnable && manifestValues.Mode == ModeARP {
-	// 	for _, addr := range cpVips {
-	// 		By(withTimestamp("checking CP address was removed: " + addr))
-	// 		Expect(checkIPAddress(addr, cpHost, false)).To(BeTrue())
-	// 	}
-	// }
+	if cpEnable && manifestValues.Mode == ModeARP {
+		for _, addr := range cpVips {
+			By(withTimestamp("checking CP address was removed: " + addr))
+			Expect(checkIPAddress(addr, cpHost, false)).To(BeTrue())
+		}
+	}
 
-	// if svcEnable {
-	// 	if manifestValues.Mode == ModeARP {
-	// 		for _, addr := range svcVips {
-	// 			By(withTimestamp("checking service address was removed: " + addr))
-	// 			Expect(checkIPAddress(addr, svcHost, false)).To(BeTrue())
-	// 		}
-	// 	}
+	if svcEnable {
+		if manifestValues.Mode == ModeARP {
+			for _, addr := range svcVips {
+				By(withTimestamp("checking service address was removed: " + addr))
+				Expect(checkIPAddress(addr, svcHost, false)).To(BeTrue())
+			}
+		}
 
-	// 	for _, svc := range services {
-	// 		By(withTimestamp("deleting service: " + svc))
-	// 		Expect(client.CoreV1().Services(dsNamespace).Delete(ctx, svc, metav1.DeleteOptions{})).To(Succeed())
-	// 		time.Sleep(time.Second)
-	// 	}
-	// }
+		for _, svc := range services {
+			By(withTimestamp("deleting service: " + svc))
+			Expect(client.CoreV1().Services(dsNamespace).Delete(ctx, svc, metav1.DeleteOptions{})).To(Succeed())
+			time.Sleep(time.Second)
+		}
+	}
 }
 
 func testEndpoints(ctx context.Context, manifestValues *e2e.KubevipManifestValues,
