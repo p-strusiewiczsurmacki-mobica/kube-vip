@@ -82,7 +82,7 @@ var _ = Describe("kube-vip BGP when deployed as a regular pod", Ordered, func() 
 			})
 
 			AfterAll(func() {
-				cleanupCluster(clusterName, ConfigMtx, logger)
+				cleanupCluster(clusterName, clusterName, ConfigMtx, logger)
 			})
 
 			AfterEach(func() {
@@ -259,7 +259,7 @@ var _ = Describe("kube-vip BGP when deployed as a regular pod", Ordered, func() 
 			})
 
 			AfterAll(func() {
-				cleanupCluster(clusterName, ConfigMtx, logger)
+				cleanupCluster(clusterName, clusterName, ConfigMtx, logger)
 			})
 
 			AfterEach(func() {

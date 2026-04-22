@@ -91,7 +91,7 @@ var _ = Describe("kube-vip ARP/NDP broadcast neighbor when deployed as a regular
 			})
 
 			AfterAll(func() {
-				cleanupCluster(clusterName, ConfigMtx, logger)
+				cleanupCluster(clusterName, clusterName, ConfigMtx, logger)
 			})
 
 			AfterEach(func() {
@@ -219,7 +219,7 @@ var _ = Describe("kube-vip ARP/NDP broadcast neighbor when deployed as a regular
 			})
 
 			AfterAll(func() {
-				cleanupCluster(clusterName, ConfigMtx, logger)
+				cleanupCluster(clusterName, clusterName, ConfigMtx, logger)
 			})
 
 			AfterEach(func() {
@@ -347,7 +347,7 @@ var _ = Describe("kube-vip ARP/NDP broadcast neighbor when deployed as a regular
 			})
 
 			AfterAll(func() {
-				cleanupCluster(clusterName, ConfigMtx, logger)
+				cleanupCluster(clusterName, clusterName, ConfigMtx, logger)
 			})
 
 			AfterEach(func() {

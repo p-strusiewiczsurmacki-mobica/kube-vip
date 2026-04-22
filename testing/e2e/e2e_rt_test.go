@@ -114,7 +114,7 @@ var _ = Describe("kube-vip routing table mode", Ordered, func() {
 				By(fmt.Sprintf("saving logs to %q", tempDirPath))
 				err := e2e.GetLogs(ctx, client, tempDirPath, clusterName)
 				Expect(err).ToNot(HaveOccurred())
-				cleanupCluster(clusterName, ConfigMtx, logger)
+				cleanupCluster(clusterName, "kind", ConfigMtx, logger)
 			})
 
 			It("setups IPv4 address and route on control-plane node", func() {
@@ -175,7 +175,7 @@ var _ = Describe("kube-vip routing table mode", Ordered, func() {
 				By(fmt.Sprintf("saving logs to %q", tempDirPath))
 				err := e2e.GetLogs(ctx, client, tempDirPath, clusterName)
 				Expect(err).ToNot(HaveOccurred())
-				cleanupCluster(clusterName, ConfigMtx, logger)
+				cleanupCluster(clusterName, "kind", ConfigMtx, logger)
 			})
 
 			It("setups IPv6 address and route on control-plane node", func() {
@@ -246,7 +246,7 @@ var _ = Describe("kube-vip routing table mode", Ordered, func() {
 				By(fmt.Sprintf("saving logs to %q", tempDirPath))
 				err := e2e.GetLogs(ctx, client, tempDirPath, clusterName)
 				Expect(err).ToNot(HaveOccurred())
-				cleanupCluster(clusterName, ConfigMtx, logger)
+				cleanupCluster(clusterName, "kind", ConfigMtx, logger)
 			})
 
 			It("setups DualStack addresses and routes on control-plane nodes", func() {
@@ -323,7 +323,7 @@ var _ = Describe("kube-vip routing table mode", Ordered, func() {
 				By(fmt.Sprintf("saving logs to %q", tempDirPath))
 				err := e2e.GetLogs(ctx, client, tempDirPath, clusterName)
 				Expect(err).ToNot(HaveOccurred())
-				cleanupCluster(clusterName, ConfigMtx, logger)
+				cleanupCluster(clusterName, "kind", ConfigMtx, logger)
 			})
 
 			It("setups DualStack addresses and routes on control-plane nodes", func() {
@@ -394,7 +394,7 @@ var _ = Describe("kube-vip routing table mode", Ordered, func() {
 				By(fmt.Sprintf("saving logs to %q", tempDirPath))
 				err := e2e.GetLogs(ctx, client, tempDirPath, clusterName)
 				Expect(err).ToNot(HaveOccurred())
-				cleanupCluster(clusterName, ConfigMtx, logger)
+				cleanupCluster(clusterName, "kind", ConfigMtx, logger)
 			})
 
 			DescribeTable("configures an IPv4 routes for services",
@@ -464,7 +464,7 @@ var _ = Describe("kube-vip routing table mode", Ordered, func() {
 				By(fmt.Sprintf("saving logs to %q", tempDirPath))
 				err := e2e.GetLogs(ctx, client, tempDirPath, clusterName)
 				Expect(err).ToNot(HaveOccurred())
-				cleanupCluster(clusterName, ConfigMtx, logger)
+				cleanupCluster(clusterName, "kind", ConfigMtx, logger)
 			})
 
 			DescribeTable("configures an IPv6 routes for services",
@@ -535,7 +535,7 @@ var _ = Describe("kube-vip routing table mode", Ordered, func() {
 				By(fmt.Sprintf("saving logs to %q", tempDirPath))
 				err := e2e.GetLogs(ctx, client, tempDirPath, clusterName)
 				Expect(err).ToNot(HaveOccurred())
-				cleanupCluster(clusterName, ConfigMtx, logger)
+				cleanupCluster(clusterName, "kind", ConfigMtx, logger)
 			})
 
 			DescribeTable("configures an IPv4 and IPv6 routes for services",
@@ -608,7 +608,7 @@ var _ = Describe("kube-vip routing table mode", Ordered, func() {
 				By(fmt.Sprintf("saving logs to %q", tempDirPath))
 				err := e2e.GetLogs(ctx, client, tempDirPath, clusterName)
 				Expect(err).ToNot(HaveOccurred())
-				cleanupCluster(clusterName, ConfigMtx, logger)
+				cleanupCluster(clusterName, "kind", ConfigMtx, logger)
 			})
 
 			DescribeTable("configures an IPv4 and IPv6 routes for services",
@@ -678,7 +678,7 @@ var _ = Describe("kube-vip routing table mode", Ordered, func() {
 				By(fmt.Sprintf("saving logs to %q", tempDirPath))
 				err := e2e.GetLogs(ctx, client, tempDirPath, clusterName)
 				Expect(err).ToNot(HaveOccurred())
-				cleanupCluster(clusterName, ConfigMtx, logger)
+				cleanupCluster(clusterName, "kind", ConfigMtx, logger)
 			})
 
 			DescribeTable("configures an IPv4 routes for services",
@@ -757,7 +757,7 @@ var _ = Describe("kube-vip routing table mode", Ordered, func() {
 				By(fmt.Sprintf("saving logs to %q", tempDirPath))
 				err := e2e.GetLogs(ctx, client, tempDirPath, clusterName)
 				Expect(err).ToNot(HaveOccurred())
-				cleanupCluster(clusterName, ConfigMtx, logger)
+				cleanupCluster(clusterName, "kind", ConfigMtx, logger)
 			})
 
 			DescribeTable("configures an IPv6 routes for services",
@@ -837,7 +837,7 @@ var _ = Describe("kube-vip routing table mode", Ordered, func() {
 				By(fmt.Sprintf("saving logs to %q", tempDirPath))
 				err := e2e.GetLogs(ctx, client, tempDirPath, clusterName)
 				Expect(err).ToNot(HaveOccurred())
-				cleanupCluster(clusterName, ConfigMtx, logger)
+				cleanupCluster(clusterName, "kind", ConfigMtx, logger)
 			})
 
 			DescribeTable("configures an IPv4 and IPv6 routes for services",
@@ -919,7 +919,7 @@ var _ = Describe("kube-vip routing table mode", Ordered, func() {
 				By(fmt.Sprintf("saving logs to %q", tempDirPath))
 				err := e2e.GetLogs(ctx, client, tempDirPath, clusterName)
 				Expect(err).ToNot(HaveOccurred())
-				cleanupCluster(clusterName, ConfigMtx, logger)
+				cleanupCluster(clusterName, "kind", ConfigMtx, logger)
 			})
 
 			DescribeTable("configures an IPv4 and IPv6 routes for services",

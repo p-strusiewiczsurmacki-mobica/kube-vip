@@ -168,7 +168,7 @@ var _ = Describe("kube-vip BGP mode", Ordered, func() {
 						return err
 					}, "30s", "200ms").Should(Succeed())
 				}
-				cleanupCluster(clusterName, ConfigMtx, logger)
+				cleanupCluster(clusterName, "kind", ConfigMtx, logger)
 			})
 
 			It("should add paths", func() {
@@ -211,7 +211,7 @@ var _ = Describe("kube-vip BGP mode", Ordered, func() {
 						return err
 					}, "30s", "200ms").Should(Succeed())
 				}
-				cleanupCluster(clusterName, ConfigMtx, logger)
+				cleanupCluster(clusterName, "kind", ConfigMtx, logger)
 			})
 
 			It("should add paths", func() {
@@ -254,7 +254,7 @@ var _ = Describe("kube-vip BGP mode", Ordered, func() {
 						return err
 					}, "30s", "200ms").Should(Succeed())
 				}
-				cleanupCluster(clusterName, ConfigMtx, logger)
+				cleanupCluster(clusterName, "kind", ConfigMtx, logger)
 			})
 
 			It("should add paths", func() {
@@ -297,7 +297,7 @@ var _ = Describe("kube-vip BGP mode", Ordered, func() {
 						return err
 					}, "30s", "200ms").Should(Succeed())
 				}
-				cleanupCluster(clusterName, ConfigMtx, logger)
+				cleanupCluster(clusterName, "kind", ConfigMtx, logger)
 			})
 
 			It("should add paths", func() {
@@ -340,7 +340,7 @@ var _ = Describe("kube-vip BGP mode", Ordered, func() {
 						return err
 					}, "30s", "200ms").Should(Succeed())
 				}
-				cleanupCluster(clusterName, ConfigMtx, logger)
+				cleanupCluster(clusterName, "kind", ConfigMtx, logger)
 			})
 
 			DescribeTable("advertise IPv4 routes for services",
@@ -394,7 +394,7 @@ var _ = Describe("kube-vip BGP mode", Ordered, func() {
 					})
 					Expect(err).ToNot(HaveOccurred())
 				}
-				cleanupCluster(clusterName, ConfigMtx, logger)
+				cleanupCluster(clusterName, "kind", ConfigMtx, logger)
 			})
 
 			DescribeTable("advertise IPv6 routes for services",
@@ -448,7 +448,7 @@ var _ = Describe("kube-vip BGP mode", Ordered, func() {
 					})
 					Expect(err).ToNot(HaveOccurred())
 				}
-				cleanupCluster(clusterName, ConfigMtx, logger)
+				cleanupCluster(clusterName, "kind", ConfigMtx, logger)
 			})
 
 			DescribeTable("advertise IPv6 routes over IPv4 session",
@@ -502,7 +502,7 @@ var _ = Describe("kube-vip BGP mode", Ordered, func() {
 					})
 					Expect(err).ToNot(HaveOccurred())
 				}
-				cleanupCluster(clusterName, ConfigMtx, logger)
+				cleanupCluster(clusterName, "kind", ConfigMtx, logger)
 			})
 
 			DescribeTable("advertise IPv4 routes over IPv6 session",
@@ -557,7 +557,7 @@ var _ = Describe("kube-vip BGP mode", Ordered, func() {
 					})
 					Expect(err).ToNot(HaveOccurred())
 				}
-				cleanupCluster(clusterName, ConfigMtx, logger)
+				cleanupCluster(clusterName, "kind", ConfigMtx, logger)
 			})
 
 			DescribeTable("advertise IPv6 routes over IPv4 session",
@@ -612,7 +612,7 @@ var _ = Describe("kube-vip BGP mode", Ordered, func() {
 					})
 					Expect(err).ToNot(HaveOccurred())
 				}
-				cleanupCluster(clusterName, ConfigMtx, logger)
+				cleanupCluster(clusterName, "kind", ConfigMtx, logger)
 			})
 
 			DescribeTable("advertise IPv4 routes over IPv6 session",
@@ -668,7 +668,7 @@ var _ = Describe("kube-vip BGP mode", Ordered, func() {
 						return err
 					}, "30s", "200ms").Should(Succeed())
 				}
-				cleanupCluster(clusterName, ConfigMtx, logger)
+				cleanupCluster(clusterName, "kind", ConfigMtx, logger)
 			})
 
 			DescribeTable("advertise IPv4 routes for services",
@@ -730,7 +730,7 @@ var _ = Describe("kube-vip BGP mode", Ordered, func() {
 					})
 					Expect(err).ToNot(HaveOccurred())
 				}
-				cleanupCluster(clusterName, ConfigMtx, logger)
+				cleanupCluster(clusterName, "kind", ConfigMtx, logger)
 			})
 
 			DescribeTable("advertise IPv6 routes for services",
@@ -792,7 +792,7 @@ var _ = Describe("kube-vip BGP mode", Ordered, func() {
 					})
 					Expect(err).ToNot(HaveOccurred())
 				}
-				cleanupCluster(clusterName, ConfigMtx, logger)
+				cleanupCluster(clusterName, "kind", ConfigMtx, logger)
 			})
 
 			DescribeTable("advertise IPv6 routes over IPv4 session",
@@ -854,7 +854,7 @@ var _ = Describe("kube-vip BGP mode", Ordered, func() {
 					})
 					Expect(err).ToNot(HaveOccurred())
 				}
-				cleanupCluster(clusterName, ConfigMtx, logger)
+				cleanupCluster(clusterName, "kind", ConfigMtx, logger)
 			})
 
 			DescribeTable("advertise IPv4 routes over IPv6 session",
@@ -917,7 +917,7 @@ var _ = Describe("kube-vip BGP mode", Ordered, func() {
 					})
 					Expect(err).ToNot(HaveOccurred())
 				}
-				cleanupCluster(clusterName, ConfigMtx, logger)
+				cleanupCluster(clusterName, "kind", ConfigMtx, logger)
 			})
 
 			DescribeTable("advertise IPv6 routes over IPv4 session",
@@ -980,7 +980,7 @@ var _ = Describe("kube-vip BGP mode", Ordered, func() {
 					})
 					Expect(err).ToNot(HaveOccurred())
 				}
-				cleanupCluster(clusterName, ConfigMtx, logger)
+				cleanupCluster(clusterName, "kind", ConfigMtx, logger)
 			})
 
 			DescribeTable("advertise IPv4 routes over IPv6 session",
@@ -1116,7 +1116,7 @@ var _ = Describe("kube-vip BGP mode", Ordered, func() {
 						return err
 					}, "30s", "200ms").Should(Succeed())
 				}
-				cleanupCluster(clusterName, ConfigMtx, logger)
+				cleanupCluster(clusterName, "kind", ConfigMtx, logger)
 			})
 
 			DescribeTable("advertise IPv4 routes for services",

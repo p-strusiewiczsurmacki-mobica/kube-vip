@@ -148,7 +148,7 @@ var _ = Describe("kube-vip ARP/NDP broadcast neighbor", Ordered, func() {
 				Eventually(func() error {
 					return e2e.GetLogs(ctx, client, tempDirPath, clusterName)
 				}, "60s", "5s").Should(Succeed())
-				cleanupCluster(clusterName, ConfigMtx, logger)
+				cleanupCluster(clusterName, "kind", ConfigMtx, logger)
 			})
 
 			It(clusterName+" provides an IPv4 VIP address for the Kubernetes control plane nodes", func() {
@@ -194,7 +194,7 @@ var _ = Describe("kube-vip ARP/NDP broadcast neighbor", Ordered, func() {
 				Eventually(func() error {
 					return e2e.GetLogs(ctx, client, tempDirPath, clusterName)
 				}, "60s", "5s").Should(Succeed())
-				cleanupCluster(clusterName, ConfigMtx, logger)
+				cleanupCluster(clusterName, "kind", ConfigMtx, logger)
 			})
 
 			DescribeTable("configures an IPv4 VIP address for service",
@@ -254,7 +254,7 @@ var _ = Describe("kube-vip ARP/NDP broadcast neighbor", Ordered, func() {
 				Eventually(func() error {
 					return e2e.GetLogs(ctx, client, tempDirPath, clusterName)
 				}, "60s", "5s").Should(Succeed())
-				cleanupCluster(clusterName, ConfigMtx, logger)
+				cleanupCluster(clusterName, "kind", ConfigMtx, logger)
 			})
 
 			DescribeTable("configures an IPv4 VIP address for service",
@@ -308,7 +308,7 @@ var _ = Describe("kube-vip ARP/NDP broadcast neighbor", Ordered, func() {
 				Eventually(func() error {
 					return e2e.GetLogs(ctx, c, tempDirPath, clusterName)
 				}, "60s", "5s").Should(Succeed())
-				cleanupCluster(clusterName, ConfigMtx, logger)
+				cleanupCluster(clusterName, "kind", ConfigMtx, logger)
 			})
 
 			It(clusterName+"provides an IPv6 VIP address for the Kubernetes control plane nodes", func() {
@@ -354,7 +354,7 @@ var _ = Describe("kube-vip ARP/NDP broadcast neighbor", Ordered, func() {
 				Eventually(func() error {
 					return e2e.GetLogs(ctx, client, tempDirPath, clusterName)
 				}, "60s", "5s").Should(Succeed())
-				cleanupCluster(clusterName, ConfigMtx, logger)
+				cleanupCluster(clusterName, "kind", ConfigMtx, logger)
 			})
 
 			DescribeTable("configures an IPv6 VIP address for service",
@@ -414,7 +414,7 @@ var _ = Describe("kube-vip ARP/NDP broadcast neighbor", Ordered, func() {
 				Eventually(func() error {
 					return e2e.GetLogs(ctx, client, tempDirPath, clusterName)
 				}, "60s", "5s").Should(Succeed())
-				cleanupCluster(clusterName, ConfigMtx, logger)
+				cleanupCluster(clusterName, "kind", ConfigMtx, logger)
 			})
 
 			DescribeTable("configures an IPv6 VIP address for service",
@@ -465,7 +465,7 @@ var _ = Describe("kube-vip ARP/NDP broadcast neighbor", Ordered, func() {
 				Eventually(func() error {
 					return e2e.GetLogs(ctx, client, tempDirPath, clusterName)
 				}, "60s", "5s").Should(Succeed())
-				cleanupCluster(clusterName, ConfigMtx, logger)
+				cleanupCluster(clusterName, "kind", ConfigMtx, logger)
 			})
 
 			It(clusterName+" provides a DualStack VIP addresses for the Kubernetes control plane nodes", func() {
@@ -511,7 +511,7 @@ var _ = Describe("kube-vip ARP/NDP broadcast neighbor", Ordered, func() {
 				Eventually(func() error {
 					return e2e.GetLogs(ctx, client, tempDirPath, clusterName)
 				}, "60s", "5s").Should(Succeed())
-				cleanupCluster(clusterName, ConfigMtx, logger)
+				cleanupCluster(clusterName, "kind", ConfigMtx, logger)
 			})
 
 			DescribeTable("configures an IPv4 and IPv6 VIP addresses for service",
@@ -571,7 +571,7 @@ var _ = Describe("kube-vip ARP/NDP broadcast neighbor", Ordered, func() {
 				Eventually(func() error {
 					return e2e.GetLogs(ctx, client, tempDirPath, clusterName)
 				}, "60s", "5s").Should(Succeed())
-				cleanupCluster(clusterName, ConfigMtx, logger)
+				cleanupCluster(clusterName, "kind", ConfigMtx, logger)
 			})
 
 			DescribeTable("configures an IPv4 and IPv6 VIP addresses for service",
@@ -624,7 +624,7 @@ var _ = Describe("kube-vip ARP/NDP broadcast neighbor", Ordered, func() {
 				Eventually(func() error {
 					return e2e.GetLogs(ctx, client, tempDirPath, clusterName)
 				}, "60s", "5s").Should(Succeed())
-				cleanupCluster(clusterName, ConfigMtx, logger)
+				cleanupCluster(clusterName, "kind", ConfigMtx, logger)
 			})
 
 			It(clusterName+" provides a DualStack VIP addresses for the Kubernetes control plane nodes", func() {
@@ -672,7 +672,7 @@ var _ = Describe("kube-vip ARP/NDP broadcast neighbor", Ordered, func() {
 				Eventually(func() error {
 					return e2e.GetLogs(ctx, client, tempDirPath, clusterName)
 				}, "60s", "5s").Should(Succeed())
-				cleanupCluster(clusterName, ConfigMtx, logger)
+				cleanupCluster(clusterName, "kind", ConfigMtx, logger)
 			})
 
 			DescribeTable("configures an IPv4 and IPv6 VIP addresses for service",
@@ -734,7 +734,7 @@ var _ = Describe("kube-vip ARP/NDP broadcast neighbor", Ordered, func() {
 				Eventually(func() error {
 					return e2e.GetLogs(ctx, client, tempDirPath, clusterName)
 				}, "60s", "5s").Should(Succeed())
-				cleanupCluster(clusterName, ConfigMtx, logger)
+				cleanupCluster(clusterName, "kind", ConfigMtx, logger)
 			})
 
 			DescribeTable("configures an IPv6 VIP address for service",
@@ -785,7 +785,7 @@ var _ = Describe("kube-vip ARP/NDP broadcast neighbor", Ordered, func() {
 				Eventually(func() error {
 					return e2e.GetLogs(ctx, client, tempDirPath, clusterName)
 				}, "60s", "5s").Should(Succeed())
-				cleanupCluster(clusterName, ConfigMtx, logger)
+				cleanupCluster(clusterName, "kind", ConfigMtx, logger)
 			})
 
 			It(clusterName+" uses hostname fallback while providing an IPv4 VIP address for the Kubernetes control plane nodes", func() {
@@ -831,7 +831,7 @@ var _ = Describe("kube-vip ARP/NDP broadcast neighbor", Ordered, func() {
 				Eventually(func() error {
 					return e2e.GetLogs(ctx, client, tempDirPath, clusterName)
 				}, "60s", "5s").Should(Succeed())
-				cleanupCluster(clusterName, ConfigMtx, logger)
+				cleanupCluster(clusterName, "kind", ConfigMtx, logger)
 			})
 
 			DescribeTable("configures an single IPv6 VIP address for multiple services",
@@ -885,7 +885,7 @@ var _ = Describe("kube-vip ARP/NDP broadcast neighbor", Ordered, func() {
 				Eventually(func() error {
 					return e2e.GetLogs(ctx, client, tempDirPath, clusterName)
 				}, "60s", "5s").Should(Succeed())
-				cleanupCluster(clusterName, ConfigMtx, logger)
+				cleanupCluster(clusterName, "kind", ConfigMtx, logger)
 			})
 
 			DescribeTable("configures an single IPv4 and IPv6 VIP address for multiple services",
@@ -1350,7 +1350,7 @@ func prepareCluster(ctx context.Context, tempDirPath, clusterNameSuffix, k8sImag
 	return clusterName, client, cfg
 }
 
-func cleanupCluster(clusterName string, configMtx *sync.Mutex, logger log.Logger) {
+func cleanupCluster(clusterName, network string, configMtx *sync.Mutex, logger log.Logger) {
 	if os.Getenv("E2E_PRESERVE_CLUSTER") == "true" {
 		return
 	}
@@ -1368,9 +1368,11 @@ func cleanupCluster(clusterName string, configMtx *sync.Mutex, logger log.Logger
 		return provider.Delete(clusterName, "")
 	}, "60s", "200ms").Should(Succeed())
 
-	cmd := exec.Command("docker", "network", "rm", clusterName)
-	err := cmd.Run()
-	Expect(err).ToNot(HaveOccurred())
+	if network != "kind" {
+		cmd := exec.Command("docker", "network", "rm", network)
+		err := cmd.Run()
+		Expect(err).ToNot(HaveOccurred())
+	}
 }
 
 func testControlPlaneVIPs(ctx context.Context, cpVIPs []string, clusterName string, client kubernetes.Interface) {
