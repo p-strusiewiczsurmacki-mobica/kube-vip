@@ -23,11 +23,12 @@ import (
 var _ = Describe("kube-vip BGP when deployed as a regular pod", Ordered, func() {
 	if Mode == ModeBGP {
 		var (
-			logger          log.Logger
-			imagePath       string
-			k8sImagePath    string
-			configPath      string
-			tempDirPathRoot string
+			logger           log.Logger
+			imagePath        string
+			k8sImagePath     string
+			configPath       string
+			tempDirPathRoot  string
+			networkInterface string
 		)
 
 		ctx, cancel := context.WithCancel(context.TODO())
@@ -48,7 +49,9 @@ var _ = Describe("kube-vip BGP when deployed as a regular pod", Ordered, func() 
 			var err error
 			tempDirPathRoot, err = os.MkdirTemp("", "kube-vip-test-bgp-ds")
 			Expect(err).NotTo(HaveOccurred())
-
+			if networkInterface = os.Getenv("NETWORK_INTERFACE"); networkInterface == "" {
+				networkInterface = "br-"
+			}
 		})
 
 		AfterAll(func() {

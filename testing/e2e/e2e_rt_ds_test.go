@@ -23,11 +23,12 @@ import (
 var _ = Describe("kube-vip RT functionality when deployed as a regular pod", Ordered, func() {
 	if Mode == ModeRT {
 		var (
-			logger          log.Logger
-			imagePath       string
-			k8sImagePath    string
-			configPath      string
-			tempDirPathRoot string
+			logger           log.Logger
+			imagePath        string
+			k8sImagePath     string
+			configPath       string
+			tempDirPathRoot  string
+			networkInterface string
 		)
 
 		ctx, cancel := context.WithCancel(context.TODO())
@@ -76,6 +77,10 @@ var _ = Describe("kube-vip RT functionality when deployed as a regular pod", Ord
 
 				clusterName, client, _ = prepareClusterForDS(tempDirPath, "rt-ds", imagePath, k8sImagePath,
 					logger, networking, 1, nil)
+
+				if networkInterface = os.Getenv("NETWORK_INTERFACE"); networkInterface == "" {
+					networkInterface = "br-"
+				}
 			})
 
 			AfterAll(func() {

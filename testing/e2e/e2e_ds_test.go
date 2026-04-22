@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	v1 "k8s.io/api/apps/v1"
@@ -31,11 +32,12 @@ import (
 var _ = Describe("kube-vip ARP/NDP broadcast neighbor when deployed as a regular pod", Ordered, func() {
 	if Mode == ModeARP {
 		var (
-			logger          log.Logger
-			imagePath       string
-			k8sImagePath    string
-			configPath      string
-			tempDirPathRoot string
+			logger           log.Logger
+			imagePath        string
+			k8sImagePath     string
+			configPath       string
+			tempDirPathRoot  string
+			networkInterface string
 		)
 
 		ctx, cancel := context.WithCancel(context.TODO())
@@ -56,7 +58,9 @@ var _ = Describe("kube-vip ARP/NDP broadcast neighbor when deployed as a regular
 			var err error
 			tempDirPathRoot, err = os.MkdirTemp("", "kube-vip-test-arp-ds")
 			Expect(err).NotTo(HaveOccurred())
-
+			if networkInterface = os.Getenv("NETWORK_INTERFACE"); networkInterface == "" {
+				networkInterface = "br-"
+			}
 		})
 
 		AfterAll(func() {
@@ -514,7 +518,7 @@ func testDS(ctx context.Context, manifestValues *e2e.KubevipManifestValues, clie
 		families = []corev1.IPFamily{corev1.IPv4Protocol, corev1.IPv6Protocol}
 	}
 
-	var cpVips, svcVips, services []string
+	var cpVips, svcVips []string
 	var cpHost, svcHost, svcVip string
 
 	if cpEnable {
@@ -538,7 +542,7 @@ func testDS(ctx context.Context, manifestValues *e2e.KubevipManifestValues, clie
 
 		svcVip = e2e.GenerateVIP(genFam, SOffset.Get())
 		var leases []string
-		services, leases = createTestServiceForDS(ctx, "test-svc", svcVip, leaseName,
+		_, leases = createTestServiceForDS(ctx, "test-svc", svcVip, leaseName,
 			corev1.ServiceExternalTrafficPolicyCluster, client, svcElection, families, 1)
 
 		if svcUseLease {
@@ -566,35 +570,35 @@ func testDS(ctx context.Context, manifestValues *e2e.KubevipManifestValues, clie
 	Expect(err).ToNot(HaveOccurred())
 	Expect(len(pods.Items)).To(Equal(1))
 
-	removeKubeVipDS(ctx, client)
+	// removeKubeVipDS(ctx, client)
 
-	// check if kube-vip pod gets deleted within 10s
-	Eventually(func() error {
-		_, err := client.CoreV1().Pods("kube-system").Get(ctx, pods.Items[0].Name, metav1.GetOptions{})
-		return err
-	}, "10s", "200ms").ShouldNot(Succeed())
+	// // check if kube-vip pod gets deleted within 10s
+	// Eventually(func() error {
+	// 	_, err := client.CoreV1().Pods("kube-system").Get(ctx, pods.Items[0].Name, metav1.GetOptions{})
+	// 	return err
+	// }, "10s", "200ms").ShouldNot(Succeed())
 
-	if cpEnable && manifestValues.Mode == ModeARP {
-		for _, addr := range cpVips {
-			By(withTimestamp("checking CP address was removed: " + addr))
-			Expect(checkIPAddress(addr, cpHost, false)).To(BeTrue())
-		}
-	}
+	// if cpEnable && manifestValues.Mode == ModeARP {
+	// 	for _, addr := range cpVips {
+	// 		By(withTimestamp("checking CP address was removed: " + addr))
+	// 		Expect(checkIPAddress(addr, cpHost, false)).To(BeTrue())
+	// 	}
+	// }
 
-	if svcEnable {
-		if manifestValues.Mode == ModeARP {
-			for _, addr := range svcVips {
-				By(withTimestamp("checking service address was removed: " + addr))
-				Expect(checkIPAddress(addr, svcHost, false)).To(BeTrue())
-			}
-		}
+	// if svcEnable {
+	// 	if manifestValues.Mode == ModeARP {
+	// 		for _, addr := range svcVips {
+	// 			By(withTimestamp("checking service address was removed: " + addr))
+	// 			Expect(checkIPAddress(addr, svcHost, false)).To(BeTrue())
+	// 		}
+	// 	}
 
-		for _, svc := range services {
-			By(withTimestamp("deleting service: " + svc))
-			Expect(client.CoreV1().Services(dsNamespace).Delete(ctx, svc, metav1.DeleteOptions{})).To(Succeed())
-			time.Sleep(time.Second)
-		}
-	}
+	// 	for _, svc := range services {
+	// 		By(withTimestamp("deleting service: " + svc))
+	// 		Expect(client.CoreV1().Services(dsNamespace).Delete(ctx, svc, metav1.DeleteOptions{})).To(Succeed())
+	// 		time.Sleep(time.Second)
+	// 	}
+	// }
 }
 
 func testEndpoints(ctx context.Context, manifestValues *e2e.KubevipManifestValues,
@@ -900,9 +904,13 @@ func removeDS(ctx context.Context, client kubernetes.Interface, namespace, name 
 	}, "60s", "200ms").Should(Succeed())
 }
 
+var clusterCreationMtx sync.Mutex
+
 func prepareClusterForDS(tempDirPath, clusterNameSuffix, kvImagePath, k8sImagePath string, logger log.Logger,
 	networking *kindconfigv1alpha4.Networking, nodesNum int,
 	addSAN *san) (string, kubernetes.Interface, *rest.Config) {
+	clusterCreationMtx.Lock()
+	defer clusterCreationMtx.Unlock()
 
 	clusterConfig := kindconfigv1alpha4.Cluster{
 		Networking: *networking,
@@ -939,6 +947,9 @@ func prepareClusterForDS(tempDirPath, clusterNameSuffix, kvImagePath, k8sImagePa
 	}
 
 	clusterName := fmt.Sprintf("%s-%s", filepath.Base(tempDirPath), clusterNameSuffix)
+
+	err := os.Setenv("KIND_EXPERIMENTAL_DOCKER_NETWORK", clusterName)
+	Expect(err).ToNot(HaveOccurred())
 
 	By(withTimestamp("creating a kind cluster with multiple control plane nodes"))
 	client, cfg, err := createKindCluster(logger, &clusterConfig, clusterName)

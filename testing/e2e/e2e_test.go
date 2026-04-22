@@ -1256,6 +1256,8 @@ func prepareCluster(ctx context.Context, tempDirPath, clusterNameSuffix, k8sImag
 	v129 bool, kubeVIPManifestTemplate *template.Template, logger log.Logger,
 	manifestValues *e2e.KubevipManifestValues, networking *kindconfigv1alpha4.Networking, nodesNum int,
 	addSAN *san, dsNumber int) (string, kubernetes.Interface, *rest.Config) {
+	clusterCreationMtx.Lock()
+	defer clusterCreationMtx.Unlock()
 
 	manifestPath := filepath.Join(tempDirPath, fmt.Sprintf("kube-vip-%s.yaml", clusterNameSuffix))
 
@@ -1325,6 +1327,9 @@ func prepareCluster(ctx context.Context, tempDirPath, clusterNameSuffix, k8sImag
 
 	clusterName := fmt.Sprintf("%s-%s", filepath.Base(tempDirPath), clusterNameSuffix)
 
+	err = os.Setenv("KIND_EXPERIMENTAL_DOCKER_NETWORK", clusterName)
+	Expect(err).ToNot(HaveOccurred())
+
 	By(withTimestamp("creating a kind cluster with multiple control plane nodes"))
 	client, cfg, err := createKindCluster(logger, &clusterConfig, clusterName)
 	Expect(err).ToNot(HaveOccurred())
@@ -1362,6 +1367,10 @@ func cleanupCluster(clusterName string, configMtx *sync.Mutex, logger log.Logger
 		defer configMtx.Unlock()
 		return provider.Delete(clusterName, "")
 	}, "60s", "200ms").Should(Succeed())
+
+	cmd := exec.Command("docker", "network", "rm", clusterName)
+	err := cmd.Run()
+	Expect(err).ToNot(HaveOccurred())
 }
 
 func testControlPlaneVIPs(ctx context.Context, cpVIPs []string, clusterName string, client kubernetes.Interface) {
