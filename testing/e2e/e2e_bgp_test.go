@@ -1134,7 +1134,7 @@ var _ = Describe("kube-vip BGP mode", Ordered, func() {
 func testBGP(ctx context.Context, offset uint, lbFamily string, afiFamily api.Family_Afi, svcFamily []corev1.IPFamily, svcName string,
 	trafficPolicy corev1.ServiceExternalTrafficPolicy, client kubernetes.Interface, numberOfServices int,
 	gobgpClient api.GobgpApiClient, expectedNexthop string, serviceLease string) {
-	lbAddress := e2e.GenerateVIP(lbFamily, offset)
+	lbAddress := e2e.GenerateVIP(lbFamily, offset, "kind")
 	routeCheckFamily := &api.Family{
 		Afi:  afiFamily,
 		Safi: api.Family_SAFI_UNICAST,
@@ -1148,7 +1148,7 @@ func setupEnv(ctx context.Context, cpVIP, clusterName *string, tempDirPath strin
 	logger log.Logger, nodesNumber int, mpbgpnexthop, clusterNameSuffix string, serviceElection, cpEnable, svcEnable bool) (string, string) {
 	var err error
 
-	*cpVIP = e2e.GenerateVIP(clusterAddrFamily, SOffset.Get())
+	*cpVIP = e2e.GenerateVIP(clusterAddrFamily, SOffset.Get(), "kind")
 
 	var clusterIPFamily kindconfigv1alpha4.ClusterIPFamily
 	var podSubnet, serviceSubnet string

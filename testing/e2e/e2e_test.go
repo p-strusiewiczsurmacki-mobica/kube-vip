@@ -119,7 +119,7 @@ var _ = Describe("kube-vip ARP/NDP broadcast neighbor", Ordered, func() {
 			)
 
 			BeforeAll(func() {
-				cpVIP = e2e.GenerateVIP(utils.IPv4Family, SOffset.Get())
+				cpVIP = e2e.GenerateVIP(utils.IPv4Family, SOffset.Get(), "kind")
 
 				networking := &kindconfigv1alpha4.Networking{
 					IPFamily: kindconfigv1alpha4.IPv4Family,
@@ -165,7 +165,7 @@ var _ = Describe("kube-vip ARP/NDP broadcast neighbor", Ordered, func() {
 			)
 
 			BeforeAll(func() {
-				cpVIP = e2e.GenerateVIP(utils.IPv4Family, SOffset.Get())
+				cpVIP = e2e.GenerateVIP(utils.IPv4Family, SOffset.Get(), "kind")
 
 				networking := &kindconfigv1alpha4.Networking{
 					IPFamily: kindconfigv1alpha4.IPv4Family,
@@ -199,7 +199,7 @@ var _ = Describe("kube-vip ARP/NDP broadcast neighbor", Ordered, func() {
 
 			DescribeTable("configures an IPv4 VIP address for service",
 				func(svcName string, currentOffset uint, trafficPolicy corev1.ServiceExternalTrafficPolicy) {
-					lbAddress := e2e.GenerateVIP(utils.IPv4Family, currentOffset)
+					lbAddress := e2e.GenerateVIP(utils.IPv4Family, currentOffset, "kind")
 					testService(ctx, svcName, lbAddress, "plndr-svcs-lock", "kube-system", trafficPolicy, client, false, []corev1.IPFamily{corev1.IPv4Protocol}, 1)
 				},
 				Entry("with external traffic policy - cluster", "test-svc-cluster", SOffset.Get(), corev1.ServiceExternalTrafficPolicyCluster),
@@ -208,7 +208,7 @@ var _ = Describe("kube-vip ARP/NDP broadcast neighbor", Ordered, func() {
 
 			DescribeTable("only removes VIP address if it was referenced by multiple services and all of them were deleted",
 				func(svcName string, offset uint, trafficPolicy corev1.ServiceExternalTrafficPolicy) {
-					lbAddress := e2e.GenerateVIP(utils.IPv4Family, offset)
+					lbAddress := e2e.GenerateVIP(utils.IPv4Family, offset, "kind")
 					testService(ctx, svcName, lbAddress, "plndr-svcs-lock", "kube-system", trafficPolicy, client, false, []corev1.IPFamily{corev1.IPv4Protocol}, 2)
 				},
 				Entry("with external traffic policy - cluster", "test-svc-cluster", SOffset.Get(), corev1.ServiceExternalTrafficPolicyCluster),
@@ -225,7 +225,7 @@ var _ = Describe("kube-vip ARP/NDP broadcast neighbor", Ordered, func() {
 			)
 
 			BeforeAll(func() {
-				cpVIP = e2e.GenerateVIP(utils.IPv4Family, SOffset.Get())
+				cpVIP = e2e.GenerateVIP(utils.IPv4Family, SOffset.Get(), "kind")
 
 				networking := &kindconfigv1alpha4.Networking{
 					IPFamily: kindconfigv1alpha4.IPv4Family,
@@ -259,7 +259,7 @@ var _ = Describe("kube-vip ARP/NDP broadcast neighbor", Ordered, func() {
 
 			DescribeTable("configures an IPv4 VIP address for service",
 				func(svcName string, offset uint, trafficPolicy corev1.ServiceExternalTrafficPolicy) {
-					lbAddress := e2e.GenerateVIP(utils.IPv4Family, offset)
+					lbAddress := e2e.GenerateVIP(utils.IPv4Family, offset, "kind")
 					testService(ctx, svcName, lbAddress, fmt.Sprintf("kubevip-%s", svcName), dsNamespace, trafficPolicy, client, true, []corev1.IPFamily{corev1.IPv4Protocol}, 1)
 				},
 				Entry("with external traffic policy - cluster", "test-svc-cluster", SOffset.Get(), corev1.ServiceExternalTrafficPolicyCluster),
@@ -277,7 +277,7 @@ var _ = Describe("kube-vip ARP/NDP broadcast neighbor", Ordered, func() {
 			)
 
 			BeforeAll(func() {
-				cpVIP = e2e.GenerateVIP(utils.IPv6Family, SOffset.Get())
+				cpVIP = e2e.GenerateVIP(utils.IPv6Family, SOffset.Get(), "kind")
 
 				networking := &kindconfigv1alpha4.Networking{
 					IPFamily: kindconfigv1alpha4.IPv6Family,
@@ -325,7 +325,7 @@ var _ = Describe("kube-vip ARP/NDP broadcast neighbor", Ordered, func() {
 			)
 
 			BeforeAll(func() {
-				cpVIP = e2e.GenerateVIP(utils.IPv6Family, SOffset.Get())
+				cpVIP = e2e.GenerateVIP(utils.IPv6Family, SOffset.Get(), "kind")
 
 				networking := &kindconfigv1alpha4.Networking{
 					IPFamily: kindconfigv1alpha4.IPv6Family,
@@ -359,7 +359,7 @@ var _ = Describe("kube-vip ARP/NDP broadcast neighbor", Ordered, func() {
 
 			DescribeTable("configures an IPv6 VIP address for service",
 				func(svcName string, offset uint, trafficPolicy corev1.ServiceExternalTrafficPolicy) {
-					lbAddress := e2e.GenerateVIP(utils.IPv6Family, offset)
+					lbAddress := e2e.GenerateVIP(utils.IPv6Family, offset, "kind")
 					testService(ctx, svcName, lbAddress, "plndr-svcs-lock", "kube-system", trafficPolicy, client, false, []corev1.IPFamily{corev1.IPv6Protocol}, 1)
 				},
 				Entry("with external traffic policy - cluster", "test-svc-cluster", SOffset.Get(), corev1.ServiceExternalTrafficPolicyCluster),
@@ -368,7 +368,7 @@ var _ = Describe("kube-vip ARP/NDP broadcast neighbor", Ordered, func() {
 
 			DescribeTable("only removes VIP address if it was referenced by multiple services and all of them were deleted",
 				func(svcName string, offset uint, trafficPolicy corev1.ServiceExternalTrafficPolicy) {
-					lbAddress := e2e.GenerateVIP(utils.IPv6Family, offset)
+					lbAddress := e2e.GenerateVIP(utils.IPv6Family, offset, "kind")
 					testService(ctx, svcName, lbAddress, "plndr-svcs-lock", "kube-system", trafficPolicy, client, false, []corev1.IPFamily{corev1.IPv6Protocol}, 2)
 				},
 				Entry("with external traffic policy - cluster", "test-svc-cluster", SOffset.Get(), corev1.ServiceExternalTrafficPolicyCluster),
@@ -385,7 +385,7 @@ var _ = Describe("kube-vip ARP/NDP broadcast neighbor", Ordered, func() {
 			)
 
 			BeforeAll(func() {
-				cpVIP = e2e.GenerateVIP(utils.IPv6Family, SOffset.Get())
+				cpVIP = e2e.GenerateVIP(utils.IPv6Family, SOffset.Get(), "kind")
 
 				networking := &kindconfigv1alpha4.Networking{
 					IPFamily: kindconfigv1alpha4.IPv6Family,
@@ -419,7 +419,7 @@ var _ = Describe("kube-vip ARP/NDP broadcast neighbor", Ordered, func() {
 
 			DescribeTable("configures an IPv6 VIP address for service",
 				func(svcName string, offset uint, trafficPolicy corev1.ServiceExternalTrafficPolicy) {
-					lbAddress := e2e.GenerateVIP(utils.IPv6Family, offset)
+					lbAddress := e2e.GenerateVIP(utils.IPv6Family, offset, "kind")
 					testService(ctx, svcName, lbAddress, fmt.Sprintf("kubevip-%s", svcName), dsNamespace, trafficPolicy, client, true, []corev1.IPFamily{corev1.IPv6Protocol}, 1)
 				},
 				Entry("with external traffic policy - cluster", "test-svc-cluster", SOffset.Get(), corev1.ServiceExternalTrafficPolicyCluster),
@@ -436,7 +436,7 @@ var _ = Describe("kube-vip ARP/NDP broadcast neighbor", Ordered, func() {
 			)
 
 			BeforeAll(func() {
-				cpVIP = e2e.GenerateDualStackVIP(23)
+				cpVIP = e2e.GenerateDualStackVIP(23, "kind")
 
 				networking := &kindconfigv1alpha4.Networking{
 					IPFamily: kindconfigv1alpha4.DualStackFamily,
@@ -482,7 +482,7 @@ var _ = Describe("kube-vip ARP/NDP broadcast neighbor", Ordered, func() {
 			)
 
 			BeforeAll(func() {
-				cpVIP = e2e.GenerateDualStackVIP(24)
+				cpVIP = e2e.GenerateDualStackVIP(24, "kind")
 
 				networking := &kindconfigv1alpha4.Networking{
 					IPFamily: kindconfigv1alpha4.DualStackFamily,
@@ -516,7 +516,7 @@ var _ = Describe("kube-vip ARP/NDP broadcast neighbor", Ordered, func() {
 
 			DescribeTable("configures an IPv4 and IPv6 VIP addresses for service",
 				func(svcName string, offset uint, trafficPolicy corev1.ServiceExternalTrafficPolicy) {
-					lbAddress := e2e.GenerateDualStackVIP(offset)
+					lbAddress := e2e.GenerateDualStackVIP(offset, "kind")
 					testService(ctx, svcName, lbAddress, "plndr-svcs-lock", "kube-system", trafficPolicy, client, false, []corev1.IPFamily{corev1.IPv4Protocol, corev1.IPv6Protocol}, 1)
 				},
 				Entry("with external traffic policy - cluster", "test-svc-cluster", SOffset.Get(), corev1.ServiceExternalTrafficPolicyCluster),
@@ -525,7 +525,7 @@ var _ = Describe("kube-vip ARP/NDP broadcast neighbor", Ordered, func() {
 
 			DescribeTable("only removes VIP address if it was referenced by multiple services and all of them were deleted",
 				func(svcName string, offset uint, trafficPolicy corev1.ServiceExternalTrafficPolicy) {
-					lbAddress := e2e.GenerateDualStackVIP(offset)
+					lbAddress := e2e.GenerateDualStackVIP(offset, "kind")
 					testService(ctx, svcName, lbAddress, "plndr-svcs-lock", "kube-system", trafficPolicy, client, false, []corev1.IPFamily{corev1.IPv4Protocol, corev1.IPv6Protocol}, 2)
 				},
 				Entry("with external traffic policy - cluster", "test-svc-cluster", SOffset.Get(), corev1.ServiceExternalTrafficPolicyCluster),
@@ -542,7 +542,7 @@ var _ = Describe("kube-vip ARP/NDP broadcast neighbor", Ordered, func() {
 			)
 
 			BeforeAll(func() {
-				cpVIP = e2e.GenerateDualStackVIP(29)
+				cpVIP = e2e.GenerateDualStackVIP(29, "kind")
 
 				networking := &kindconfigv1alpha4.Networking{
 					IPFamily: kindconfigv1alpha4.DualStackFamily,
@@ -576,7 +576,7 @@ var _ = Describe("kube-vip ARP/NDP broadcast neighbor", Ordered, func() {
 
 			DescribeTable("configures an IPv4 and IPv6 VIP addresses for service",
 				func(svcName string, offset uint, trafficPolicy corev1.ServiceExternalTrafficPolicy) {
-					lbAddress := e2e.GenerateDualStackVIP(offset)
+					lbAddress := e2e.GenerateDualStackVIP(offset, "kind")
 					testService(ctx, svcName, lbAddress, fmt.Sprintf("kubevip-%s", svcName), dsNamespace, trafficPolicy, client, true, []corev1.IPFamily{corev1.IPv4Protocol, corev1.IPv6Protocol}, 1)
 				},
 				Entry("with external traffic policy - cluster", "test-svc-cluster", SOffset.Get(), corev1.ServiceExternalTrafficPolicyCluster),
@@ -593,7 +593,7 @@ var _ = Describe("kube-vip ARP/NDP broadcast neighbor", Ordered, func() {
 			)
 
 			BeforeAll(func() {
-				cpVIP = e2e.GenerateDualStackVIP(32)
+				cpVIP = e2e.GenerateDualStackVIP(32, "kind")
 
 				networking := &kindconfigv1alpha4.Networking{
 					IPFamily:      kindconfigv1alpha4.DualStackFamily,
@@ -641,7 +641,7 @@ var _ = Describe("kube-vip ARP/NDP broadcast neighbor", Ordered, func() {
 			)
 
 			BeforeAll(func() {
-				cpVIP = e2e.GenerateDualStackVIP(33)
+				cpVIP = e2e.GenerateDualStackVIP(33, "kind")
 
 				networking := &kindconfigv1alpha4.Networking{
 					IPFamily:      kindconfigv1alpha4.DualStackFamily,
@@ -677,7 +677,7 @@ var _ = Describe("kube-vip ARP/NDP broadcast neighbor", Ordered, func() {
 
 			DescribeTable("configures an IPv4 and IPv6 VIP addresses for service",
 				func(svcName string, offset uint, trafficPolicy corev1.ServiceExternalTrafficPolicy) {
-					lbAddress := e2e.GenerateDualStackVIP(offset)
+					lbAddress := e2e.GenerateDualStackVIP(offset, "kind")
 					testService(ctx, svcName, lbAddress, "plndr-svcs-lock", "kube-system", trafficPolicy, client, false, []corev1.IPFamily{corev1.IPv6Protocol, corev1.IPv4Protocol}, 1)
 				},
 				Entry("with external traffic policy - cluster", "test-svc-cluster", SOffset.Get(), corev1.ServiceExternalTrafficPolicyCluster),
@@ -686,7 +686,7 @@ var _ = Describe("kube-vip ARP/NDP broadcast neighbor", Ordered, func() {
 
 			DescribeTable("only removes VIP address if it was referenced by multiple services and all of them were deleted",
 				func(svcName string, offset uint, trafficPolicy corev1.ServiceExternalTrafficPolicy) {
-					lbAddress := e2e.GenerateDualStackVIP(offset)
+					lbAddress := e2e.GenerateDualStackVIP(offset, "kind")
 					testService(ctx, svcName, lbAddress, "plndr-svcs-lock", "kube-system", trafficPolicy, client, false, []corev1.IPFamily{corev1.IPv6Protocol, corev1.IPv4Protocol}, 2)
 				},
 				Entry("with external traffic policy - cluster", "test-svc-cluster", SOffset.Get(), corev1.ServiceExternalTrafficPolicyCluster),
@@ -703,7 +703,7 @@ var _ = Describe("kube-vip ARP/NDP broadcast neighbor", Ordered, func() {
 			)
 
 			BeforeAll(func() {
-				cpVIP = e2e.GenerateDualStackVIP(38)
+				cpVIP = e2e.GenerateDualStackVIP(38, "kind")
 
 				networking := &kindconfigv1alpha4.Networking{
 					IPFamily:      kindconfigv1alpha4.DualStackFamily,
@@ -739,7 +739,7 @@ var _ = Describe("kube-vip ARP/NDP broadcast neighbor", Ordered, func() {
 
 			DescribeTable("configures an IPv6 VIP address for service",
 				func(svcName string, offset uint, trafficPolicy corev1.ServiceExternalTrafficPolicy) {
-					lbAddress := e2e.GenerateDualStackVIP(offset)
+					lbAddress := e2e.GenerateDualStackVIP(offset, "kind")
 					testService(ctx, svcName, lbAddress, fmt.Sprintf("kubevip-%s", svcName), dsNamespace, trafficPolicy, client, true, []corev1.IPFamily{corev1.IPv6Protocol, corev1.IPv4Protocol}, 1)
 				},
 				Entry("with external traffic policy - cluster", "test-svc-cluster", SOffset.Get(), corev1.ServiceExternalTrafficPolicyCluster),
@@ -756,7 +756,7 @@ var _ = Describe("kube-vip ARP/NDP broadcast neighbor", Ordered, func() {
 			)
 
 			BeforeAll(func() {
-				cpVIP = e2e.GenerateVIP(utils.IPv4Family, SOffset.Get())
+				cpVIP = e2e.GenerateVIP(utils.IPv4Family, SOffset.Get(), "kind")
 
 				networking := &kindconfigv1alpha4.Networking{
 					IPFamily: kindconfigv1alpha4.IPv4Family,
@@ -802,7 +802,7 @@ var _ = Describe("kube-vip ARP/NDP broadcast neighbor", Ordered, func() {
 			)
 
 			BeforeAll(func() {
-				cpVIP = e2e.GenerateVIP(utils.IPv6Family, SOffset.Get())
+				cpVIP = e2e.GenerateVIP(utils.IPv6Family, SOffset.Get(), "kind")
 
 				networking := &kindconfigv1alpha4.Networking{
 					IPFamily: kindconfigv1alpha4.IPv6Family,
@@ -836,7 +836,7 @@ var _ = Describe("kube-vip ARP/NDP broadcast neighbor", Ordered, func() {
 
 			DescribeTable("configures an single IPv6 VIP address for multiple services",
 				func(svcName string, offset uint, trafficPolicy corev1.ServiceExternalTrafficPolicy) {
-					lbAddress := e2e.GenerateVIP(utils.IPv6Family, offset)
+					lbAddress := e2e.GenerateVIP(utils.IPv6Family, offset, "kind")
 					testServiceCommonLease(ctx, svcName, lbAddress, dsNamespace,
 						trafficPolicy,
 						client, []corev1.IPFamily{corev1.IPv6Protocol}, 3)
@@ -854,7 +854,7 @@ var _ = Describe("kube-vip ARP/NDP broadcast neighbor", Ordered, func() {
 			)
 
 			BeforeAll(func() {
-				cpVIP = e2e.GenerateDualStackVIP(SOffset.Get())
+				cpVIP = e2e.GenerateDualStackVIP(SOffset.Get(), "kind")
 
 				networking := &kindconfigv1alpha4.Networking{
 					IPFamily:      kindconfigv1alpha4.DualStackFamily,
@@ -890,7 +890,7 @@ var _ = Describe("kube-vip ARP/NDP broadcast neighbor", Ordered, func() {
 
 			DescribeTable("configures an single IPv4 and IPv6 VIP address for multiple services",
 				func(svcName string, offset uint, trafficPolicy corev1.ServiceExternalTrafficPolicy) {
-					lbAddress := e2e.GenerateDualStackVIP(offset)
+					lbAddress := e2e.GenerateDualStackVIP(offset, "kind")
 					testServiceCommonLease(ctx, svcName, lbAddress, dsNamespace,
 						trafficPolicy,
 						client, []corev1.IPFamily{corev1.IPv6Protocol, corev1.IPv4Protocol}, 3)
@@ -1327,7 +1327,7 @@ func prepareCluster(ctx context.Context, tempDirPath, clusterNameSuffix, k8sImag
 
 	clusterName := fmt.Sprintf("%s-%s", filepath.Base(tempDirPath), clusterNameSuffix)
 
-	err = os.Setenv("KIND_EXPERIMENTAL_DOCKER_NETWORK", clusterName)
+	err = os.Setenv("KIND_EXPERIMENTAL_DOCKER_NETWORK", "")
 	Expect(err).ToNot(HaveOccurred())
 
 	By(withTimestamp("creating a kind cluster with multiple control plane nodes"))

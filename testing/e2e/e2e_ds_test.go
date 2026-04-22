@@ -503,7 +503,7 @@ func testDS(ctx context.Context, manifestValues *e2e.KubevipManifestValues, clie
 	}
 
 	if cpEnable {
-		manifestValues.ControlPlaneVIP = e2e.GenerateVIP(genFam, SOffset.Get())
+		manifestValues.ControlPlaneVIP = e2e.GenerateVIP(genFam, SOffset.Get(), clusterName)
 	}
 
 	createKubeVipDS(ctx, "kube-vip", "kube-system", manifestValues, client)
@@ -540,7 +540,7 @@ func testDS(ctx context.Context, manifestValues *e2e.KubevipManifestValues, clie
 		leaseName := "plndr-svcs-lock"
 		leaseNamespace := "kube-system"
 
-		svcVip = e2e.GenerateVIP(genFam, SOffset.Get())
+		svcVip = e2e.GenerateVIP(genFam, SOffset.Get(), clusterName)
 		var leases []string
 		_, leases = createTestServiceForDS(ctx, "test-svc", svcVip, leaseName,
 			corev1.ServiceExternalTrafficPolicyCluster, client, svcElection, families, 1)
@@ -663,7 +663,7 @@ func testEndpoints(ctx context.Context, manifestValues *e2e.KubevipManifestValue
 		leaseName := "plndr-svcs-lock"
 		leaseNamespace := "kube-system"
 
-		svcVip = e2e.GenerateVIP(genFam, SOffset.Get())
+		svcVip = e2e.GenerateVIP(genFam, SOffset.Get(), clusterName)
 		var leases []string
 		_, leases = createTestServiceForDS(ctx, "test-svc", svcVip, leaseName,
 			trafficPolicy, client, svcElection, families, 1)
