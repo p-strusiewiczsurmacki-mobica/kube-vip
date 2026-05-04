@@ -20,7 +20,7 @@ type Context struct {
 }
 
 func New(ctx context.Context) *Context {
-	svcCtx, svcCancel := context.WithCancel(ctx)
+	svcCtx, svcCancel := context.WithCancel(ctx) //nolint - svcCancel stored for future use
 	return &Context{
 		Ctx:    svcCtx,
 		Cancel: svcCancel,
