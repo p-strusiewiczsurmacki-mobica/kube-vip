@@ -2,13 +2,14 @@ package debouncer
 
 import (
 	"context"
+	"fmt"
+	log "log/slog"
 	"sync"
 	"time"
 
 	v1 "k8s.io/api/core/v1"
 	discoveryv1 "k8s.io/api/discovery/v1"
 	"k8s.io/apimachinery/pkg/watch"
-	watchtools "k8s.io/client-go/tools/watch"
 )
 
 type Event struct {
@@ -17,24 +18,36 @@ type Event struct {
 }
 
 type debouncer struct {
-	rw           *watchtools.RetryWatcher
 	input        <-chan watch.Event
 	output       chan Event
 	stopChan     chan any
 	stopOnce     sync.Once
 	events       map[string]map[string]*item
 	debounceTime time.Duration
+	rwStop       func()
 }
 
-func New(rw *watchtools.RetryWatcher, debounceTime time.Duration) *debouncer {
+func New(input <-chan watch.Event, rwStop func(), debounceTime string) (*debouncer, error) {
+	dt, err := time.ParseDuration(debounceTime)
+	if err != nil {
+		log.Warn("failed to parse debounce time configuration, will use the default config", "value", DefaultTime, "err", err)
+		dt, err = time.ParseDuration(DefaultTime)
+		if err != nil {
+			return nil, fmt.Errorf("failed to parse default debounce time value: %w", err)
+		}
+	}
+	if dt < minimalTime {
+		log.Warn("configured debounce time value is too low, will use minimal value of 200ms", "config value", dt.String())
+		dt = minimalTime
+	}
 	return &debouncer{
-		rw:           rw,
-		input:        rw.ResultChan(),
+		input:        input,
 		output:       make(chan Event),
 		stopChan:     make(chan any),
 		events:       make(map[string]map[string]*item),
-		debounceTime: debounceTime,
-	}
+		debounceTime: dt,
+		rwStop:       rwStop,
+	}, nil
 }
 
 type item struct {
@@ -54,14 +67,14 @@ func newItem(output chan<- Event) *item {
 
 const (
 	DefaultTime = "2s"
-	MinimalTime = time.Millisecond * 200
+	minimalTime = time.Millisecond * 200
 )
 
 func (d *debouncer) Start(ctx context.Context) {
 	wg := sync.WaitGroup{}
 	debouncerCtx, cancel := context.WithCancel(ctx)
 	defer func() {
-		d.rw.Stop()
+		d.rwStop()
 		cancel()
 		wg.Wait()
 		close(d.output)

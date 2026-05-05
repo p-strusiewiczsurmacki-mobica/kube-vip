@@ -3,7 +3,6 @@ package services
 import (
 	"fmt"
 	"sync"
-	"time"
 
 	log "log/slog"
 
@@ -25,20 +24,13 @@ func (p *Processor) watchEndpoint(svcCtx *servicecontext.Context, id string, ser
 		return fmt.Errorf("[%s] error watching endpoints: %w", provider.GetLabel(), err)
 	}
 
-	wg := sync.WaitGroup{}
-	debounceTime, err := time.ParseDuration(p.config.DebounceTime)
+	d, err := debouncer.New(rw.ResultChan(), rw.Stop, p.config.DebounceTime)
 	if err != nil {
-		log.Warn("failed to parse debounce time configuration, will use the default config", "value", debouncer.DefaultTime, "err", err)
-		debounceTime, err = time.ParseDuration(debouncer.DefaultTime)
-		if err != nil {
-			return fmt.Errorf("failed to parse default debounce time value: %w", err)
-		}
-	}
-	if debounceTime < debouncer.MinimalTime {
-		log.Warn("configured debounce time value is too low, will use minimal value of 200ms", "config value", debounceTime.String())
+		rw.Stop()
+		return fmt.Errorf("failed to create debouncer for endpoints event: %w", err)
 	}
 
-	d := debouncer.New(rw, debounceTime)
+	wg := sync.WaitGroup{}
 
 	defer func() {
 		d.Stop()
