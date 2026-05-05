@@ -17,21 +17,23 @@ type Event struct {
 }
 
 type debouncer struct {
-	rw       *watchtools.RetryWatcher
-	input    <-chan watch.Event
-	output   chan Event
-	stopChan chan any
-	stopOnce sync.Once
-	events   map[string]map[string]*item
+	rw           *watchtools.RetryWatcher
+	input        <-chan watch.Event
+	output       chan Event
+	stopChan     chan any
+	stopOnce     sync.Once
+	events       map[string]map[string]*item
+	debounceTime time.Duration
 }
 
-func New(rw *watchtools.RetryWatcher) *debouncer {
+func New(rw *watchtools.RetryWatcher, debounceTime time.Duration) *debouncer {
 	return &debouncer{
-		rw:       rw,
-		input:    rw.ResultChan(),
-		output:   make(chan Event),
-		stopChan: make(chan any),
-		events:   make(map[string]map[string]*item),
+		rw:           rw,
+		input:        rw.ResultChan(),
+		output:       make(chan Event),
+		stopChan:     make(chan any),
+		events:       make(map[string]map[string]*item),
+		debounceTime: debounceTime,
 	}
 }
 
@@ -50,7 +52,10 @@ func newItem(output chan<- Event) *item {
 	}
 }
 
-const debounceTime = time.Second * 2
+const (
+	DefaultTime = "2s"
+	MinimalTime = time.Millisecond * 200
+)
 
 func (d *debouncer) Start(ctx context.Context) {
 	wg := sync.WaitGroup{}
@@ -97,7 +102,7 @@ func (d *debouncer) Start(ctx context.Context) {
 				nameEvent = nsEvent[name]
 
 				wg.Go(func() {
-					nameEvent.start(debouncerCtx)
+					nameEvent.start(debouncerCtx, d.debounceTime)
 					delete(d.events[namespace], name)
 					if len(d.events[namespace]) == 0 {
 						delete(d.events, namespace)
@@ -123,7 +128,7 @@ func (d *debouncer) Output() chan Event {
 	return d.output
 }
 
-func (i *item) start(ctx context.Context) {
+func (i *item) start(ctx context.Context, debounceTime time.Duration) {
 	t := time.NewTicker(debounceTime)
 
 	var aggregated *Event
