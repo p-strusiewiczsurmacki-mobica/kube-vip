@@ -158,7 +158,7 @@ func TestDebouncing(t *testing.T) {
 			var epslice *discoveryv1.EndpointSlice
 
 			addrEp := []v1.EndpointAddress{}
-			var ep *v1.Endpoints
+			var ep *v1.Endpoints //nolint:staticcheck
 
 			numberOfEndpoints := 100
 
@@ -187,7 +187,7 @@ func TestDebouncing(t *testing.T) {
 					fw.Add(epslice)
 				}
 			} else {
-				ep = &v1.Endpoints{
+				ep = &v1.Endpoints{ //nolint:staticcheck
 					ObjectMeta: metav1.ObjectMeta{
 						Name:      "test",
 						Namespace: "test",
@@ -197,8 +197,8 @@ func TestDebouncing(t *testing.T) {
 							},
 						},
 					},
-					Subsets: []v1.EndpointSubset{
-						v1.EndpointSubset{
+					Subsets: []v1.EndpointSubset{ //nolint:staticcheck
+						{
 							Addresses: addrEp,
 						},
 					},
@@ -224,7 +224,7 @@ func TestDebouncing(t *testing.T) {
 					t.Fatalf("expected to aggregate %d events, but got %d", numberOfEndpoints, len(outEps.Endpoints[0].Addresses))
 				}
 			} else {
-				outEps, ok := out.Last.Object.(*v1.Endpoints)
+				outEps, ok := out.Last.Object.(*v1.Endpoints) //nolint:staticcheck
 				if !ok {
 					t.Fatal("got different type of object than EndpointSlice, failed to cast")
 				}
