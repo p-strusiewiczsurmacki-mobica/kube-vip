@@ -9,22 +9,22 @@ import (
 )
 
 type KubevipManifestValues struct {
-	ControlPlaneVIP      string
-	ImagePath            string
-	ConfigPath           string
-	SvcEnable            string
-	SvcElectionEnable    string
-	VipElectionEnable    string
-	EnableEndpointslices string
-	EnableNodeLabeling   string
-	ControlPlaneEnable   string
-	BGPAS                uint32
-	BGPPeers             string
-	MPBGPNexthop         string
-	MPBGPNexthopIPv4     string
-	MPBGPNexthopIPv6     string
-	Mode                 string
-	Annotations          string
+	ControlPlaneVIP    string
+	ImagePath          string
+	ConfigPath         string
+	SvcEnable          string
+	SvcElectionEnable  string
+	VipElectionEnable  string
+	EnableEndpoints    string
+	EnableNodeLabeling string
+	ControlPlaneEnable string
+	BGPAS              uint32
+	BGPPeers           string
+	MPBGPNexthop       string
+	MPBGPNexthopIPv4   string
+	MPBGPNexthopIPv6   string
+	Mode               string
+	Annotations        string
 }
 
 type BGPPeerValues struct {
