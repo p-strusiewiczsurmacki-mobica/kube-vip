@@ -107,9 +107,58 @@ func TestStartStop(t *testing.T) {
 		if !rwStopped {
 			t.Fatal("retry watcher is note being stopped on the debouncer exit")
 		}
-
 	})
 }
+
+// func TestEventAggregation(t *testing.T) {
+// 	t.Run("Run and stop the debouncer without issues", func(t *testing.T) {
+// 		input := make(chan watch.Event)
+// 		defer close(input)
+
+// 		expected := "2s"
+
+// 		fw := watch.NewFake()
+
+// 		fw.ResultChan()
+// 		fw.Add(&v1.Service{})
+
+// 		rwStopped := false
+
+// 		rwStop := func() {
+// 			rwStopped = true
+// 		}
+
+// 		d, err := New(input, rwStop, expected)
+
+// 		if err != nil {
+// 			t.Fatalf("failed to create debouncer with debounce time %q", expected)
+// 		}
+
+// 		if d.debounceTime.String() != expected {
+// 			t.Fatalf("invalid debounce time %q was configured instead of expected %q", d.debounceTime.String(), expected)
+// 		}
+
+// 		ctx, cancel := context.WithCancel(context.Background())
+
+// 		wg := sync.WaitGroup{}
+
+// 		wg.Go(func() {
+// 			d.Start(ctx)
+// 		})
+
+// 		cancel()
+
+// 		timedOut := waitTimeout(&wg, time.Second*3)
+
+// 		if timedOut {
+// 			t.Fatal("debouncer was not closed before timeout")
+// 		}
+
+// 		if !rwStopped {
+// 			t.Fatal("retry watcher is note being stopped on the debouncer exit")
+// 		}
+// 	})
+// }
 
 // waitTimeout waits for the waitgroup for the specified max timeout.
 // Returns true if waiting timed out.
