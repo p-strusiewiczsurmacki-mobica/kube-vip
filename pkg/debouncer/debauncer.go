@@ -25,6 +25,7 @@ type debouncer struct {
 	events       map[string]map[string]*item
 	debounceTime time.Duration
 	rwStop       func()
+	mtx          sync.Mutex
 }
 
 func New(input <-chan watch.Event, rwStop func(), debounceTime string) (*debouncer, error) {
@@ -106,11 +107,13 @@ func (d *debouncer) Start(ctx context.Context) {
 				return
 			}
 
+			d.mtx.Lock()
 			nsEvent, exists := d.events[namespace]
 			if !exists {
 				d.events[namespace] = make(map[string]*item)
 				nsEvent = d.events[namespace]
 			}
+			d.mtx.Unlock()
 
 			nameEvent, exists := nsEvent[name]
 			if !exists {
@@ -119,6 +122,8 @@ func (d *debouncer) Start(ctx context.Context) {
 
 				wg.Go(func() {
 					nameEvent.start(debouncerCtx, d.debounceTime)
+					d.mtx.Lock()
+					defer d.mtx.Unlock()
 					delete(d.events[namespace], name)
 					if len(d.events[namespace]) == 0 {
 						delete(d.events, namespace)
