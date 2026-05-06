@@ -116,14 +116,10 @@ func TestStartStop(t *testing.T) {
 }
 
 func TestDebouncing(t *testing.T) {
-
 	tcs := []string{"endpointslices", "endpoints"}
 
 	for _, tc := range tcs {
 		t.Run(fmt.Sprintf("Get the newest event as the only one when using %s", tc), func(t *testing.T) {
-			// input := make(chan watch.Event)
-			// defer close(input)
-
 			expected := "2s"
 
 			fw := watch.NewFake()
@@ -212,7 +208,6 @@ func TestDebouncing(t *testing.T) {
 			}
 
 			out := <-d.output
-			// t.Fatal("OUT", out)
 
 			if tc == "endpointslices" {
 				outEps, ok := out.Last.Object.(*discoveryv1.EndpointSlice)
