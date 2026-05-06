@@ -174,7 +174,6 @@ func (i *item) start(ctx context.Context, debounceTime time.Duration) {
 					Type: tmp.Type,
 				}
 			}
-			fmt.Println(tmp)
 			aggregated.Last = &tmp
 			t.Reset(debounceTime)
 		case <-t.C:
