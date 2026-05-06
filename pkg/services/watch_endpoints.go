@@ -67,7 +67,7 @@ func (p *Processor) watchEndpoint(svcCtx *servicecontext.Context, id string, ser
 			log.Info("[endpoint watcher] stopping watching - endpoint object deleted", "provider", provider.GetLabel(), "service name", service.Name, "namespace", service.Namespace)
 			return nil
 		case watch.Error:
-			errObject := apierrors.FromObject(event.Events[len(event.Events)-1].Object)
+			errObject := apierrors.FromObject(event.Last.Object)
 			statusErr, _ := errObject.(*apierrors.StatusError)
 			log.Error("watch error", "provider", provider.GetLabel(), "err", statusErr)
 		}

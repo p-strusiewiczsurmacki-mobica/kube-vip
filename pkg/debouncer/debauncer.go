@@ -13,8 +13,8 @@ import (
 )
 
 type Event struct {
-	Type   watch.EventType
-	Events []*watch.Event
+	Type watch.EventType
+	Last *watch.Event
 }
 
 type debouncer struct {
@@ -174,7 +174,8 @@ func (i *item) start(ctx context.Context, debounceTime time.Duration) {
 					Type: tmp.Type,
 				}
 			}
-			aggregated.Events = append(aggregated.Events, &tmp)
+			fmt.Println(tmp)
+			aggregated.Last = &tmp
 			t.Reset(debounceTime)
 		case <-t.C:
 			if aggregated != nil {

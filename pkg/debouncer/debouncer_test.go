@@ -2,10 +2,15 @@ package debouncer
 
 import (
 	"context"
+	"fmt"
+	"strconv"
 	"sync"
 	"testing"
 	"time"
 
+	v1 "k8s.io/api/core/v1"
+	discoveryv1 "k8s.io/api/discovery/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/watch"
 )
 
@@ -110,55 +115,139 @@ func TestStartStop(t *testing.T) {
 	})
 }
 
-// func TestEventAggregation(t *testing.T) {
-// 	t.Run("Run and stop the debouncer without issues", func(t *testing.T) {
-// 		input := make(chan watch.Event)
-// 		defer close(input)
+func TestDebouncing(t *testing.T) {
 
-// 		expected := "2s"
+	tcs := []string{"endpointslices", "endpoints"}
 
-// 		fw := watch.NewFake()
+	for _, tc := range tcs {
+		t.Run(fmt.Sprintf("Get the newest event as the only one when using %s", tc), func(t *testing.T) {
+			// input := make(chan watch.Event)
+			// defer close(input)
 
-// 		fw.ResultChan()
-// 		fw.Add(&v1.Service{})
+			expected := "2s"
 
-// 		rwStopped := false
+			fw := watch.NewFake()
 
-// 		rwStop := func() {
-// 			rwStopped = true
-// 		}
+			input := fw.ResultChan()
 
-// 		d, err := New(input, rwStop, expected)
+			rwStopped := false
 
-// 		if err != nil {
-// 			t.Fatalf("failed to create debouncer with debounce time %q", expected)
-// 		}
+			rwStop := func() {
+				rwStopped = true
+			}
 
-// 		if d.debounceTime.String() != expected {
-// 			t.Fatalf("invalid debounce time %q was configured instead of expected %q", d.debounceTime.String(), expected)
-// 		}
+			d, err := New(input, rwStop, expected)
 
-// 		ctx, cancel := context.WithCancel(context.Background())
+			if err != nil {
+				t.Fatalf("failed to create debouncer with debounce time %q", expected)
+			}
 
-// 		wg := sync.WaitGroup{}
+			if d.debounceTime.String() != expected {
+				t.Fatalf("invalid debounce time %q was configured instead of expected %q", d.debounceTime.String(), expected)
+			}
 
-// 		wg.Go(func() {
-// 			d.Start(ctx)
-// 		})
+			ctx, cancel := context.WithCancel(context.Background())
 
-// 		cancel()
+			wg := sync.WaitGroup{}
 
-// 		timedOut := waitTimeout(&wg, time.Second*3)
+			wg.Go(func() {
+				d.Start(ctx)
+			})
 
-// 		if timedOut {
-// 			t.Fatal("debouncer was not closed before timeout")
-// 		}
+			addrEpslices := []string{}
+			var epslice *discoveryv1.EndpointSlice
 
-// 		if !rwStopped {
-// 			t.Fatal("retry watcher is note being stopped on the debouncer exit")
-// 		}
-// 	})
-// }
+			addrEp := []v1.EndpointAddress{}
+			var ep *v1.Endpoints
+
+			numberOfEndpoints := 100
+
+			if tc == "endpointslices" {
+
+				epslice = &discoveryv1.EndpointSlice{
+					ObjectMeta: metav1.ObjectMeta{
+						Name:      "test",
+						Namespace: "test",
+						OwnerReferences: []metav1.OwnerReference{
+							{
+								Name: "test-svc",
+							},
+						},
+					},
+					Endpoints: []discoveryv1.Endpoint{
+						{
+							Addresses: addrEpslices,
+						},
+					},
+				}
+
+				for i := range numberOfEndpoints {
+					addrEpslices = append(addrEpslices, strconv.Itoa(i))
+					epslice.Endpoints[0].Addresses = addrEpslices
+					fw.Add(epslice)
+				}
+			} else {
+				ep = &v1.Endpoints{
+					ObjectMeta: metav1.ObjectMeta{
+						Name:      "test",
+						Namespace: "test",
+						OwnerReferences: []metav1.OwnerReference{
+							{
+								Name: "test-svc",
+							},
+						},
+					},
+					Subsets: []v1.EndpointSubset{
+						v1.EndpointSubset{
+							Addresses: addrEp,
+						},
+					},
+				}
+
+				for i := range numberOfEndpoints {
+					addrEp = append(addrEp, v1.EndpointAddress{IP: strconv.Itoa(i)})
+					ep.Subsets[0].Addresses = addrEp
+					fw.Add(ep)
+				}
+			}
+
+			out := <-d.output
+			// t.Fatal("OUT", out)
+
+			if tc == "endpointslices" {
+				outEps, ok := out.Last.Object.(*discoveryv1.EndpointSlice)
+				if !ok {
+					t.Fatal("got different type of object than EndpointSlice, failed to cast")
+				}
+
+				if len(outEps.Endpoints[0].Addresses) != numberOfEndpoints {
+					t.Fatalf("expected to aggregate %d events, but got %d", numberOfEndpoints, len(outEps.Endpoints[0].Addresses))
+				}
+			} else {
+				outEps, ok := out.Last.Object.(*v1.Endpoints)
+				if !ok {
+					t.Fatal("got different type of object than EndpointSlice, failed to cast")
+				}
+
+				if len(outEps.Subsets[0].Addresses) != numberOfEndpoints {
+					t.Fatalf("expected to aggregate %d events, but got %d", numberOfEndpoints, len(outEps.Subsets[0].Addresses))
+				}
+			}
+
+			cancel()
+
+			timedOut := waitTimeout(&wg, time.Second*3)
+
+			if timedOut {
+				t.Fatal("debouncer was not closed before timeout")
+			}
+
+			if !rwStopped {
+				t.Fatal("retry watcher is note being stopped on the debouncer exit")
+			}
+		})
+	}
+}
 
 // waitTimeout waits for the waitgroup for the specified max timeout.
 // Returns true if waiting timed out.

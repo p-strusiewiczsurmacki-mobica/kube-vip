@@ -47,11 +47,8 @@ func (p *Processor) AddOrModify(svcCtx *servicecontext.Context, events debouncer
 	clientSet *kubernetes.Clientset,
 	egressUpdateFunc func(context.Context, *v1.Service) error) (bool, error) {
 
-	var err error
-	for _, event := range events.Events {
-		if err = p.provider.LoadObject(event.Object, svcCtx.Cancel); err != nil {
-			return false, fmt.Errorf("[%s] error loading k8s object: %w", p.provider.GetLabel(), err)
-		}
+	if err := p.provider.LoadObject(events.Last.Object, svcCtx.Cancel); err != nil {
+		return false, fmt.Errorf("[%s] error loading k8s object: %w", p.provider.GetLabel(), err)
 	}
 
 	endpoints, err := p.worker.getEndpoints(service, id)
