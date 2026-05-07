@@ -93,6 +93,7 @@ func (d *debouncer) Start(ctx context.Context) {
 			}
 
 			var namespace, name string
+
 			switch v := tmp.Object.(type) {
 			case *discoveryv1.EndpointSlice:
 				namespace = v.Namespace
@@ -104,6 +105,7 @@ func (d *debouncer) Start(ctx context.Context) {
 				namespace = v.Namespace
 				name = v.Name
 			default:
+				log.Error(fmt.Sprintf("objects of type %T are not supported", v))
 				return
 			}
 
