@@ -96,13 +96,13 @@ func (d *debouncer) Start(ctx context.Context) {
 			switch v := tmp.Object.(type) {
 			case *discoveryv1.EndpointSlice:
 				namespace = v.Namespace
-				name = fmt.Sprintf("%s-%s", v.OwnerReferences[0].Name, v.Name)
+				name = v.Name
 			case *v1.Endpoints: //nolint:staticcheck
 				namespace = v.Namespace
-				name = fmt.Sprintf("%s-%s", v.OwnerReferences[0].Name, v.Name)
+				name = v.Name
 			case *v1.Service:
 				namespace = v.Namespace
-				name = fmt.Sprintf("%s-%s", v.OwnerReferences[0].Name, v.Name)
+				name = v.Name
 			default:
 				return
 			}
