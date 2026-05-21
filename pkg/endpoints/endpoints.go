@@ -87,7 +87,7 @@ func (p *Processor) AddOrModify(svcCtx *servicecontext.Context, event watch.Even
 				les.Add(1)
 				p.startLeaderElection(svcCtx, service, serviceFunc, wg)
 			})
-		} else if p.config.EnableARP && !p.config.EnableServicesElection {
+		} else if p.config.EnableARP || (p.config.EnableRoutingTable && p.config.EnableLeaderElection) {
 			if !svcCtx.Signalled.Load() {
 				inst := instance.FindServiceInstance(service, *p.instances)
 				if inst == nil {
