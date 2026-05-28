@@ -50,6 +50,10 @@ spec:
       value: "{{ .EnableNodeLabeling }}"
     - name: enable_endpoints
       value: "{{ .EnableEndpoints }}"
+{{- if .EnableServiceSecurity }}
+    - name: enable_service_security
+      value: "{{ .EnableServiceSecurity }}"
+{{- end }}
     image: "{{ .ImagePath }}"
     imagePullPolicy: Never
     securityContext:

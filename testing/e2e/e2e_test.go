@@ -130,14 +130,15 @@ var _ = Describe("kube-vip ARP/NDP broadcast neighbor", Ordered, func() {
 				}
 
 				manifestValues := &e2e.KubevipManifestValues{
-					ControlPlaneVIP:    cpVIP,
-					ControlPlaneEnable: "true",
-					ImagePath:          imagePath,
-					ConfigPath:         configPath,
-					SvcEnable:          "false",
-					SvcElectionEnable:  "false",
-					EnableEndpoints:    "true",
-					EnableNodeLabeling: "false",
+					ControlPlaneVIP:       cpVIP,
+					ControlPlaneEnable:    "true",
+					ImagePath:             imagePath,
+					ConfigPath:            configPath,
+					SvcEnable:             "false",
+					SvcElectionEnable:     "false",
+					EnableEndpoints:       "true",
+					EnableNodeLabeling:    "false",
+					EnableServiceSecurity: "true",
 				}
 
 				var err error
@@ -178,14 +179,15 @@ var _ = Describe("kube-vip ARP/NDP broadcast neighbor", Ordered, func() {
 				}
 
 				manifestValues := &e2e.KubevipManifestValues{
-					ControlPlaneVIP:    cpVIP,
-					ControlPlaneEnable: "true",
-					ImagePath:          imagePath,
-					ConfigPath:         configPath,
-					SvcEnable:          "true",
-					SvcElectionEnable:  "false",
-					EnableEndpoints:    "true",
-					EnableNodeLabeling: "false",
+					ControlPlaneVIP:       cpVIP,
+					ControlPlaneEnable:    "true",
+					ImagePath:             imagePath,
+					ConfigPath:            configPath,
+					SvcEnable:             "true",
+					SvcElectionEnable:     "false",
+					EnableEndpoints:       "true",
+					EnableNodeLabeling:    "false",
+					EnableServiceSecurity: "true",
 				}
 
 				var err error
@@ -265,14 +267,15 @@ var _ = Describe("kube-vip ARP/NDP broadcast neighbor", Ordered, func() {
 				}
 
 				manifestValues := &e2e.KubevipManifestValues{
-					ControlPlaneVIP:    cpVIP,
-					ControlPlaneEnable: "true",
-					ImagePath:          imagePath,
-					ConfigPath:         configPath,
-					SvcEnable:          "true",
-					SvcElectionEnable:  "true",
-					EnableEndpoints:    "true",
-					EnableNodeLabeling: "false",
+					ControlPlaneVIP:       cpVIP,
+					ControlPlaneEnable:    "true",
+					ImagePath:             imagePath,
+					ConfigPath:            configPath,
+					SvcEnable:             "true",
+					SvcElectionEnable:     "true",
+					EnableEndpoints:       "true",
+					EnableNodeLabeling:    "false",
+					EnableServiceSecurity: "true",
 				}
 
 				var err error
@@ -322,14 +325,15 @@ var _ = Describe("kube-vip ARP/NDP broadcast neighbor", Ordered, func() {
 				}
 
 				manifestValues := &e2e.KubevipManifestValues{
-					ControlPlaneVIP:    cpVIP,
-					ControlPlaneEnable: "true",
-					ImagePath:          imagePath,
-					ConfigPath:         configPath,
-					SvcEnable:          "false",
-					SvcElectionEnable:  "false",
-					EnableEndpoints:    "true",
-					EnableNodeLabeling: "false",
+					ControlPlaneVIP:       cpVIP,
+					ControlPlaneEnable:    "true",
+					ImagePath:             imagePath,
+					ConfigPath:            configPath,
+					SvcEnable:             "false",
+					SvcElectionEnable:     "false",
+					EnableEndpoints:       "true",
+					EnableNodeLabeling:    "false",
+					EnableServiceSecurity: "true",
 				}
 
 				var err error
@@ -374,14 +378,15 @@ var _ = Describe("kube-vip ARP/NDP broadcast neighbor", Ordered, func() {
 				}
 
 				manifestValues := &e2e.KubevipManifestValues{
-					ControlPlaneVIP:    cpVIP,
-					ControlPlaneEnable: "true",
-					ImagePath:          imagePath,
-					ConfigPath:         configPath,
-					SvcEnable:          "true",
-					SvcElectionEnable:  "false",
-					EnableEndpoints:    "true",
-					EnableNodeLabeling: "false",
+					ControlPlaneVIP:       cpVIP,
+					ControlPlaneEnable:    "true",
+					ImagePath:             imagePath,
+					ConfigPath:            configPath,
+					SvcEnable:             "true",
+					SvcElectionEnable:     "false",
+					EnableEndpoints:       "true",
+					EnableNodeLabeling:    "false",
+					EnableServiceSecurity: "true",
 				}
 
 				var err error
@@ -449,14 +454,15 @@ var _ = Describe("kube-vip ARP/NDP broadcast neighbor", Ordered, func() {
 				}
 
 				manifestValues := &e2e.KubevipManifestValues{
-					ControlPlaneVIP:    cpVIP,
-					ControlPlaneEnable: "true",
-					ImagePath:          imagePath,
-					ConfigPath:         configPath,
-					SvcEnable:          "true",
-					SvcElectionEnable:  "true",
-					EnableEndpoints:    "true",
-					EnableNodeLabeling: "false",
+					ControlPlaneVIP:       cpVIP,
+					ControlPlaneEnable:    "true",
+					ImagePath:             imagePath,
+					ConfigPath:            configPath,
+					SvcEnable:             "true",
+					SvcElectionEnable:     "true",
+					EnableEndpoints:       "true",
+					EnableNodeLabeling:    "false",
+					EnableServiceSecurity: "true",
 				}
 
 				var err error
@@ -505,14 +511,15 @@ var _ = Describe("kube-vip ARP/NDP broadcast neighbor", Ordered, func() {
 				}
 
 				manifestValues := &e2e.KubevipManifestValues{
-					ControlPlaneVIP:    cpVIP,
-					ControlPlaneEnable: "true",
-					ImagePath:          imagePath,
-					ConfigPath:         configPath,
-					SvcEnable:          "false",
-					SvcElectionEnable:  "false",
-					EnableEndpoints:    "false",
-					EnableNodeLabeling: "false",
+					ControlPlaneVIP:       cpVIP,
+					ControlPlaneEnable:    "true",
+					ImagePath:             imagePath,
+					ConfigPath:            configPath,
+					SvcEnable:             "false",
+					SvcElectionEnable:     "false",
+					EnableEndpoints:       "false",
+					EnableNodeLabeling:    "false",
+					EnableServiceSecurity: "true",
 				}
 
 				var err error
@@ -555,14 +562,15 @@ var _ = Describe("kube-vip ARP/NDP broadcast neighbor", Ordered, func() {
 				}
 
 				manifestValues := &e2e.KubevipManifestValues{
-					ControlPlaneVIP:    cpVIP,
-					ControlPlaneEnable: "true",
-					ImagePath:          imagePath,
-					ConfigPath:         configPath,
-					SvcEnable:          "true",
-					SvcElectionEnable:  "false",
-					EnableEndpoints:    "false",
-					EnableNodeLabeling: "false",
+					ControlPlaneVIP:       cpVIP,
+					ControlPlaneEnable:    "true",
+					ImagePath:             imagePath,
+					ConfigPath:            configPath,
+					SvcEnable:             "true",
+					SvcElectionEnable:     "false",
+					EnableEndpoints:       "false",
+					EnableNodeLabeling:    "false",
+					EnableServiceSecurity: "true",
 				}
 
 				var err error
@@ -631,14 +639,15 @@ var _ = Describe("kube-vip ARP/NDP broadcast neighbor", Ordered, func() {
 				}
 
 				manifestValues := &e2e.KubevipManifestValues{
-					ControlPlaneVIP:    cpVIP,
-					ControlPlaneEnable: "true",
-					ImagePath:          imagePath,
-					ConfigPath:         configPath,
-					SvcEnable:          "true",
-					SvcElectionEnable:  "true",
-					EnableEndpoints:    "false",
-					EnableNodeLabeling: "false",
+					ControlPlaneVIP:       cpVIP,
+					ControlPlaneEnable:    "true",
+					ImagePath:             imagePath,
+					ConfigPath:            configPath,
+					SvcEnable:             "true",
+					SvcElectionEnable:     "true",
+					EnableEndpoints:       "false",
+					EnableNodeLabeling:    "false",
+					EnableServiceSecurity: "true",
 				}
 
 				var err error
@@ -689,14 +698,15 @@ var _ = Describe("kube-vip ARP/NDP broadcast neighbor", Ordered, func() {
 				}
 
 				manifestValues := &e2e.KubevipManifestValues{
-					ControlPlaneVIP:    cpVIP,
-					ControlPlaneEnable: "true",
-					ImagePath:          imagePath,
-					ConfigPath:         configPath,
-					SvcEnable:          "true",
-					SvcElectionEnable:  "false",
-					EnableEndpoints:    "false",
-					EnableNodeLabeling: "false",
+					ControlPlaneVIP:       cpVIP,
+					ControlPlaneEnable:    "true",
+					ImagePath:             imagePath,
+					ConfigPath:            configPath,
+					SvcEnable:             "true",
+					SvcElectionEnable:     "false",
+					EnableEndpoints:       "false",
+					EnableNodeLabeling:    "false",
+					EnableServiceSecurity: "true",
 				}
 
 				var err error
@@ -741,14 +751,15 @@ var _ = Describe("kube-vip ARP/NDP broadcast neighbor", Ordered, func() {
 				}
 
 				manifestValues := &e2e.KubevipManifestValues{
-					ControlPlaneVIP:    cpVIP,
-					ControlPlaneEnable: "true",
-					ImagePath:          imagePath,
-					ConfigPath:         configPath,
-					SvcEnable:          "true",
-					SvcElectionEnable:  "false",
-					EnableEndpoints:    "false",
-					EnableNodeLabeling: "false",
+					ControlPlaneVIP:       cpVIP,
+					ControlPlaneEnable:    "true",
+					ImagePath:             imagePath,
+					ConfigPath:            configPath,
+					SvcEnable:             "true",
+					SvcElectionEnable:     "false",
+					EnableEndpoints:       "false",
+					EnableNodeLabeling:    "false",
+					EnableServiceSecurity: "true",
 				}
 
 				var err error
@@ -819,14 +830,15 @@ var _ = Describe("kube-vip ARP/NDP broadcast neighbor", Ordered, func() {
 				}
 
 				manifestValues := &e2e.KubevipManifestValues{
-					ControlPlaneVIP:    cpVIP,
-					ControlPlaneEnable: "true",
-					ImagePath:          imagePath,
-					ConfigPath:         configPath,
-					SvcEnable:          "true",
-					SvcElectionEnable:  "true",
-					EnableEndpoints:    "false",
-					EnableNodeLabeling: "false",
+					ControlPlaneVIP:       cpVIP,
+					ControlPlaneEnable:    "true",
+					ImagePath:             imagePath,
+					ConfigPath:            configPath,
+					SvcEnable:             "true",
+					SvcElectionEnable:     "true",
+					EnableEndpoints:       "false",
+					EnableNodeLabeling:    "false",
+					EnableServiceSecurity: "true",
 				}
 
 				var err error
@@ -875,14 +887,15 @@ var _ = Describe("kube-vip ARP/NDP broadcast neighbor", Ordered, func() {
 				}
 
 				manifestValues := &e2e.KubevipManifestValues{
-					ControlPlaneVIP:    cpVIP,
-					ControlPlaneEnable: "true",
-					ImagePath:          imagePath,
-					ConfigPath:         configPath,
-					SvcEnable:          "false",
-					SvcElectionEnable:  "false",
-					EnableEndpoints:    "true",
-					EnableNodeLabeling: "false",
+					ControlPlaneVIP:       cpVIP,
+					ControlPlaneEnable:    "true",
+					ImagePath:             imagePath,
+					ConfigPath:            configPath,
+					SvcEnable:             "false",
+					SvcElectionEnable:     "false",
+					EnableEndpoints:       "true",
+					EnableNodeLabeling:    "false",
+					EnableServiceSecurity: "true",
 				}
 
 				var err error
@@ -925,14 +938,15 @@ var _ = Describe("kube-vip ARP/NDP broadcast neighbor", Ordered, func() {
 				}
 
 				manifestValues := &e2e.KubevipManifestValues{
-					ControlPlaneVIP:    cpVIP,
-					ControlPlaneEnable: "true",
-					ImagePath:          imagePath,
-					ConfigPath:         configPath,
-					SvcEnable:          "true",
-					SvcElectionEnable:  "true",
-					EnableEndpoints:    "true",
-					EnableNodeLabeling: "false",
+					ControlPlaneVIP:       cpVIP,
+					ControlPlaneEnable:    "true",
+					ImagePath:             imagePath,
+					ConfigPath:            configPath,
+					SvcEnable:             "true",
+					SvcElectionEnable:     "true",
+					EnableEndpoints:       "true",
+					EnableNodeLabeling:    "false",
+					EnableServiceSecurity: "true",
 				}
 
 				var err error
@@ -982,14 +996,15 @@ var _ = Describe("kube-vip ARP/NDP broadcast neighbor", Ordered, func() {
 				}
 
 				manifestValues := &e2e.KubevipManifestValues{
-					ControlPlaneVIP:    cpVIP,
-					ControlPlaneEnable: "true",
-					ImagePath:          imagePath,
-					ConfigPath:         configPath,
-					SvcEnable:          "true",
-					SvcElectionEnable:  "true",
-					EnableEndpoints:    "true",
-					EnableNodeLabeling: "false",
+					ControlPlaneVIP:       cpVIP,
+					ControlPlaneEnable:    "true",
+					ImagePath:             imagePath,
+					ConfigPath:            configPath,
+					SvcEnable:             "true",
+					SvcElectionEnable:     "true",
+					EnableEndpoints:       "true",
+					EnableNodeLabeling:    "false",
+					EnableServiceSecurity: "true",
 				}
 
 				var err error
