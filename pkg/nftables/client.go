@@ -65,6 +65,22 @@ func (c *Client) GetChain(table, chain string) (*nftables.Chain, error) {
 	return ch, nil
 }
 
+func (c *Client) AddChain(chain *nftables.Chain) *nftables.Chain {
+	ch, _ := c.GetChain(chain.Table.Name, chain.Name)
+
+	if ch == nil {
+		log.Debug("DID NOT FIND CHAIN in ADD, create new")
+		ch = c.conn.AddChain(chain)
+		c.Flush()
+		log.Debug("DID NOT FIND CHAIN in ADD, create new - FLUSHED")
+	}
+	return ch
+}
+
+func (c *Client) DeleteChain(chain *nftables.Chain) {
+	c.conn.DelChain(chain)
+}
+
 func (c *Client) InsertUnique(rule *nftables.Rule) (*nftables.Rule, error) {
 	comment, _ := userdata.GetString(rule.UserData, userdata.TypeComment)
 	log.Debug("inserting rule", "table", rule.Table.Name, "chain", rule.Chain.Name, "comment", comment)
