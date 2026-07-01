@@ -31,6 +31,39 @@ import (
 const MangleChainName = "KUBE-VIP-EGRESS"
 const Comment = "a3ViZS12aXAK=kube-vip"
 
+type IEgress interface {
+	CheckMangleChain(name string) (bool, error)
+	CreateMangleChain(name string) error
+	InsertMangeTableIntoPrerouting(name string) error
+
+	AppendReturnRulesForDestinationSubnet(name, subnet string) error
+	DeleteMangleReturnForNetwork(name, network string) error
+
+	AppendReturnRulesForMarking(name, subnet string) error
+	DeleteMangleMarking(podIP, name string) error
+
+	AppendReturnRulesForMarkingForNetwork(name, subnet, destination string) error
+	DeleteMangleMarkingForNetwork(podIP, name, network string) error
+
+	InsertSourceNat(vip, podIP string) error
+	DeleteSourceNat(podIP, vip string) error
+
+	InsertSourceNatForDestinationPort(vip, podIP, port, proto string) error
+	DeleteSourceNatForDestinationPort(podIP, vip, port, proto string) error
+
+	DumpChain(name string) error
+	CleanIPtables() error
+
+	Close() error
+}
+
+func NewEgress(nftables bool, namespace string, protocol iptables.Protocol) (IEgress, error) {
+	if !nftables {
+		return CreateIptablesClient(nftables, namespace, protocol)
+	}
+	return CreateNftablesClient(namespace, protocol)
+}
+
 type Egress struct {
 	ipTablesClient *iptables.IPTables
 	comment        string
@@ -407,8 +440,12 @@ func (e *Egress) findExistingVIP(rules []string, vip string) [][]string {
 	return foundRules
 }
 
+func (e *Egress) Close() error {
+	return nil
+}
+
 func ClearIPTables(useNftables bool, namespace string, protocol iptables.Protocol) error {
-	i, err := CreateIptablesClient(useNftables, namespace, protocol)
+	i, err := NewEgress(useNftables, namespace, protocol)
 	if err != nil {
 		log.Debug("[egress] Unable to clean any dangling egress rules", "err", err)
 		return fmt.Errorf("unable to create client")

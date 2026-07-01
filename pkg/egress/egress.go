@@ -30,7 +30,7 @@ func Teardown(podIP, vipIP, namespace, serviceUUID string, annotations map[strin
 		return nftables.DeleteSNAT(IPv6, serviceUUID)
 	}
 
-	i, err := vip.CreateIptablesClient(useNftables, namespace, protocol)
+	i, err := vip.NewEgress(useNftables, namespace, protocol)
 	if err != nil {
 		return fmt.Errorf("error Creating iptables client [%s]", err)
 	}
