@@ -27,6 +27,7 @@ func TestDHCPv6StopReleasesManagerReferenceForParentInterface(t *testing.T) {
 		stopChan:     make(chan struct{}),
 		releasedChan: make(chan struct{}),
 		ic:           shared,
+		addr:         &dhcpv6.OptIAAddress{},
 	}
 	close(client.releasedChan)
 
