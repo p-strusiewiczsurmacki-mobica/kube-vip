@@ -73,7 +73,8 @@ func (c *DHCPv4Client) Stop() {
 	c.close()
 
 	if c.loadLease() != nil {
-		ctx, _ := context.WithTimeout(context.Background(), time.Second*20)
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second*20)
+		defer cancel()
 		select {
 		// do not block in case of failure
 		case <-ctx.Done():

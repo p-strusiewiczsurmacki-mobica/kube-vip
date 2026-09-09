@@ -152,11 +152,12 @@ func (c *DHCPv6Client) WithHostName(hostname string) DHCPClient {
 func (c *DHCPv6Client) Stop() {
 	c.close()
 	if c.loadAddr() != nil {
-		ctx, _ := context.WithTimeout(context.Background(), time.Second*20)
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second*20)
+		defer cancel()
 		select {
 		// do not block in case of failure
 		case <-ctx.Done():
-			log.Error("[DHCPv4] failed to release the IP address", "error", ctx.Err())
+			log.Error("[DHCPv6] failed to release the IP address", "error", ctx.Err())
 		case <-c.releasedChan:
 			dhcpv6ClientManager.Delete(c.managerKey)
 		}
@@ -281,7 +282,7 @@ RequestLoop:
 	for {
 		select {
 		case <-ctx.Done():
-			return nil, fmt.Errorf("[DHCPv4] context error: %w", ctx.Err())
+			return nil, fmt.Errorf("[DHCPv6] context error: %w", ctx.Err())
 		default:
 			log.Debug("[DHCPv6] trying to get a new IP", "attempt", backoff.Attempt()+1)
 
