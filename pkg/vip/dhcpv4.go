@@ -33,6 +33,19 @@ type DHCPv4Client struct {
 	ipChan          chan string
 	backoffAttempts uint
 	stop            sync.Once
+	mtx             sync.Mutex
+}
+
+func (c *DHCPv4Client) storeLease(lease *nclient4.Lease) {
+	c.mtx.Lock()
+	defer c.mtx.Unlock()
+	c.lease = lease
+}
+
+func (c *DHCPv4Client) loadLease() *nclient4.Lease {
+	c.mtx.Lock()
+	defer c.mtx.Unlock()
+	return c.lease
 }
 
 // NewDHCPv4Client returns a new DHCP Client.
@@ -57,11 +70,25 @@ func (c *DHCPv4Client) WithHostName(hostname string) DHCPClient {
 
 // Stop state-transition process and close dhcp client
 func (c *DHCPv4Client) Stop() {
+	c.close()
+
+	if c.loadLease() != nil {
+		ctx, _ := context.WithTimeout(context.Background(), time.Second*20)
+		select {
+		// do not block in case of failure
+		case <-ctx.Done():
+			log.Error("[DHCPv4] failed to release the IP address", "error", ctx.Err())
+		case <-c.releasedChan:
+		}
+	}
+}
+
+// Close dhcp client channels
+func (c *DHCPv4Client) close() {
 	c.stop.Do(func() {
 		close(c.ipChan)
 		close(c.stopChan)
 	})
-	<-c.releasedChan
 }
 
 // Gets the IPChannel for consumption
@@ -138,11 +165,12 @@ func (c *DHCPv4Client) Start(ctx context.Context) error {
 	}
 
 	c.initRebootFlag = false
-	c.lease = lease
+
+	c.storeLease(lease)
 
 	// Set up two ticker to renew/rebind regularly
-	t1Timeout := c.lease.ACK.IPAddressLeaseTime(defaultDHCPRenew) / 2
-	t2Timeout := (c.lease.ACK.IPAddressLeaseTime(defaultDHCPRenew) / 8) * 7
+	t1Timeout := lease.ACK.IPAddressLeaseTime(defaultDHCPRenew) / 2
+	t2Timeout := (lease.ACK.IPAddressLeaseTime(defaultDHCPRenew) / 8) * 7
 	log.Debug("[DHCPv4] timeouts", "timeout1", t1Timeout, "timeout2", t2Timeout)
 	t1, t2 := time.NewTicker(t1Timeout), time.NewTicker(t2Timeout)
 
@@ -156,7 +184,7 @@ func (c *DHCPv4Client) Start(ctx context.Context) error {
 			// may be an offline server, or may be an incorrect package match
 			lease, err := c.renew(dhcpCtx)
 			if err == nil {
-				c.lease = lease
+				c.storeLease(lease)
 				log.Info("[DHCPv4] renew", "lease", lease)
 				t2.Reset(t2Timeout)
 			} else {
@@ -166,7 +194,7 @@ func (c *DHCPv4Client) Start(ctx context.Context) error {
 			// rebind is just like a request, but forcing to provide a new IP address
 			lease, err := c.request(dhcpCtx, true)
 			if err == nil {
-				c.lease = lease
+				c.storeLease(lease)
 				log.Info("[DHCPv4] rebind", "lease", lease)
 			} else {
 				if _, ok := err.(*nclient4.ErrNak); !ok {
@@ -174,30 +202,37 @@ func (c *DHCPv4Client) Start(ctx context.Context) error {
 					t2.Stop()
 					log.Error("[DHCPv4] rebind failed", "err", err)
 				}
-				log.Warn("[DHCPv4] ip may have changed", "ip", c.lease.ACK.YourIPAddr, "err", err)
+				lease = c.loadLease()
+				log.Warn("[DHCPv4] ip may have changed", "ip", lease.ACK.YourIPAddr, "err", err)
 				c.initRebootFlag = false
 				lease, backoffErr := c.requestWithBackoff(dhcpCtx)
 				if backoffErr != nil {
 					log.Error("[DHCPv4] failed to reacquire lease", "err", backoffErr)
+					t1.Reset(t1Timeout)
+					t2.Reset(t2Timeout)
 					continue
 				}
-				c.lease = lease
+				c.storeLease(lease)
 			}
 			t1.Reset(t1Timeout)
 			t2.Reset(t2Timeout)
-
+		case <-dhcpCtx.Done():
+			t1.Stop()
+			t2.Stop()
+			c.close()
 		case <-c.stopChan:
 			// release is a unicast request of the IP release.
 			var err error
-			if err = c.release(); err != nil {
-				log.Error("[DHCPv4] release lease failed", "lease", lease, "err", err)
-			} else {
-				log.Info("[DHCPv4] release", "lease", lease)
+			if c.loadLease() != nil {
+				if err = c.release(); err != nil {
+					log.Error("[DHCPv4] release lease failed", "lease", lease, "err", err)
+				} else {
+					log.Info("[DHCPv4] release", "lease", lease)
+				}
 			}
 			t1.Stop()
 			t2.Stop()
-
-			close(c.releasedChan)
+			c.Stop()
 			return err
 		}
 	}
@@ -225,27 +260,38 @@ func (c *DHCPv4Client) requestWithBackoff(ctx context.Context) (*nclient4.Lease,
 
 	log.Debug("[DHCPv4]", "attempts", c.backoffAttempts)
 
+RequestLoop:
 	for {
-		log.Debug("[DHCPv4] trying to get a new IP", "attempt", backoff.Attempt()+1)
-		lease, err = c.request(ctx, false)
-		if err != nil {
-			dur := backoff.Duration()
-			if c.backoffAttempts > 0 && backoff.Attempt() > float64(c.backoffAttempts)-1 {
-				errMsg := fmt.Errorf("failed to get an IPv4 address after %d attempt(s), giving up, error: %s", c.backoffAttempts, err.Error())
-				log.Error(fmt.Sprintf("[DHCPv4] %s", errMsg.Error()))
-				c.errorChan <- errMsg
-				return nil, errMsg
+		select {
+		case <-ctx.Done():
+			return nil, fmt.Errorf("[DHCPv4] context error: %w", ctx.Err())
+		default:
+			log.Debug("[DHCPv4] trying to get a new IP", "attempt", backoff.Attempt()+1)
+			lease, err = c.request(ctx, false)
+			if err != nil {
+				dur := backoff.Duration()
+
+				if c.backoffAttempts > 0 && backoff.Attempt() > float64(c.backoffAttempts)-1 {
+					errMsg := fmt.Errorf("failed to get an IPv4 address after %d attempt(s), giving up, error: %s", c.backoffAttempts, err.Error())
+					log.Error(fmt.Sprintf("[DHCPv4] %s", errMsg.Error()))
+					c.errorChan <- errMsg
+					return nil, errMsg
+				}
+				log.Error("[DHCPv4] request failed", "attempt", backoff.Attempt(), "err", err.Error(), "waiting", dur)
+				ticker := time.NewTicker(dur)
+				select {
+				case <-ticker.C:
+					ticker.Stop()
+				case <-ctx.Done():
+				}
+				continue RequestLoop
 			}
-			log.Error("[DHCPv4] request failed", "attempt", backoff.Attempt(), "err", err.Error(), "waiting", dur)
-			time.Sleep(dur)
-			continue
+			backoff.Reset()
+			break RequestLoop
 		}
-		backoff.Reset()
-		break
 	}
 
 	if c.ipChan != nil {
-		log.Debug("[DHCPv4] using channel")
 		c.ipChan <- lease.ACK.YourIPAddr.String()
 	}
 
@@ -296,7 +342,15 @@ func (c *DHCPv4Client) release() error {
 	defer dhclient.Close()
 
 	// TODO modify lease
-	return dhclient.Release(c.lease)
+	err = dhclient.Release(c.lease)
+	if err != nil {
+		return fmt.Errorf("DHCPv4 release failed: %w", err)
+	}
+
+	if c.loadLease() != nil {
+		close(c.releasedChan)
+	}
+	return nil
 }
 
 func (c *DHCPv4Client) renew(ctx context.Context) (*nclient4.Lease, error) {

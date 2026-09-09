@@ -654,7 +654,8 @@ func (i *Instance) startDHCP(ctx context.Context, index int, backoffAttempts uin
 
 	wg.Go(func() {
 		if err := client.Start(ctx); err != nil {
-			log.Error("[instance] DHCP client error: %w")
+			log.Error("[instance] DHCP client", "error", err)
+			client.Stop()
 		}
 	})
 

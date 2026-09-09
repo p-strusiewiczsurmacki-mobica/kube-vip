@@ -102,6 +102,19 @@ type DHCPv6Client struct {
 	addr            *dhcpv6.OptIAAddress
 	backoffAttempts uint
 	stop            sync.Once
+	mtx             sync.Mutex
+}
+
+func (c *DHCPv6Client) storeAddr(addr *dhcpv6.OptIAAddress) {
+	c.mtx.Lock()
+	defer c.mtx.Unlock()
+	c.addr = addr
+}
+
+func (c *DHCPv6Client) loadAddr() *dhcpv6.OptIAAddress {
+	c.mtx.Lock()
+	defer c.mtx.Unlock()
+	return c.addr
 }
 
 // NewDHCPv6Client returns a new DHCP6 Client.
@@ -137,12 +150,25 @@ func (c *DHCPv6Client) WithHostName(hostname string) DHCPClient {
 
 // Stop state-transition process and close dhcp client
 func (c *DHCPv6Client) Stop() {
+	c.close()
+	if c.loadAddr() != nil {
+		ctx, _ := context.WithTimeout(context.Background(), time.Second*20)
+		select {
+		// do not block in case of failure
+		case <-ctx.Done():
+			log.Error("[DHCPv4] failed to release the IP address", "error", ctx.Err())
+		case <-c.releasedChan:
+			dhcpv6ClientManager.Delete(c.managerKey)
+		}
+	}
+}
+
+// Close dhcp client channels
+func (c *DHCPv6Client) close() {
 	c.stop.Do(func() {
 		close(c.ipChan)
 		close(c.stopChan)
 	})
-	<-c.releasedChan
-	dhcpv6ClientManager.Delete(c.managerKey)
 }
 
 // Gets the IPChannel for consumption
@@ -165,13 +191,13 @@ func (c *DHCPv6Client) Start(ctx context.Context) error {
 		return fmt.Errorf("DHCPv6 client failed: %w", err)
 	}
 
-	c.addr = addr
-
 	c.initRebootFlag = false
 
+	c.storeAddr(addr)
+
 	// Set up two ticker to renew/rebind regularly
-	t1Timeout := c.addr.PreferredLifetime / 2
-	t2Timeout := (c.addr.ValidLifetime / 8) * 7
+	t1Timeout := addr.PreferredLifetime / 2
+	t2Timeout := (addr.ValidLifetime / 8) * 7
 	log.Debug("[DHCPv6] timeouts", "timeout1", t1Timeout, "timeout2", t2Timeout)
 	t1, t2 := time.NewTicker(t1Timeout), time.NewTicker(t2Timeout)
 
@@ -186,7 +212,7 @@ func (c *DHCPv6Client) Start(ctx context.Context) error {
 
 			addr, err := c.renew(dhcpCtx)
 			if err == nil {
-				c.addr = addr
+				c.storeAddr(addr)
 				log.Info("[DHCPv6] renew", "addr", addr.IPv6Addr.String())
 				t2.Reset(t2Timeout)
 			} else {
@@ -196,32 +222,43 @@ func (c *DHCPv6Client) Start(ctx context.Context) error {
 			// rebind is just like a request, but forcing to provide a new IP address
 			addr, err := c.request(dhcpCtx, true)
 			if err == nil {
-				c.addr = addr
+				c.storeAddr(addr)
 				log.Info("[DHCPv6] rebind", "lease", addr)
 			} else {
+				addr = c.loadAddr()
 				log.Warn("[DHCPv6] ip may have changed", "ip", addr.IPv6Addr.String(), "err", err)
 				c.initRebootFlag = false
-				c.addr, err = c.requestWithBackoff(dhcpCtx)
-				log.Error("[DHCPv6] rebind failed", "err", err)
+				addr, backoffErr := c.requestWithBackoff(dhcpCtx)
+				if backoffErr != nil {
+					log.Error("[DHCPv6] failed to reacquire lease", "err", backoffErr)
+					t1.Reset(t1Timeout)
+					t2.Reset(t2Timeout)
+					continue
+				}
+				c.storeAddr(addr)
 			}
 			t1.Reset(t1Timeout)
 			t2.Reset(t2Timeout)
-
+		case <-dhcpCtx.Done():
+			t1.Stop()
+			t2.Stop()
+			c.close()
 		case <-c.stopChan:
 			// create new context for DHCP cleanup (independent)
 			dhcpStopCtx, cancel := context.WithCancel(context.Background())
 			defer cancel()
 			// IP address release.
 			var err error
-			if err = c.release(dhcpStopCtx); err != nil {
-				log.Error("[DHCPv6] release failed", "err", err)
-			} else {
-				log.Info("[DHCPv6] released", "address", c.addr.String())
+			if c.loadAddr() != nil {
+				if err = c.release(dhcpStopCtx); err != nil {
+					log.Error("[DHCPv6] release failed", "err", err)
+				} else {
+					log.Info("[DHCPv6] released", "address", c.addr.String())
+				}
 			}
 			t1.Stop()
 			t2.Stop()
-
-			close(c.releasedChan)
+			c.Stop()
 			return err
 		}
 	}
@@ -235,32 +272,44 @@ func (c *DHCPv6Client) requestWithBackoff(ctx context.Context) (*dhcpv6.OptIAAdd
 		Max:    1 * time.Minute,
 	}
 
-	var err error
 	var addr *dhcpv6.OptIAAddress
+	var err error
 
+	log.Debug("[DHCPv6]", "attempts", c.backoffAttempts)
+
+RequestLoop:
 	for {
-		log.Debug("[DHCPv6] trying to get a new IP", "attempt", backoff.Attempt()+1)
+		select {
+		case <-ctx.Done():
+			return nil, fmt.Errorf("[DHCPv4] context error: %w", ctx.Err())
+		default:
+			log.Debug("[DHCPv6] trying to get a new IP", "attempt", backoff.Attempt()+1)
 
-		addr, err = c.request(ctx, false)
+			addr, err = c.request(ctx, false)
 
-		if err != nil {
-			dur := backoff.Duration()
-			if c.backoffAttempts > 0 && backoff.Attempt() > float64(c.backoffAttempts)-1 {
-				errMsg := fmt.Errorf("failed to get an IPv4 address after %d attempt(s), giving up, error: %s", c.backoffAttempts, err.Error())
-				log.Error(fmt.Sprintf("[DHCPv6] %s", errMsg.Error()))
-				c.errorChan <- errMsg
-				return nil, fmt.Errorf("failed to get IPv6 address: %w", err)
+			if err != nil {
+				dur := backoff.Duration()
+				if c.backoffAttempts > 0 && backoff.Attempt() > float64(c.backoffAttempts)-1 {
+					errMsg := fmt.Errorf("failed to get an IPv4 address after %d attempt(s), giving up, error: %s", c.backoffAttempts, err.Error())
+					log.Error(fmt.Sprintf("[DHCPv6] %s", errMsg.Error()))
+					c.errorChan <- errMsg
+					return nil, fmt.Errorf("failed to get IPv6 address: %w", err)
+				}
+				log.Error("[DHCPv6] request failed", "attempt", backoff.Attempt(), "err", err.Error(), "waiting", dur)
+				ticker := time.NewTicker(dur)
+				select {
+				case <-ticker.C:
+					ticker.Stop()
+				case <-ctx.Done():
+				}
+				continue RequestLoop
 			}
-			log.Error("[DHCPv6] request failed", "attempt", backoff.Attempt(), "err", err.Error(), "waiting", dur)
-			time.Sleep(dur)
-			continue
+			backoff.Reset()
+			break RequestLoop
 		}
-		backoff.Reset()
-		break
 	}
 
 	if c.ipChan != nil {
-		log.Debug("[DHCPv6] using channel")
 		c.ipChan <- addr.IPv6Addr.String()
 	}
 
@@ -376,6 +425,10 @@ func (c *DHCPv6Client) release(ctx context.Context) error {
 
 	if reply.Options.Status().StatusCode != iana.StatusSuccess {
 		return fmt.Errorf("release failed with code %d: %s", reply.Options.Status().StatusCode, reply.Options.Status().StatusMessage)
+	}
+
+	if c.loadAddr() != nil {
+		close(c.releasedChan)
 	}
 
 	return nil
