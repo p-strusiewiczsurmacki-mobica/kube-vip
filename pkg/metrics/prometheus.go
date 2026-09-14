@@ -1,6 +1,10 @@
 package metrics
 
-import "github.com/prometheus/client_golang/prometheus"
+import (
+	"sync"
+
+	"github.com/prometheus/client_golang/prometheus"
+)
 
 var (
 	// Service / VIP Lifecycle
@@ -68,7 +72,15 @@ var (
 	)
 )
 
+var registerOnce sync.Once
+
+// RegisterPrometheusMetrics registers every kube-vip collector with the default registry.
+// It is safe to call more than once; MustRegister would otherwise panic on the second call.
 func RegisterPrometheusMetrics() {
+	registerOnce.Do(registerPrometheusMetrics)
+}
+
+func registerPrometheusMetrics() {
 	// Register all metrics with Prometheus
 	prometheus.MustRegister(
 		ActiveServices,

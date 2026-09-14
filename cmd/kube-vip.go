@@ -4,18 +4,14 @@ import (
 	"context"
 	"fmt"
 	"net"
-	"net/http"
-	"net/http/pprof" //nolint:gosec // G108: the default mux is never served, see newMetricsMux
 	"os"
 	"slices"
 	"strconv"
 	"strings"
 	"sync"
-	"time"
 
 	log "log/slog"
 
-	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/spf13/cobra"
 	"github.com/vishvananda/netlink"
 	"golang.org/x/sys/unix"
@@ -355,7 +351,7 @@ var kubeVipManager = &cobra.Command{
 		// start prometheus server
 		if initConfig.PrometheusHTTPServer != "" {
 			wg.Go(func() {
-				servePrometheusHTTPServer(ctx, PrometheusHTTPServerConfig{
+				metrics.Serve(ctx, metrics.ServerConfig{
 					Addr:        initConfig.PrometheusHTTPServer,
 					EnablePprof: initConfig.EnablePprof,
 				})
@@ -486,100 +482,6 @@ var kubeVipManager = &cobra.Command{
 		}
 		return nil
 	},
-}
-
-// PrometheusHTTPServerConfig defines the Prometheus server configuration.
-type PrometheusHTTPServerConfig struct {
-	// Addr sets the http server address used to expose the metric endpoint
-	Addr string
-	// EnablePprof enables pprof profiling endpoints (debug only)
-	EnablePprof bool
-}
-
-// newMetricsMux builds the handler served on the Prometheus HTTP server address.
-//
-// pprof handlers are registered on this mux directly rather than relying on
-// http.DefaultServeMux: importing net/http/pprof registers /debug/pprof/* on
-// DefaultServeMux from the package's init function, which happens at process start
-// regardless of EnablePprof. Any server left with a nil Handler would therefore
-// expose the profiling endpoints even when the flag is off.
-func newMetricsMux(config PrometheusHTTPServerConfig) *http.ServeMux {
-	mux := http.NewServeMux()
-	mux.Handle("/metrics", promhttp.Handler())
-
-	if config.EnablePprof {
-		mux.HandleFunc("/debug/pprof/", pprof.Index)
-		mux.HandleFunc("/debug/pprof/cmdline", pprof.Cmdline)
-		mux.HandleFunc("/debug/pprof/profile", pprof.Profile)
-		mux.HandleFunc("/debug/pprof/symbol", pprof.Symbol)
-		mux.HandleFunc("/debug/pprof/trace", pprof.Trace)
-	}
-
-	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) { //nolint TODO
-		pprofHTML := ""
-		if config.EnablePprof {
-			pprofHTML = `<p><a href="/debug/pprof/">pprof Profiler</a></p>`
-		}
-		_, _ = w.Write([]byte(`<html>
-			<head><title>kube-vip</title></head>
-			<body>
-			<h1>kube-vip Metrics</h1>
-			<p><a href="` + "/metrics" + `">Metrics</a></p>
-			` + pprofHTML + `
-			</body>
-			</html>`))
-	})
-
-	return mux
-}
-
-func servePrometheusHTTPServer(ctx context.Context, config PrometheusHTTPServerConfig) {
-	var err error
-	mux := newMetricsMux(config)
-
-	if config.EnablePprof {
-		log.Warn("pprof profiling endpoints enabled at /debug/pprof/, this exposes runtime "+
-			"internals and allows unauthenticated CPU profiling; do not enable in production",
-			"addr", config.Addr)
-	}
-
-	srv := &http.Server{
-		Addr:              config.Addr,
-		Handler:           mux,
-		ReadHeaderTimeout: 2 * time.Second,
-	}
-
-	wg := sync.WaitGroup{}
-
-	wg.Go(func() {
-		if err = srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			log.Error("prometheus HTTP server", "err", err)
-			return
-		}
-	})
-
-	log.Info("prometheus HTTP server started")
-
-	<-ctx.Done()
-
-	// create prometheus shutdown context (independent of other contexts)
-	ctxShutDown, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer func() {
-		cancel()
-	}()
-
-	if err = srv.Shutdown(ctxShutDown); err != nil {
-		log.Error("shutting down prometheus HTTP server", "err", err)
-		return
-	}
-
-	if err == http.ErrServerClosed {
-		err = nil
-	}
-
-	log.Info("prometheus HTTP server stopped")
-
-	wg.Wait()
 }
 
 func GenerateCidrRange(address string, dnsMode string) (string, error) {

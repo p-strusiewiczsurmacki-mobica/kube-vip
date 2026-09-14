@@ -1,4 +1,4 @@
-package cmd
+package metrics
 
 import (
 	"net/http"
@@ -7,10 +7,10 @@ import (
 	"testing"
 )
 
-// TestNewMetricsMuxPprofDisabled asserts that the profiling endpoints are not reachable
+// TestNewMuxPprofDisabled asserts that the profiling endpoints are not reachable
 // on the metrics mux unless they were explicitly enabled.
-func TestNewMetricsMuxPprofDisabled(t *testing.T) {
-	mux := newMetricsMux(PrometheusHTTPServerConfig{Addr: ":2112"})
+func TestNewMuxPprofDisabled(t *testing.T) {
+	mux := NewMux(ServerConfig{Addr: ":2112"})
 
 	paths := []string{
 		"/debug/pprof/",
@@ -39,9 +39,9 @@ func TestNewMetricsMuxPprofDisabled(t *testing.T) {
 	}
 }
 
-// TestNewMetricsMuxPprofEnabled asserts the profiling endpoints are wired up when enabled.
-func TestNewMetricsMuxPprofEnabled(t *testing.T) {
-	mux := newMetricsMux(PrometheusHTTPServerConfig{Addr: ":2112", EnablePprof: true})
+// TestNewMuxPprofEnabled asserts the profiling endpoints are wired up when enabled.
+func TestNewMuxPprofEnabled(t *testing.T) {
+	mux := NewMux(ServerConfig{Addr: ":2112", EnablePprof: true})
 
 	tests := []struct {
 		path     string
@@ -83,11 +83,11 @@ func TestNewMetricsMuxPprofEnabled(t *testing.T) {
 	}
 }
 
-// TestNewMetricsMuxDoesNotDelegateToDefaultServeMux is a regression test for profiling
+// TestNewMuxDoesNotDelegateToDefaultServeMux is a regression test for profiling
 // endpoints leaking through http.DefaultServeMux. Importing net/http/pprof registers
 // /debug/pprof/* on the default mux from init, i.e. before any flag is parsed, so the
 // metrics mux must never delegate to it.
-func TestNewMetricsMuxDoesNotDelegateToDefaultServeMux(t *testing.T) {
+func TestNewMuxDoesNotDelegateToDefaultServeMux(t *testing.T) {
 	// Establish the hazard: the default mux really does have pprof registered even though
 	// nothing in this test enabled it.
 	req := httptest.NewRequest(http.MethodGet, "/debug/pprof/", nil)
@@ -98,15 +98,15 @@ func TestNewMetricsMuxDoesNotDelegateToDefaultServeMux(t *testing.T) {
 
 	// With pprof disabled the metrics mux must resolve /debug/pprof/ to its own catch-all,
 	// not to the default mux's pprof index.
-	mux := newMetricsMux(PrometheusHTTPServerConfig{Addr: ":2112"})
+	mux := NewMux(ServerConfig{Addr: ":2112"})
 	_, pattern := mux.Handler(req)
 	if pattern != "/" {
 		t.Fatalf("pattern for /debug/pprof/ = %q, want %q (the catch-all handler)", pattern, "/")
 	}
 }
 
-// TestNewMetricsMuxRootEndpoint covers the index page and its conditional pprof link.
-func TestNewMetricsMuxRootEndpoint(t *testing.T) {
+// TestNewMuxRootEndpoint covers the index page and its conditional pprof link.
+func TestNewMuxRootEndpoint(t *testing.T) {
 	tests := []struct {
 		name        string
 		enablePprof bool
@@ -132,7 +132,7 @@ func TestNewMetricsMuxRootEndpoint(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			mux := newMetricsMux(PrometheusHTTPServerConfig{
+			mux := NewMux(ServerConfig{
 				Addr:        ":2112",
 				EnablePprof: tt.enablePprof,
 			})
@@ -157,10 +157,10 @@ func TestNewMetricsMuxRootEndpoint(t *testing.T) {
 	}
 }
 
-// TestNewMetricsMuxMetricsEndpoint asserts the Prometheus handler stays wired up in both modes.
-func TestNewMetricsMuxMetricsEndpoint(t *testing.T) {
+// TestNewMuxMetricsEndpoint asserts the Prometheus handler stays wired up in both modes.
+func TestNewMuxMetricsEndpoint(t *testing.T) {
 	for _, enablePprof := range []bool{false, true} {
-		mux := newMetricsMux(PrometheusHTTPServerConfig{Addr: ":2112", EnablePprof: enablePprof})
+		mux := NewMux(ServerConfig{Addr: ":2112", EnablePprof: enablePprof})
 
 		w := httptest.NewRecorder()
 		mux.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/metrics", nil))
