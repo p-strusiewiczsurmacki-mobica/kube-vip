@@ -68,3 +68,29 @@ func TestInstanceNameLimitReservesNftablesPrefixAndFamilySuffix(t *testing.T) {
 		t.Fatalf("family-specific table name length = %d, want %d", got, nftablesNameMaxLength)
 	}
 }
+
+func TestValidate_EnablePprof(t *testing.T) {
+	tests := []struct {
+		name        string
+		enablePprof bool
+		wantErr     bool
+	}{
+		{name: "pprof disabled (default)", enablePprof: false, wantErr: false},
+		{name: "pprof enabled", enablePprof: true, wantErr: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			config := &Config{
+				EnablePprof: tt.enablePprof,
+				// Minimal config to pass validation
+				Interface: "eth0",
+			}
+			err := config.Validate()
+			if (err != nil) != tt.wantErr {
+				t.Errorf("Validate() with EnablePprof=%v error = %v, wantErr %v", tt.enablePprof, err, tt.wantErr)
+			}
+		})
+	}
+}
+

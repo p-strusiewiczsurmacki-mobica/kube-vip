@@ -160,6 +160,9 @@ type Config struct {
 	// The hostport used to expose Prometheus metrics over an HTTP server
 	PrometheusHTTPServer string `yaml:"prometheusHTTPServer,omitempty"`
 
+	// Enable pprof profiling endpoints on metrics server (debug only)
+	EnablePprof bool `yaml:"enablePprof,omitempty"`
+
 	// Egress configuration
 
 	// EgressPodCidr, this contains the pod cidr range to ignore Egress

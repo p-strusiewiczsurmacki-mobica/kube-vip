@@ -706,6 +706,16 @@ func ParseEnvironment(c *Config) error {
 		c.PrometheusHTTPServer = env
 	}
 
+	// Find pprof configuration
+	env = os.Getenv(enablePprof)
+	if env != "" {
+		b, err := strconv.ParseBool(env)
+		if err != nil {
+			return err
+		}
+		c.EnablePprof = b
+	}
+
 	// Set Egress configuration(s)
 	env = os.Getenv(egressPodCidr)
 	if env != "" {
@@ -1005,6 +1015,11 @@ func mergeConfigValues(baseConfig, fileConfig *Config) {
 	// Prometheus configuration
 	if baseConfig.PrometheusHTTPServer == "" && fileConfig.PrometheusHTTPServer != "" {
 		baseConfig.PrometheusHTTPServer = fileConfig.PrometheusHTTPServer
+	}
+
+	// pprof configuration
+	if !baseConfig.EnablePprof && fileConfig.EnablePprof {
+		baseConfig.EnablePprof = fileConfig.EnablePprof
 	}
 
 	// DNS configuration

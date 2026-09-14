@@ -87,6 +87,100 @@ ip_vs_rr
 Preloading only the required modules is preferred to enabling the SELinux
 `domain_kernel_load_modules` boolean for containers.
 
+### Metrics and Profiling
+
+kube-vip exposes Prometheus metrics and optional profiling endpoints via an HTTP server.
+
+#### Metrics Endpoint
+
+By default, metrics are exposed on port `2112` (configurable via `--prometheusHTTPServer`):
+
+```bash
+# Expose metrics on default port :2112
+kube-vip manager --prometheusHTTPServer :2112
+
+# View metrics
+curl http://localhost:2112/metrics
+
+# Access metrics from a pod
+kubectl port-forward -n kube-system pod/kube-vip 2112:2112
+curl http://localhost:2112/metrics
+```
+
+Metrics include:
+- Service reconciliation events and errors
+- Leader election transitions
+- BGP session status
+- Build info (version, build hash, node name)
+
+#### pprof Profiling (Debug Only)
+
+⚠️ **Debug feature** - only enable in non-production environments.
+
+Enable pprof profiling endpoints with the `--enablePprof` flag or `enable_pprof` environment variable:
+
+```bash
+# Via CLI flag
+kube-vip manager --prometheusHTTPServer 127.0.0.1:2112 --enablePprof
+
+# Via environment variable
+export enable_pprof=true
+kube-vip manager
+
+# Via Kubernetes manifest
+containers:
+- name: kube-vip
+  env:
+  - name: enable_pprof
+    value: "true"
+  - name: prometheus_server
+    value: "127.0.0.1:2112"
+```
+
+Note that environment variables are applied after command line flags, so
+`enable_pprof=false` overrides `--enablePprof`.
+
+Because kube-vip runs with `hostNetwork: true`, the default `:2112` listens on every
+node address, including the VIP. The profiling endpoints are unauthenticated and
+`/debug/pprof/profile` will occupy a CPU for its full sampling window, so bind the
+server to `127.0.0.1` as above and reach it with `kubectl port-forward` rather than
+exposing it on the node network.
+
+Access pprof endpoints:
+
+```bash
+# Access pprof endpoints
+curl http://localhost:2112/debug/pprof/
+
+# CPU profiling (30 seconds)
+curl http://localhost:2112/debug/pprof/profile > cpu.prof
+go tool pprof cpu.prof
+
+# Memory heap snapshot
+curl http://localhost:2112/debug/pprof/heap > heap.prof
+go tool pprof heap.prof
+
+# Goroutine listing, in the legacy text format
+curl http://localhost:2112/debug/pprof/goroutine?debug=1
+
+# Available profiles:
+# /debug/pprof/profile      - CPU profiling
+# /debug/pprof/heap         - Memory heap
+# /debug/pprof/allocs       - Memory allocation history
+# /debug/pprof/goroutine    - Goroutines
+# /debug/pprof/threadcreate - Thread creation
+# /debug/pprof/trace        - Execution tracer
+# /debug/pprof/cmdline      - Command line of the running process
+# /debug/pprof/symbol       - Symbol lookup for addresses
+```
+
+Profiles are returned as binary protobuf for `go tool pprof`; append `?debug=1` for the
+legacy text format. The `block` and `mutex` profiles are also listed on the index page,
+but kube-vip does not call `runtime.SetBlockProfileRate` or
+`runtime.SetMutexProfileFraction`, so they return no samples.
+
+**Security Note**: pprof exposes internal runtime information and should only be enabled in development/debug environments. It is disabled by default.
+
 ### Gateway API `LoadBalancer` services with no endpoints
 
 Some Gateway API controllers create `LoadBalancer` services that intentionally have no Endpoints/EndpointSlices backends.

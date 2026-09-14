@@ -41,6 +41,7 @@ leaseDuration: 15
 renewDeadline: 10
 retryPeriod: 2
 prometheusHTTPServer: ":2112"
+enablePprof: true
 `,
 			expectedConfig: &Config{
 				Logging:              2,
@@ -54,6 +55,7 @@ prometheusHTTPServer: ":2112"
 				InstanceName:         "release_a",
 				VIPSubnet:            "192.168.1.0/24",
 				PrometheusHTTPServer: ":2112",
+				EnablePprof:          true,
 				KubernetesLeaderElection: KubernetesLeaderElection{
 					LeaseName:     "test-lease",
 					LeaseDuration: 15,
@@ -289,6 +291,7 @@ namespace: "test-namespace"
 leaseName: "file-lease"
 leaseDuration: 20
 prometheusHTTPServer: ":3000"
+enablePprof: true
 `
 	if err := os.WriteFile(configFile, []byte(configContent), 0600); err != nil {
 		t.Fatalf("Failed to write test config file: %v", err)
@@ -314,6 +317,7 @@ prometheusHTTPServer: ":3000"
 				Interface:            "eth1",
 				Namespace:            "test-namespace",
 				PrometheusHTTPServer: ":3000",
+				EnablePprof:          true,
 				KubernetesLeaderElection: KubernetesLeaderElection{
 					LeaseName:     "file-lease",
 					LeaseDuration: 20,
@@ -338,6 +342,7 @@ prometheusHTTPServer: ":3000"
 				Interface:            "eth0",           // From base (higher priority)
 				Namespace:            "test-namespace", // From file
 				PrometheusHTTPServer: ":3000",          // From file
+				EnablePprof:          true,             // From file
 				KubernetesLeaderElection: KubernetesLeaderElection{
 					LeaseName:     "file-lease", // From file
 					LeaseDuration: 20,           // From file
@@ -406,6 +411,9 @@ prometheusHTTPServer: ":3000"
 			}
 			if tt.baseConfig.PrometheusHTTPServer != tt.expected.PrometheusHTTPServer {
 				t.Errorf("PrometheusHTTPServer = %v, expected %v", tt.baseConfig.PrometheusHTTPServer, tt.expected.PrometheusHTTPServer)
+			}
+			if tt.baseConfig.EnablePprof != tt.expected.EnablePprof {
+				t.Errorf("EnablePprof = %v, expected %v", tt.baseConfig.EnablePprof, tt.expected.EnablePprof)
 			}
 		})
 	}

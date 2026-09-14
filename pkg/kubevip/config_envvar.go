@@ -235,6 +235,9 @@ const (
 	// prometheusServer defines the address prometheus listens on
 	prometheusServer = "prometheus_server"
 
+	// enablePprof enables pprof profiling endpoints on the metrics server
+	enablePprof = "enable_pprof"
+
 	// vipConfigMap defines the configmap that kube-vip will watch for service definitions
 	// vipConfigMap = "vip_configmap"
 

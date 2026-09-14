@@ -291,12 +291,18 @@ func (sm *Manager) Start(ctx context.Context) error {
 		if sm.config.HealthCheckPort < 1024 {
 			return fmt.Errorf("healthcheck port is using a port that is less than 1024 [%d]", sm.config.HealthCheckPort)
 		}
-		http.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
+		// Use a dedicated mux rather than http.DefaultServeMux: a nil Handler would serve
+		// whatever any imported package registered on the default mux (notably the
+		// /debug/pprof/* handlers registered by net/http/pprof's init function), and
+		// registering on the global mux panics if Start is ever called twice.
+		healthMux := http.NewServeMux()
+		healthMux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
 			fmt.Fprintf(w, "OK")
 		})
 		wg.Go(func() {
 			server := &http.Server{
 				Addr:              fmt.Sprintf(":%d", sm.config.HealthCheckPort),
+				Handler:           healthMux,
 				ReadHeaderTimeout: 3 * time.Second,
 			}
 			err := server.ListenAndServe()
