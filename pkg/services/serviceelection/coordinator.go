@@ -31,8 +31,8 @@ type ServiceState interface {
 // Datapath owns activation and cleanup of a Service datapath. The coordinator
 // only decides when these operations must happen.
 type Datapath interface {
-	ActivateMember(context.Context, *Member, *lease.Lease, *sync.WaitGroup) error
-	CleanupMember(*Member, *lease.Lease) error
+	Activate(context.Context, *v1.Service, *servicecontext.Context, *sync.WaitGroup) error
+	Cleanup(context.Context, *v1.Service, *servicecontext.Context, func() bool) error
 }
 
 // CampaignRunner abstracts the Kubernetes leader-election implementation.
@@ -684,7 +684,7 @@ func (e *Coordinator) activateMember(ctx context.Context, member *Member, svcLea
 		!e.markMemberActive(member, svcLease, campaign) {
 		return
 	}
-	if err := e.manager.datapath.ActivateMember(ctx, member, svcLease, wg); err != nil {
+	if err := e.manager.datapath.Activate(ctx, member.service, member.serviceContext, wg); err != nil {
 		metrics.ServiceElectionErrorsTotal.WithLabelValues(member.service.Namespace, member.service.Name, "service_sync").Inc()
 		log.Error("start service after election", "service", member.service.Name, "namespace", member.service.Namespace, "error", err)
 		e.deactivateMemberOperationHeld(member)
@@ -777,7 +777,10 @@ func (e *Coordinator) cleanupMember(member *Member, svcLease *lease.Lease) {
 	if svcLease == nil {
 		return
 	}
-	if err := e.manager.datapath.CleanupMember(member, svcLease); err != nil {
+	cleanupCtx := context.WithoutCancel(svcLease.Ctx)
+	if err := e.manager.datapath.Cleanup(cleanupCtx, member.service, member.serviceContext, func() bool {
+		return e.Contains(member)
+	}); err != nil {
 		log.Error("stop service after election", "service", member.service.Name, "namespace", member.service.Namespace, "error", err)
 	}
 }

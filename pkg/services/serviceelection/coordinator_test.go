@@ -20,8 +20,8 @@ import (
 type testAdapter struct {
 	mutex       sync.Mutex
 	current     map[types.UID]*servicecontext.Context
-	activations []*Member
-	cleanups    []*Member
+	activations []*v1.Service
+	cleanups    []*v1.Service
 	activateErr error
 }
 
@@ -32,17 +32,20 @@ func (a *testAdapter) IsCurrent(service *v1.Service, ctx *servicecontext.Context
 	return current == ctx && ctx.Ctx.Err() == nil && ctx.ReadinessGenerationCurrent(generation)
 }
 
-func (a *testAdapter) ActivateMember(_ context.Context, member *Member, _ *lease.Lease, _ *sync.WaitGroup) error {
+func (a *testAdapter) Activate(_ context.Context, service *v1.Service, _ *servicecontext.Context, _ *sync.WaitGroup) error {
 	a.mutex.Lock()
 	defer a.mutex.Unlock()
-	a.activations = append(a.activations, member)
+	a.activations = append(a.activations, service)
 	return a.activateErr
 }
 
-func (a *testAdapter) CleanupMember(member *Member, _ *lease.Lease) error {
+func (a *testAdapter) Cleanup(_ context.Context, service *v1.Service, _ *servicecontext.Context, current func() bool) error {
+	if !current() {
+		return nil
+	}
 	a.mutex.Lock()
 	defer a.mutex.Unlock()
-	a.cleanups = append(a.cleanups, member)
+	a.cleanups = append(a.cleanups, service)
 	return nil
 }
 

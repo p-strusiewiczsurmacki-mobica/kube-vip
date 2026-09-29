@@ -6,7 +6,6 @@ import (
 	"time"
 
 	"github.com/kube-vip/kube-vip/pkg/election"
-	"github.com/kube-vip/kube-vip/pkg/lease"
 	"github.com/kube-vip/kube-vip/pkg/servicecontext"
 	"github.com/kube-vip/kube-vip/pkg/services/serviceelection"
 	v1 "k8s.io/api/core/v1"
@@ -63,15 +62,15 @@ func (p *Processor) IsCurrent(service *v1.Service, svcCtx *servicecontext.Contex
 	return true
 }
 
-// ActivateMember implements serviceelection.Datapath.
-func (p *Processor) ActivateMember(ctx context.Context, member *serviceelection.Member, _ *lease.Lease,
+// Activate implements serviceelection.Datapath.
+func (p *Processor) Activate(ctx context.Context, service *v1.Service, svcCtx *servicecontext.Context,
 	wg *sync.WaitGroup) error {
-	return p.syncServices(ctx, member.ServiceContext(), member.Service(), wg, true)
+	return p.syncServices(ctx, svcCtx, service, wg, true)
 }
 
-// CleanupMember implements serviceelection.Datapath.
-func (p *Processor) CleanupMember(member *serviceelection.Member, svcLease *lease.Lease) error {
-	service := member.Service()
+// Cleanup implements serviceelection.Datapath.
+func (p *Processor) Cleanup(ctx context.Context, service *v1.Service, svcCtx *servicecontext.Context,
+	memberCurrent func() bool) error {
 	unlockService := p.lockService(service.UID)
 	defer unlockService()
 
@@ -79,10 +78,10 @@ func (p *Processor) CleanupMember(member *serviceelection.Member, svcLease *leas
 	if err != nil {
 		return err
 	}
-	if currentSvcCtx != member.ServiceContext() || !member.Coordinator().Contains(member) {
+	if currentSvcCtx != svcCtx || !memberCurrent() {
 		return nil
 	}
-	return p.deleteCurrentServiceByUID(context.WithoutCancel(svcLease.Ctx), service.UID)
+	return p.deleteCurrentServiceByUID(ctx, service.UID)
 }
 
 // RunCampaign implements serviceelection.CampaignRunner.

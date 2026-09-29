@@ -252,7 +252,8 @@ func TestOnStoppedLeadingDoesNotDeleteReplacementContext(t *testing.T) {
 	replacementInstance := &instance.Instance{ServiceUID: service.UID, ServiceSnapshot: service.DeepCopy()}
 	p.ServiceInstances = []*instance.Instance{replacementInstance}
 
-	if err := p.CleanupMember(member, member.Coordinator().Lease()); err != nil {
+	if err := p.Cleanup(context.WithoutCancel(member.Coordinator().Lease().Ctx), service, oldCtx,
+		func() bool { return member.Coordinator().Contains(member) }); err != nil {
 		t.Fatalf("Cleanup returned an error: %v", err)
 	}
 	if got, err := p.getServiceContext(service.UID); err != nil || got != replacementCtx {
