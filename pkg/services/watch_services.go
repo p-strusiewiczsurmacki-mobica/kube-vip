@@ -157,8 +157,8 @@ func (p *Processor) ServicesWatcher(ctx context.Context, serviceFunc *Callback, 
 
 	// Use a restartable watcher, as this should help in the event of etcd or timeout issues
 	rw, err := watchtools.NewRetryWatcherWithContext(ctx, "1", &cache.ListWatch{
-		WatchFunc: func(_ metav1.ListOptions) (watch.Interface, error) {
-			return utils.WatchWithAuthRetry(ctx, func(ctx context.Context) (watch.Interface, error) {
+		WatchFuncWithContext: func(watchCtx context.Context, _ metav1.ListOptions) (watch.Interface, error) {
+			return utils.WatchWithAuthRetry(watchCtx, func(ctx context.Context) (watch.Interface, error) {
 				return p.rwClientSet.CoreV1().Services(p.config.ServiceNamespace).Watch(ctx, metav1.ListOptions{})
 			})
 		},
