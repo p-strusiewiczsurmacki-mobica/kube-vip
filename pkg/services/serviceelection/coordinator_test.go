@@ -25,15 +25,11 @@ type testAdapter struct {
 	activateErr error
 }
 
-func (a *testAdapter) IsCurrent(member *Member) bool {
+func (a *testAdapter) IsCurrent(service *v1.Service, ctx *servicecontext.Context, generation uint64) bool {
 	a.mutex.Lock()
-	current := a.current[member.Service().UID]
+	current := a.current[service.UID]
 	a.mutex.Unlock()
-	ctx := member.ServiceContext()
-	if current != ctx || ctx.Ctx.Err() != nil || !ctx.ReadinessGenerationCurrent(member.ReadinessGeneration()) {
-		return false
-	}
-	return member.Coordinator() == nil || member.Coordinator().Contains(member)
+	return current == ctx && ctx.Ctx.Err() == nil && ctx.ReadinessGenerationCurrent(generation)
 }
 
 func (a *testAdapter) ActivateMember(_ context.Context, member *Member, _ *lease.Lease, _ *sync.WaitGroup) error {

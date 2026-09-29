@@ -54,15 +54,13 @@ func (p *Processor) currentServiceContext(uid types.UID) (*servicecontext.Contex
 }
 
 // IsCurrent implements serviceelection.ServiceState.
-func (p *Processor) IsCurrent(member *serviceelection.Member) bool {
-	service := member.Service()
-	svcCtx := member.ServiceContext()
+func (p *Processor) IsCurrent(service *v1.Service, svcCtx *servicecontext.Context, readinessGeneration uint64) bool {
 	currentCtx, err := p.currentServiceContext(service.UID)
 	if err != nil || currentCtx != svcCtx || svcCtx.Ctx.Err() != nil ||
-		!svcCtx.ReadinessGenerationCurrent(member.ReadinessGeneration()) {
+		!svcCtx.ReadinessGenerationCurrent(readinessGeneration) {
 		return false
 	}
-	return member.Coordinator() == nil || member.Coordinator().Contains(member)
+	return true
 }
 
 // ActivateMember implements serviceelection.Datapath.

@@ -25,7 +25,7 @@ import (
 // context and readiness generation. It keeps Kubernetes state ownership out of
 // the election coordinator.
 type ServiceState interface {
-	IsCurrent(*Member) bool
+	IsCurrent(*v1.Service, *servicecontext.Context, uint64) bool
 }
 
 // Datapath owns activation and cleanup of a Service datapath. The coordinator
@@ -229,14 +229,13 @@ func (m *Manager) Join(svcCtx *servicecontext.Context, service *v1.Service,
 	namespace, name := lease.ServiceName(service)
 	id := lease.NewID(m.config.LeaderElectionType, namespace, name)
 	for {
-		candidate := newMember(nil, svcCtx, service, readinessGeneration)
-		if !m.state.IsCurrent(candidate) {
+		if !m.state.IsCurrent(service, svcCtx, readinessGeneration) {
 			return nil, false
 		}
 		coordinator := m.coordinatorFor(id)
 		member, joined := coordinator.join(svcCtx, service, readinessGeneration)
 		if joined {
-			if m.state.IsCurrent(member) {
+			if m.state.IsCurrent(member.service, member.serviceContext, member.readinessGeneration) {
 				return member, true
 			}
 			member.withdraw()
@@ -441,7 +440,7 @@ func (m *Manager) Watch(svcCtx *servicecontext.Context, service *v1.Service,
 
 		member, joined := m.Join(svcCtx, service, generation)
 		if !joined {
-			if !m.state.IsCurrent(newMember(nil, svcCtx, service, generation)) {
+			if !m.state.IsCurrent(service, svcCtx, generation) {
 				return
 			}
 			select {
@@ -681,7 +680,8 @@ func (e *Coordinator) activateMember(ctx context.Context, member *Member, svcLea
 	member.operationMutex.Lock()
 	defer member.operationMutex.Unlock()
 
-	if !e.manager.state.IsCurrent(member) || !e.markMemberActive(member, svcLease, campaign) {
+	if !e.manager.state.IsCurrent(member.service, member.serviceContext, member.readinessGeneration) ||
+		!e.markMemberActive(member, svcLease, campaign) {
 		return
 	}
 	if err := e.manager.datapath.ActivateMember(ctx, member, svcLease, wg); err != nil {
@@ -694,7 +694,8 @@ func (e *Coordinator) activateMember(ctx context.Context, member *Member, svcLea
 		return
 	}
 	e.resetRestartFailures()
-	if !e.manager.state.IsCurrent(member) || !e.memberActivationCurrent(member, svcLease, campaign) {
+	if !e.manager.state.IsCurrent(member.service, member.serviceContext, member.readinessGeneration) ||
+		!e.memberActivationCurrent(member, svcLease, campaign) {
 		e.deactivateMemberOperationHeld(member)
 	}
 }
