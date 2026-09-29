@@ -92,6 +92,7 @@ func TestAddServiceDoesNotOverwriteActiveEndpoint(t *testing.T) {
 		t.Fatalf("create Kubernetes client: %v", err)
 	}
 	processor := &Processor{
+		serviceLocks: newTestServiceLocks(),
 		config: &kubevip.Config{
 			EnableServicesElection: true,
 			EnableARP:              true,
@@ -122,6 +123,7 @@ func TestConfigureServiceRejectsCancelledContext(t *testing.T) {
 	}}
 	serviceInstance := &instance.Instance{ServiceUID: service.UID, ServiceSnapshot: service}
 	processor := &Processor{
+		serviceLocks:     newTestServiceLocks(),
 		config:           &kubevip.Config{EnableServicesElection: true},
 		ServiceInstances: []*instance.Instance{serviceInstance},
 	}
@@ -166,6 +168,7 @@ func TestUpdateEgressConfigurationRejectsRecreatedService(t *testing.T) {
 	snapshot := trackedService.DeepCopy()
 	serviceInstance := &instance.Instance{ServiceUID: trackedService.UID, ServiceSnapshot: snapshot}
 	processor := &Processor{
+		serviceLocks:     newTestServiceLocks(),
 		config:           &kubevip.Config{},
 		clientSet:        clientSet,
 		ServiceInstances: []*instance.Instance{serviceInstance},
@@ -198,6 +201,7 @@ func TestConfigureServiceWatchesBothDHCPFamilies(t *testing.T) {
 		DHCPv6Client: dhcpv6,
 	}
 	processor := &Processor{
+		serviceLocks: newTestServiceLocks(),
 		config: &kubevip.Config{
 			DisableServiceUpdates: true,
 			EnableARP:             true,

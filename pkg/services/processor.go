@@ -35,10 +35,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/watch"
 	"k8s.io/client-go/kubernetes"
-	"k8s.io/utils/keymutex"
 )
-
-const concurrentServiceLocks = 128
 
 var errServiceAddressPending = errors.New("service load-balancer address pending")
 
@@ -56,8 +53,7 @@ type Processor struct {
 	recovered                bool
 	ownedVIPsMu              sync.Mutex
 	ownedServiceVIPs         atomic.Pointer[[]string]
-	serviceLocks             keymutex.KeyMutex
-	serviceLocksOnce         sync.Once
+	serviceLocks             *ServiceLock
 	electionCoordinatorsOnce sync.Once
 	electionCoordinators     *serviceelection.Manager
 	electionLoops            sync.Map
@@ -102,7 +98,7 @@ func NewServicesProcessor(config *kubevip.Config, bgpServer *bgp.Server,
 		config:           config,
 		lbClassFilter:    lbClassFilterFunc,
 		ServiceInstances: []*instance.Instance{},
-		serviceLocks:     keymutex.NewHashed(concurrentServiceLocks),
+		serviceLocks:     NewServiceLock(),
 		bgpServer:        bgpServer,
 		clientSet:        clientSet,
 		rwClientSet:      rwClientSet,
@@ -172,8 +168,8 @@ func (p *Processor) Reconcile(ctx context.Context, event watch.Event, serviceFun
 	shouldGarbageCollect := false
 	var err error
 	if err := func() error {
-		unlockService := p.lockService(svc.UID)
-		defer unlockService()
+		p.serviceLocks.Lock(svc.UID)
+		defer p.serviceLocks.Unlock(svc.UID)
 
 		svcInstance = p.findServiceInstance(svc)
 		_, usesCommonLease := svc.Annotations[kubevip.ServiceLease]
@@ -305,8 +301,8 @@ func (p *Processor) Reconcile(ctx context.Context, event watch.Event, serviceFun
 // admitServiceInstance constructs and tracks a Service instance under its
 // Service lock. Callers must not already hold that lock.
 func (p *Processor) admitServiceInstance(ctx context.Context, svc *v1.Service, wg *sync.WaitGroup) (*instance.Instance, bool, error) {
-	unlockService := p.lockService(svc.UID)
-	defer unlockService()
+	p.serviceLocks.Lock(svc.UID)
+	defer p.serviceLocks.Unlock(svc.UID)
 
 	serviceInstance := p.findServiceInstance(svc)
 	if serviceInstance != nil {
@@ -649,8 +645,8 @@ func (p *Processor) retireServiceContext(svc *v1.Service) (*servicecontext.Conte
 		return nil, nil, fmt.Errorf("(svcs) unable to get context: %w", err)
 	}
 
-	unlockService := p.lockService(svc.UID)
-	defer unlockService()
+	p.serviceLocks.Lock(svc.UID)
+	defer p.serviceLocks.Unlock(svc.UID)
 
 	// A replacement context may have been published while waiting for the lock.
 	currentContext, err := p.getServiceContext(svc.UID)
@@ -693,12 +689,13 @@ func (p *Processor) Stop() {
 		return true
 	})
 	for _, instance := range p.serviceInstances() {
-		unlockService := p.lockService(instance.UID())
+		uid := instance.UID()
+		p.serviceLocks.Lock(uid)
 		for _, cluster := range instance.Clusters {
 			cluster.StopAndWait()
 		}
 		instance.AddCalled = false
-		unlockService()
+		p.serviceLocks.Unlock(uid)
 	}
 }
 
@@ -743,8 +740,8 @@ func (p *Processor) ensureServiceContext(ctx context.Context, svc *v1.Service) (
 
 func (p *Processor) ensureServiceContextLocked(ctx context.Context, svc *v1.Service,
 	observed *servicecontext.Context) (*servicecontext.Context, bool, error) {
-	unlockService := p.lockService(svc.UID)
-	defer unlockService()
+	p.serviceLocks.Lock(svc.UID)
+	defer p.serviceLocks.Unlock(svc.UID)
 
 	current, err := p.getServiceContext(svc.UID)
 	if err != nil {
@@ -810,11 +807,12 @@ func ipFamilyPolicyEqual(first, second *v1.IPFamilyPolicy) bool {
 func (p *Processor) updateActiveServicesMetric() {
 	counts := map[string]int{}
 	for _, inst := range p.serviceInstances() {
-		unlockService := p.lockService(inst.UID())
+		uid := inst.UID()
+		p.serviceLocks.Lock(uid)
 		if inst.ServiceSnapshot != nil {
 			counts[inst.ServiceSnapshot.Namespace]++
 		}
-		unlockService()
+		p.serviceLocks.Unlock(uid)
 	}
 	metrics.ActiveServices.Reset()
 	for ns, count := range counts {
@@ -847,11 +845,12 @@ func (p *Processor) ServiceSnapshots() []*v1.Service {
 		if inst == nil {
 			continue
 		}
-		unlockService := p.lockService(inst.UID())
+		uid := inst.UID()
+		p.serviceLocks.Lock(uid)
 		if inst.ServiceSnapshot != nil {
 			snapshots = append(snapshots, inst.ServiceSnapshot.DeepCopy())
 		}
-		unlockService()
+		p.serviceLocks.Unlock(uid)
 	}
 	return snapshots
 }
@@ -876,11 +875,12 @@ func (p *Processor) refreshOwnedServiceVIPs() {
 		if inst == nil {
 			continue
 		}
-		unlockService := p.lockService(inst.UID())
+		uid := inst.UID()
+		p.serviceLocks.Lock(uid)
 		if inst.AddCalled && inst.ServiceSnapshot != nil {
 			services = append(services, inst.ServiceSnapshot.DeepCopy())
 		}
-		unlockService()
+		p.serviceLocks.Unlock(uid)
 	}
 	vips := instance.OrderedServiceAddresses(services)
 	p.ownedServiceVIPs.Store(&vips)
@@ -916,21 +916,4 @@ func (p *Processor) detachServiceInstance(uid types.UID) (*instance.Instance, []
 		return found, append([]*instance.Instance(nil), remaining...)
 	}
 	return nil, append([]*instance.Instance(nil), remaining...)
-}
-
-// lockService serializes mutable state for one Service UID. The returned unlock
-// function must be called exactly once; the lock is not reentrant.
-func (p *Processor) lockService(uid types.UID) func() {
-	p.serviceLocksOnce.Do(func() {
-		if p.serviceLocks == nil {
-			p.serviceLocks = keymutex.NewHashed(concurrentServiceLocks)
-		}
-	})
-	key := string(uid)
-	p.serviceLocks.LockKey(key)
-	return func() {
-		if err := p.serviceLocks.UnlockKey(key); err != nil {
-			log.Error("failed to unlock service reconciliation", "uid", uid, "err", err)
-		}
-	}
 }

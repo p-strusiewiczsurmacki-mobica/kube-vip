@@ -114,6 +114,39 @@ func TestManagerIssuesNewClaimForEachReadinessGeneration(t *testing.T) {
 	second.close()
 }
 
+func TestLastMemberRetirementRemovesCoordinatorFromRegistry(t *testing.T) {
+	manager, adapter, _ := newTestManager()
+	service := &v1.Service{ObjectMeta: metav1.ObjectMeta{
+		Name: "service", Namespace: "default", UID: "service",
+	}}
+	member := readyMember(t, manager, adapter, service)
+	coordinator := member.coordinator
+
+	if current := manager.registry.current(coordinator.id); current != coordinator {
+		t.Fatal("joined coordinator is not registered")
+	}
+
+	member.close()
+
+	if current := manager.registry.current(coordinator.id); current != nil {
+		t.Fatal("retired coordinator remained registered")
+	}
+}
+
+func TestStaleCoordinatorCannotRemoveReplacementFromRegistry(t *testing.T) {
+	manager, _, _ := newTestManager()
+	id := lease.NewID("kubernetes", "default", "shared")
+	stale := manager.registry.coordinatorFor(id)
+	manager.registry.remove(stale)
+	replacement := manager.registry.coordinatorFor(id)
+
+	manager.registry.remove(stale)
+
+	if current := manager.registry.current(id); current != replacement {
+		t.Fatal("stale coordinator removed its replacement")
+	}
+}
+
 func TestSharedCoordinatorAggregatesCurrentMemberVIPs(t *testing.T) {
 	manager, adapter, _ := newTestManager()
 	annotations := map[string]string{kubevip.ServiceLease: "shared"}

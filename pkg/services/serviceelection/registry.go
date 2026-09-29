@@ -22,21 +22,15 @@ type registry struct {
 	mutex           sync.Mutex
 	coordinators    map[string]*coordinator
 	nextMemberToken atomic.Uint64
-	dependencies    coordinatorDependencies
+	dependencies    Dependencies
 }
 
 // NewManager creates a Service election manager.
 func NewManager(dependencies Dependencies) *Manager {
 	registry := &registry{
 		coordinators: make(map[string]*coordinator),
-		dependencies: coordinatorDependencies{
-			config: dependencies.Config, leases: dependencies.Leases,
-			electionManager: dependencies.ElectionManager, state: dependencies.State,
-			datapath: dependencies.Datapath, runner: dependencies.Runner, scheduler: dependencies.Scheduler,
-		},
+		dependencies: dependencies,
 	}
-	registry.dependencies.nextToken = registry.nextToken
-	registry.dependencies.onRetired = registry.remove
 	return &Manager{config: dependencies.Config, state: dependencies.State, registry: registry}
 }
 
@@ -52,6 +46,7 @@ func (r *registry) coordinatorFor(id lease.ID) *coordinator {
 	}
 	retiredCtx, retire := context.WithCancel(context.Background())
 	coordinator := &coordinator{
+		registry:     r,
 		dependencies: r.dependencies,
 		id:           id,
 		members:      make(map[types.UID]*member),

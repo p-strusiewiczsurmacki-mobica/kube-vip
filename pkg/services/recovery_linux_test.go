@@ -86,6 +86,7 @@ func TestRecoverServiceAddressesUsesLeaseHolderIdentity(t *testing.T) {
 
 			clientSet := recoveryTestClient(t, test.holder)
 			processor := &Processor{
+				serviceLocks: newTestServiceLocks(),
 				config: &kubevip.Config{
 					EnableServicesElection: true,
 					LeaderElectionType:     "kubernetes",
@@ -129,6 +130,7 @@ func TestServiceAddressRetainedUsesGlobalLeaseHolder(t *testing.T) {
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			processor := &Processor{
+				serviceLocks: newTestServiceLocks(),
 				config: &kubevip.Config{
 					EnableARP:          true,
 					NodeName:           "node-a",
@@ -159,6 +161,7 @@ func TestRetainControlPlaneVIPsUsesLeaseHolder(t *testing.T) {
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			processor := &Processor{
+				serviceLocks: newTestServiceLocks(),
 				config: &kubevip.Config{
 					EnableControlPlane: true,
 					NodeName:           "node-a",
@@ -191,6 +194,7 @@ func TestRetainControlPlaneVIPsUsesLeaseHolder(t *testing.T) {
 // lease held elsewhere must not cause recovery to sweep it.
 func TestRetainControlPlaneVIPsWithoutLeaderElection(t *testing.T) {
 	processor := &Processor{
+		serviceLocks: newTestServiceLocks(),
 		config: &kubevip.Config{
 			EnableControlPlane: true,
 			NodeName:           "node-a",
@@ -226,8 +230,9 @@ func TestRetainAnnotatedLeaseVIPsRetainsDesiredVIP(t *testing.T) {
 		Spec:       coordinationv1.LeaseSpec{HolderIdentity: &holder},
 	}})
 	processor := &Processor{
-		config:    &kubevip.Config{NodeName: holder, RoutingProtocol: recoveryProtocol},
-		clientSet: clientSet,
+		serviceLocks: newTestServiceLocks(),
+		config:       &kubevip.Config{NodeName: holder, RoutingProtocol: recoveryProtocol},
+		clientSet:    clientSet,
 	}
 	holders := make(map[string]string)
 	retained := make(map[string]struct{})
@@ -257,6 +262,7 @@ func TestRetainAnnotatedLeaseVIPsDoesNotRetainDeletedServiceVIP(t *testing.T) {
 		Spec:       coordinationv1.LeaseSpec{HolderIdentity: &holder},
 	}})
 	processor := &Processor{
+		serviceLocks: newTestServiceLocks(),
 		config: &kubevip.Config{
 			NodeName:         holder,
 			RoutingProtocol:  recoveryProtocol,
@@ -299,6 +305,7 @@ func TestLeaseOwnershipCurrentRejectsExpiredLease(t *testing.T) {
 
 func TestRecoverAddressesRemainsRetryableForHostnameControlPlaneVIP(t *testing.T) {
 	processor := &Processor{
+		serviceLocks: newTestServiceLocks(),
 		config: &kubevip.Config{
 			EnableControlPlane: true,
 			LeaderElectionType: "kubernetes",

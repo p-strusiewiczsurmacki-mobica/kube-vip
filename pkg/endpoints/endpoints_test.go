@@ -253,9 +253,10 @@ func (f *fakeWorker) setInstanceEndpointsStatus(_ *v1.Service, _ *instance.Insta
 	return nil
 }
 
-func noOpServiceLock(types.UID) func() {
-	return func() {}
-}
+type noOpServiceLocker struct{}
+
+func (noOpServiceLocker) Lock(types.UID)         {}
+func (noOpServiceLocker) Unlock(types.UID) error { return nil }
 
 // TestReconcile_RecomputesRemainingEndpoints asserts that deleting one EndpointSlice
 // reconciles against the endpoints that remain, instead of assuming the service
@@ -301,10 +302,10 @@ func TestReconcile_RecomputesRemainingEndpoints(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			worker := &fakeWorker{endpoints: test.remaining}
 			p := &Processor{
-				config:      &kubevip.Config{},
-				provider:    providers.NewEndpointslices(),
-				worker:      worker,
-				lockService: noOpServiceLock,
+				config:       &kubevip.Config{},
+				provider:     providers.NewEndpointslices(),
+				worker:       worker,
+				serviceLocks: noOpServiceLocker{},
 			}
 
 			svcCtx := servicecontext.New(context.Background())
@@ -355,10 +356,10 @@ func TestReconcile_ZeroEndpointsBehavior(t *testing.T) {
 
 		worker := &fakeWorker{endpoints: []string{}}
 		p := &Processor{
-			config:      &kubevip.Config{},
-			provider:    providers.NewEndpointslices(),
-			worker:      worker,
-			lockService: noOpServiceLock,
+			config:       &kubevip.Config{},
+			provider:     providers.NewEndpointslices(),
+			worker:       worker,
+			serviceLocks: noOpServiceLocker{},
 		}
 
 		svcCtx := servicecontext.New(context.Background())
@@ -443,10 +444,10 @@ func TestHandleNoEndpointsStopsGlobalRoutingTableWorkers(t *testing.T) {
 func TestReconcileIPv6EgressWithoutIPv6EndpointsClearsReadiness(t *testing.T) {
 	worker := &fakeWorker{endpoints: []string{"192.0.2.10"}}
 	processor := &Processor{
-		config:      &kubevip.Config{},
-		provider:    providers.NewEndpointslices(),
-		worker:      worker,
-		lockService: noOpServiceLock,
+		config:       &kubevip.Config{},
+		provider:     providers.NewEndpointslices(),
+		worker:       worker,
+		serviceLocks: noOpServiceLocker{},
 	}
 	service := &v1.Service{
 		ObjectMeta: metav1.ObjectMeta{Annotations: map[string]string{kubevip.EgressIPv6: "true"}},
@@ -543,11 +544,11 @@ func TestReconcileServicesElectionDoesNotStartElectionLoop(t *testing.T) {
 	defer svcCtx.Cancel()
 
 	p := &Processor{
-		config:      config,
-		provider:    providers.NewEndpointslices(),
-		worker:      &fakeWorker{endpoints: []string{"10.0.0.1"}},
-		leaseMgr:    leaseMgr,
-		lockService: noOpServiceLock,
+		config:       config,
+		provider:     providers.NewEndpointslices(),
+		worker:       &fakeWorker{endpoints: []string{"10.0.0.1"}},
+		leaseMgr:     leaseMgr,
+		serviceLocks: noOpServiceLocker{},
 	}
 
 	// Three endpoint events, as a flapping backend pod would produce.

@@ -32,12 +32,18 @@ type Processor struct {
 	instances      *[]*instance.Instance
 	instancesMutex *sync.RWMutex
 	leaseMgr       *lease.Manager
-	lockService    func(types.UID) func()
+	serviceLocks   ServiceLocker
+}
+
+// ServiceLocker serializes operations belonging to the same Service UID.
+type ServiceLocker interface {
+	Lock(types.UID)
+	Unlock(types.UID) error
 }
 
 func NewEndpointProcessor(config *kubevip.Config, provider providers.Provider, bgpServer *bgp.Server,
 	instances *[]*instance.Instance, instancesMutex *sync.RWMutex, leaseMgr *lease.Manager, tunnelMgr *wireguard.TunnelManager, routeMgr *route.Manager,
-	lockService func(types.UID) func()) *Processor {
+	serviceLocks ServiceLocker) *Processor {
 	return &Processor{
 		config:         config,
 		provider:       provider,
@@ -45,7 +51,7 @@ func NewEndpointProcessor(config *kubevip.Config, provider providers.Provider, b
 		instances:      instances,
 		instancesMutex: instancesMutex,
 		leaseMgr:       leaseMgr,
-		lockService:    lockService,
+		serviceLocks:   serviceLocks,
 		worker:         newEndpointWorker(config, provider, bgpServer, leaseMgr, tunnelMgr, routeMgr),
 	}
 }
@@ -60,15 +66,15 @@ func (p *Processor) Reconcile(svcCtx *servicecontext.Context, event watch.Event,
 	wg *sync.WaitGroup,
 	clientSet *kubernetes.Clientset,
 	egressUpdateFunc func(context.Context, *v1.Service, *instance.Instance) error) (bool, error) {
-	if p.lockService == nil {
+	if p.serviceLocks == nil {
 		return false, fmt.Errorf("service operation lock is not configured")
 	}
 	endpointCount := 0
 	var readinessLossGeneration uint64
 	clearNoEndpoints := false
 	updatedService, inst, changed, skip, err := func() (*v1.Service, *instance.Instance, bool, bool, error) {
-		unlockService := p.lockService(service.UID)
-		defer unlockService()
+		p.serviceLocks.Lock(service.UID)
+		defer p.serviceLocks.Unlock(service.UID)
 
 		if err := p.applyEvent(svcCtx, event); err != nil {
 			return nil, nil, false, false, err
@@ -131,9 +137,9 @@ func (p *Processor) Reconcile(svcCtx *servicecontext.Context, event watch.Event,
 		return skip, err
 	}
 	if clearNoEndpoints && svcCtx.ResetReadinessGeneration(readinessLossGeneration) {
-		unlockService := p.lockService(service.UID)
+		p.serviceLocks.Lock(service.UID)
 		p.handleNoEndpoints(svcCtx, service, inst, lastKnownGoodEndpoint)
-		unlockService()
+		p.serviceLocks.Unlock(service.UID)
 	}
 
 	if changed && egressUpdateFunc != nil {
