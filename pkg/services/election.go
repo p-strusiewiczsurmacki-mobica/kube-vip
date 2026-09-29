@@ -13,11 +13,15 @@ import (
 )
 
 var (
-	_ serviceelection.ServiceState     = (*Processor)(nil)
-	_ serviceelection.Datapath         = (*Processor)(nil)
-	_ serviceelection.CampaignRunner   = (*Processor)(nil)
-	_ serviceelection.RestartScheduler = (*Processor)(nil)
+	_ serviceelection.ServiceState     = (*electionAdapter)(nil)
+	_ serviceelection.Datapath         = (*electionAdapter)(nil)
+	_ serviceelection.CampaignRunner   = (*electionAdapter)(nil)
+	_ serviceelection.RestartScheduler = (*electionAdapter)(nil)
 )
+
+type electionAdapter struct {
+	processor *Processor
+}
 
 // electionCoordinatorManager wires the generic election coordinator to the
 // Service processor. The coordinator itself does not depend on pkg/services.
@@ -27,8 +31,11 @@ func (p *Processor) electionCoordinatorManager() *serviceelection.Manager {
 		if p.leaseMgr != nil {
 			leaseStore = p.leaseMgr
 		}
-		p.electionCoordinators = serviceelection.NewManager(p.config, leaseStore, p.electionMgr,
-			p, p, p, p)
+		adapter := &electionAdapter{processor: p}
+		p.electionCoordinators = serviceelection.NewManager(serviceelection.Dependencies{
+			Config: p.config, Leases: leaseStore, ElectionManager: p.electionMgr,
+			State: adapter, Datapath: adapter, Runner: adapter, Scheduler: adapter,
+		})
 	})
 	return p.electionCoordinators
 }
@@ -53,7 +60,9 @@ func (p *Processor) currentServiceContext(uid types.UID) (*servicecontext.Contex
 }
 
 // IsCurrent implements serviceelection.ServiceState.
-func (p *Processor) IsCurrent(service *v1.Service, svcCtx *servicecontext.Context, readinessGeneration uint64) bool {
+
+func (a *electionAdapter) IsCurrent(service *v1.Service, svcCtx *servicecontext.Context, readinessGeneration uint64) bool {
+	p := a.processor
 	currentCtx, err := p.currentServiceContext(service.UID)
 	if err != nil || currentCtx != svcCtx || svcCtx.Ctx.Err() != nil ||
 		!svcCtx.ReadinessGenerationCurrent(readinessGeneration) {
@@ -63,14 +72,16 @@ func (p *Processor) IsCurrent(service *v1.Service, svcCtx *servicecontext.Contex
 }
 
 // Activate implements serviceelection.Datapath.
-func (p *Processor) Activate(ctx context.Context, service *v1.Service, svcCtx *servicecontext.Context,
+func (a *electionAdapter) Activate(ctx context.Context, service *v1.Service, svcCtx *servicecontext.Context,
 	wg *sync.WaitGroup) error {
+	p := a.processor
 	return p.syncServices(ctx, svcCtx, service, wg, true)
 }
 
 // Cleanup implements serviceelection.Datapath.
-func (p *Processor) Cleanup(ctx context.Context, service *v1.Service, svcCtx *servicecontext.Context,
+func (a *electionAdapter) Cleanup(ctx context.Context, service *v1.Service, svcCtx *servicecontext.Context,
 	memberCurrent func() bool) error {
+	p := a.processor
 	unlockService := p.lockService(service.UID)
 	defer unlockService()
 
@@ -85,7 +96,8 @@ func (p *Processor) Cleanup(ctx context.Context, service *v1.Service, svcCtx *se
 }
 
 // RunCampaign implements serviceelection.CampaignRunner.
-func (p *Processor) RunCampaign(ctx context.Context, run *election.RunConfig) error {
+func (a *electionAdapter) RunCampaign(ctx context.Context, run *election.RunConfig) error {
+	p := a.processor
 	if p.electionRun != nil {
 		return p.electionRun(ctx, run, p.config)
 	}
@@ -93,7 +105,8 @@ func (p *Processor) RunCampaign(ctx context.Context, run *election.RunConfig) er
 }
 
 // ScheduleRestart implements serviceelection.RestartScheduler.
-func (p *Processor) ScheduleRestart(ctx context.Context, delay time.Duration, wg *sync.WaitGroup, restart func()) {
+func (a *electionAdapter) ScheduleRestart(ctx context.Context, delay time.Duration, wg *sync.WaitGroup, restart func()) {
+	p := a.processor
 	if p.scheduleElectionRestart != nil {
 		p.scheduleElectionRestart(restart)
 		return

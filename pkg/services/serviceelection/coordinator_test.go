@@ -63,7 +63,10 @@ func (a *testAdapter) ScheduleRestart(_ context.Context, _ time.Duration, _ *syn
 func newTestManager() (*Manager, *testAdapter, *lease.Manager) {
 	adapter := &testAdapter{current: make(map[types.UID]*servicecontext.Context)}
 	leaseMgr := lease.NewManager()
-	manager := NewManager(&kubevip.Config{}, leaseMgr, nil, adapter, adapter, adapter, adapter)
+	manager := NewManager(Dependencies{
+		Config: &kubevip.Config{}, Leases: leaseMgr,
+		State: adapter, Datapath: adapter, Runner: adapter, Scheduler: adapter,
+	})
 	return manager, adapter, leaseMgr
 }
 
