@@ -185,6 +185,56 @@ func TestActivationFailureCancelscampaignAndRecordsBackoff(t *testing.T) {
 	manager.Leave(member)
 }
 
+func TestDeactivateAndLeaveActiveMemberCleansUpExactlyOnce(t *testing.T) {
+	manager, adapter, leaseMgr := newTestManager()
+	service := &v1.Service{ObjectMeta: metav1.ObjectMeta{Name: "service", Namespace: "default", UID: "service"}}
+	member := readyMember(t, manager, adapter, service)
+	coordinator := member.Coordinator()
+	serviceLease := coordinator.Lease()
+
+	coordinator.mutex.Lock()
+	campaignCtx, cancelCampaign := context.WithCancel(context.Background())
+	coordinator.campaign = &campaign{ctx: campaignCtx, cancel: cancelCampaign}
+	currentCampaign := coordinator.campaign
+	coordinator.mutex.Unlock()
+	serviceLease.ElectionStarted()
+
+	coordinator.activateMember(context.Background(), member, serviceLease, currentCampaign, &sync.WaitGroup{})
+	if !member.Active() {
+		t.Fatal("member was not activated")
+	}
+
+	coordinator.DeactivateMember(member)
+	coordinator.DeactivateMember(member)
+	manager.Leave(member)
+	manager.Leave(member)
+
+	adapter.mutex.Lock()
+	cleanups := len(adapter.cleanups)
+	adapter.mutex.Unlock()
+	if cleanups != 1 {
+		t.Fatalf("cleanup calls = %d, want 1", cleanups)
+	}
+	if leaseMgr.Get(coordinator.id) != nil {
+		t.Fatal("last member withdrawal did not retire the lease")
+	}
+}
+
+func TestLeavingInactiveMemberDoesNotCleanupDatapath(t *testing.T) {
+	manager, adapter, _ := newTestManager()
+	service := &v1.Service{ObjectMeta: metav1.ObjectMeta{Name: "service", Namespace: "default", UID: "service"}}
+	member := readyMember(t, manager, adapter, service)
+
+	manager.Leave(member)
+
+	adapter.mutex.Lock()
+	cleanups := len(adapter.cleanups)
+	adapter.mutex.Unlock()
+	if cleanups != 0 {
+		t.Fatalf("cleanup calls = %d, want 0", cleanups)
+	}
+}
+
 func TestManagerRejectsStaleReadinessGeneration(t *testing.T) {
 	manager, adapter, _ := newTestManager()
 	service := &v1.Service{ObjectMeta: metav1.ObjectMeta{Name: "service", Namespace: "default", UID: "service"}}
