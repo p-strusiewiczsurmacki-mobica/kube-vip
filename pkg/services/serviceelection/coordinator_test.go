@@ -89,7 +89,7 @@ func TestManagerIssuesNewClaimForEachReadinessGeneration(t *testing.T) {
 	first := readyMember(t, manager, adapter, service)
 	firstToken := first.ClaimToken()
 	firstContext := first.ServiceContext()
-	manager.Leave(first)
+	first.Close()
 
 	generation, _, _, ready := firstContext.ReadinessState()
 	if !ready || !firstContext.ResetReadinessGeneration(generation) {
@@ -105,11 +105,11 @@ func TestManagerIssuesNewClaimForEachReadinessGeneration(t *testing.T) {
 		t.Fatal("new readiness generation reused a claim token")
 	}
 
-	manager.Leave(first)
+	first.Close()
 	if leaseMgr.Get(second.Coordinator().id) == nil {
 		t.Fatal("stale member retired the replacement lease")
 	}
-	manager.Leave(second)
+	second.Close()
 }
 
 func TestSharedCoordinatorAggregatesCurrentMemberVIPs(t *testing.T) {
@@ -132,11 +132,11 @@ func TestSharedCoordinatorAggregatesCurrentMemberVIPs(t *testing.T) {
 	if got, want := first.Coordinator().Lease().OwnedVIPs(), []string{"192.0.2.10", "192.0.2.20"}; !slices.Equal(got, want) {
 		t.Fatalf("OwnedVIPs() = %v, want %v", got, want)
 	}
-	manager.Leave(first)
+	first.Close()
 	if got, want := second.Coordinator().Lease().OwnedVIPs(), []string{"192.0.2.20"}; !slices.Equal(got, want) {
 		t.Fatalf("OwnedVIPs() after leave = %v, want %v", got, want)
 	}
-	manager.Leave(second)
+	second.Close()
 }
 
 func TestReplacingUIDGenerationKeepsSiblingClaim(t *testing.T) {
@@ -157,13 +157,13 @@ func TestReplacingUIDGenerationKeepsSiblingClaim(t *testing.T) {
 	if !joined {
 		t.Fatal("replacement generation did not join")
 	}
-	manager.Leave(old)
+	old.Close()
 	if replacement.Coordinator().CurrentMember(service.UID) != replacement ||
 		replacement.Coordinator().CurrentMember(siblingService.UID) != sibling {
 		t.Fatal("stale generation removed a current shared-lease member")
 	}
-	manager.Leave(replacement)
-	manager.Leave(sibling)
+	replacement.Close()
+	sibling.Close()
 }
 
 func TestActivationFailureCancelscampaignAndRecordsBackoff(t *testing.T) {
@@ -182,10 +182,10 @@ func TestActivationFailureCancelscampaignAndRecordsBackoff(t *testing.T) {
 	if got, want := coordinator.restartDelayLocked(), 2*restartBaseDelay; got != want {
 		t.Fatalf("restart delay = %v, want %v", got, want)
 	}
-	manager.Leave(member)
+	member.Close()
 }
 
-func TestDeactivateAndLeaveActiveMemberCleansUpExactlyOnce(t *testing.T) {
+func TestCloseActiveMemberCleansUpExactlyOnce(t *testing.T) {
 	manager, adapter, leaseMgr := newTestManager()
 	service := &v1.Service{ObjectMeta: metav1.ObjectMeta{Name: "service", Namespace: "default", UID: "service"}}
 	member := readyMember(t, manager, adapter, service)
@@ -204,10 +204,8 @@ func TestDeactivateAndLeaveActiveMemberCleansUpExactlyOnce(t *testing.T) {
 		t.Fatal("member was not activated")
 	}
 
-	coordinator.DeactivateMember(member)
-	coordinator.DeactivateMember(member)
-	manager.Leave(member)
-	manager.Leave(member)
+	member.Close()
+	member.Close()
 
 	adapter.mutex.Lock()
 	cleanups := len(adapter.cleanups)
@@ -225,7 +223,7 @@ func TestLeavingInactiveMemberDoesNotCleanupDatapath(t *testing.T) {
 	service := &v1.Service{ObjectMeta: metav1.ObjectMeta{Name: "service", Namespace: "default", UID: "service"}}
 	member := readyMember(t, manager, adapter, service)
 
-	manager.Leave(member)
+	member.Close()
 
 	adapter.mutex.Lock()
 	cleanups := len(adapter.cleanups)

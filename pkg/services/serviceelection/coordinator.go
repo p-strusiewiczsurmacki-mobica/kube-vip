@@ -124,6 +124,29 @@ type Member struct {
 	active              bool
 }
 
+// Close deactivates the member datapath and withdraws its lease claim. It is
+// safe to call more than once and stale members cannot remove replacements.
+func (m *Member) Close() {
+	if m == nil || m.coordinator == nil {
+		return
+	}
+	m.deactivate()
+	m.withdraw()
+}
+
+func (m *Member) deactivate() {
+	m.operationMutex.Lock()
+	defer m.operationMutex.Unlock()
+	m.coordinator.deactivateMemberOperationHeld(m)
+}
+
+func (m *Member) withdraw() {
+	if m == nil || m.coordinator == nil {
+		return
+	}
+	m.coordinator.leave(m)
+}
+
 func (m *Member) Service() *v1.Service { return m.service }
 
 func (m *Member) ServiceContext() *servicecontext.Context { return m.serviceContext }
@@ -216,7 +239,7 @@ func (m *Manager) Join(svcCtx *servicecontext.Context, service *v1.Service,
 			if m.state.IsCurrent(member) {
 				return member, true
 			}
-			m.Leave(member)
+			member.withdraw()
 			return nil, false
 		}
 		if retiredDone, retired := coordinator.retirement(); retired {
@@ -317,15 +340,6 @@ func (e *Coordinator) nextMemberToken() string {
 	return strconv.FormatUint(e.manager.nextMemberToken.Add(1), 10)
 }
 
-// leaveServiceElection removes only the supplied member generation. A stale
-// member cannot remove a replacement Service context or readiness generation.
-func (m *Manager) Leave(member *Member) {
-	if member == nil {
-		return
-	}
-	member.coordinator.leave(member)
-}
-
 func (m *Manager) LeaveForContext(svcCtx *servicecontext.Context, service *v1.Service) {
 	if svcCtx == nil || service == nil {
 		return
@@ -338,7 +352,9 @@ func (m *Manager) LeaveForContext(svcCtx *servicecontext.Context, service *v1.Se
 	}
 	member := coordinator.CurrentMember(service.UID)
 	if member != nil && member.serviceContext == svcCtx {
-		m.Leave(member)
+		// The caller already owns Service cleanup. Withdrawing here must not
+		// reacquire the Service lock through datapath cleanup.
+		member.withdraw()
 	}
 }
 
@@ -439,12 +455,10 @@ func (m *Manager) Watch(svcCtx *servicecontext.Context, service *v1.Service,
 
 		select {
 		case <-svcCtx.Ctx.Done():
-			member.coordinator.DeactivateMember(member)
-			m.Leave(member)
+			member.Close()
 			return
 		case <-lost:
-			member.coordinator.DeactivateMember(member)
-			m.Leave(member)
+			member.Close()
 		}
 	}
 }
@@ -737,12 +751,6 @@ func (e *Coordinator) otherMembers(member *Member) []*Member {
 	return others
 }
 
-func (e *Coordinator) DeactivateMember(member *Member) {
-	member.operationMutex.Lock()
-	defer member.operationMutex.Unlock()
-	e.deactivateMemberOperationHeld(member)
-}
-
 // markMemberInactive clears the active flag and reports the lease that the
 // caller must run cleanup against.
 func (e *Coordinator) markMemberInactive(member *Member) (*lease.Lease, bool) {
@@ -795,7 +803,7 @@ func (e *Coordinator) markCampaignStopped(svcLease *lease.Lease,
 
 func (e *Coordinator) stopCampaign(svcLease *lease.Lease, campaign *campaign) {
 	for _, member := range e.markCampaignStopped(svcLease, campaign) {
-		e.DeactivateMember(member)
+		member.deactivate()
 	}
 }
 
