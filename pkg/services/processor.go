@@ -169,7 +169,11 @@ func (p *Processor) Reconcile(ctx context.Context, event watch.Event, serviceFun
 	var err error
 	if err := func() error {
 		p.serviceLock.Lock(svc.UID)
-		defer releaseServiceLock(p.serviceLock, svc.UID)
+		defer func() {
+			if err := p.serviceLock.Unlock(svc.UID); err != nil {
+				log.Error("failed to release service lock", "uid", svc.UID, "err", err)
+			}
+		}()
 
 		svcInstance = p.findServiceInstance(svc)
 		_, usesCommonLease := svc.Annotations[kubevip.ServiceLease]
@@ -302,7 +306,11 @@ func (p *Processor) Reconcile(ctx context.Context, event watch.Event, serviceFun
 // Service lock. Callers must not already hold that lock.
 func (p *Processor) admitServiceInstance(ctx context.Context, svc *v1.Service, wg *sync.WaitGroup) (*instance.Instance, bool, error) {
 	p.serviceLock.Lock(svc.UID)
-	defer releaseServiceLock(p.serviceLock, svc.UID)
+	defer func() {
+		if err := p.serviceLock.Unlock(svc.UID); err != nil {
+			log.Error("failed to release service lock", "uid", svc.UID, "err", err)
+		}
+	}()
 
 	serviceInstance := p.findServiceInstance(svc)
 	if serviceInstance != nil {
@@ -646,7 +654,11 @@ func (p *Processor) retireServiceContext(svc *v1.Service) (*servicecontext.Conte
 	}
 
 	p.serviceLock.Lock(svc.UID)
-	defer releaseServiceLock(p.serviceLock, svc.UID)
+	defer func() {
+		if err := p.serviceLock.Unlock(svc.UID); err != nil {
+			log.Error("failed to release service lock", "uid", svc.UID, "err", err)
+		}
+	}()
 
 	// A replacement context may have been published while waiting for the lock.
 	currentContext, err := p.getServiceContext(svc.UID)
@@ -695,7 +707,9 @@ func (p *Processor) Stop() {
 			cluster.StopAndWait()
 		}
 		instance.AddCalled = false
-		releaseServiceLock(p.serviceLock, uid)
+		if err := p.serviceLock.Unlock(uid); err != nil {
+			log.Error("failed to release service lock", "uid", uid, "err", err)
+		}
 	}
 }
 
@@ -741,7 +755,11 @@ func (p *Processor) ensureServiceContext(ctx context.Context, svc *v1.Service) (
 func (p *Processor) ensureServiceContextLocked(ctx context.Context, svc *v1.Service,
 	observed *servicecontext.Context) (*servicecontext.Context, bool, error) {
 	p.serviceLock.Lock(svc.UID)
-	defer releaseServiceLock(p.serviceLock, svc.UID)
+	defer func() {
+		if err := p.serviceLock.Unlock(svc.UID); err != nil {
+			log.Error("failed to release service lock", "uid", svc.UID, "err", err)
+		}
+	}()
 
 	current, err := p.getServiceContext(svc.UID)
 	if err != nil {
@@ -812,7 +830,9 @@ func (p *Processor) updateActiveServicesMetric() {
 		if inst.ServiceSnapshot != nil {
 			counts[inst.ServiceSnapshot.Namespace]++
 		}
-		releaseServiceLock(p.serviceLock, uid)
+		if err := p.serviceLock.Unlock(uid); err != nil {
+			log.Error("failed to release service lock", "uid", uid, "err", err)
+		}
 	}
 	metrics.ActiveServices.Reset()
 	for ns, count := range counts {
@@ -850,7 +870,9 @@ func (p *Processor) ServiceSnapshots() []*v1.Service {
 		if inst.ServiceSnapshot != nil {
 			snapshots = append(snapshots, inst.ServiceSnapshot.DeepCopy())
 		}
-		releaseServiceLock(p.serviceLock, uid)
+		if err := p.serviceLock.Unlock(uid); err != nil {
+			log.Error("failed to release service lock", "uid", uid, "err", err)
+		}
 	}
 	return snapshots
 }
@@ -880,7 +902,9 @@ func (p *Processor) refreshOwnedServiceVIPs() {
 		if inst.AddCalled && inst.ServiceSnapshot != nil {
 			services = append(services, inst.ServiceSnapshot.DeepCopy())
 		}
-		releaseServiceLock(p.serviceLock, uid)
+		if err := p.serviceLock.Unlock(uid); err != nil {
+			log.Error("failed to release service lock", "uid", uid, "err", err)
+		}
 	}
 	vips := instance.OrderedServiceAddresses(services)
 	p.ownedServiceVIPs.Store(&vips)
