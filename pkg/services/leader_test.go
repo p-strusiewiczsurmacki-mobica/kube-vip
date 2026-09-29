@@ -114,7 +114,7 @@ func TestServiceMemberLeavingDoesNotCancelControlPlaneLease(t *testing.T) {
 	if !joined {
 		t.Fatal("Service did not join the control-plane lease")
 	}
-	p.leaveElectionCoordinator(member)
+	member.Close()
 
 	if sharedLease.Ctx.Err() != nil || !sharedLease.Elected.Load() || p.leaseMgr.Get(id) != sharedLease {
 		t.Fatal("leaving Service member cancelled the control-plane lease")
@@ -168,7 +168,7 @@ func TestServiceMemberDeactivatesWhenExternalElectionStops(t *testing.T) {
 	if active {
 		t.Fatal("Service member remained active after external leadership ended")
 	}
-	p.leaveElectionCoordinator(member)
+	member.Close()
 	p.leaseMgr.Delete(id, controlPlaneToken, sharedLease)
 }
 

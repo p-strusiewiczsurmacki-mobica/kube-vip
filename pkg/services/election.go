@@ -39,10 +39,6 @@ func (p *Processor) joinElectionCoordinator(svcCtx *servicecontext.Context, serv
 	return p.electionCoordinatorManager().Join(svcCtx, service, readinessGeneration)
 }
 
-func (p *Processor) leaveElectionCoordinator(member *serviceelection.Member) {
-	p.electionCoordinatorManager().Leave(member)
-}
-
 func (p *Processor) leaveElectionCoordinatorForContext(svcCtx *servicecontext.Context, service *v1.Service) {
 	p.electionCoordinatorManager().LeaveForContext(svcCtx, service)
 }
