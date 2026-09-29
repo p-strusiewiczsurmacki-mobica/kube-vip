@@ -56,24 +56,35 @@ type LeaseStore interface {
 // Service state, datapath work, campaign execution, and scheduling to focused
 // interfaces supplied by pkg/services.
 type Manager struct {
-	config      *kubevip.Config
-	leaseMgr    LeaseStore
-	electionMgr *election.Manager
-	state       ServiceState
-	datapath    Datapath
-	runner      CampaignRunner
-	scheduler   RestartScheduler
+	config   *kubevip.Config
+	state    ServiceState
+	registry *registry
+}
 
+type registry struct {
 	mutex           sync.Mutex
 	coordinators    map[string]*Coordinator
 	nextMemberToken atomic.Uint64
+	dependencies    coordinatorDependencies
+}
+
+type coordinatorDependencies struct {
+	config          *kubevip.Config
+	leases          LeaseStore
+	electionManager *election.Manager
+	state           ServiceState
+	datapath        Datapath
+	runner          CampaignRunner
+	scheduler       RestartScheduler
+	nextToken       func() string
+	onRetired       func(*Coordinator)
 }
 
 // Coordinator owns membership and campaign lifetime for one lease.
 // Service contexts remain responsible for endpoint readiness and datapath work.
 type Coordinator struct {
-	manager *Manager
-	id      lease.ID
+	dependencies coordinatorDependencies
+	id           lease.ID
 
 	mutex        sync.Mutex
 	members      map[types.UID]*Member
@@ -189,40 +200,50 @@ func (e *Coordinator) Contains(member *Member) bool {
 
 func NewManager(config *kubevip.Config, leaseMgr LeaseStore, electionMgr *election.Manager,
 	state ServiceState, datapath Datapath, runner CampaignRunner, scheduler RestartScheduler) *Manager {
-	return &Manager{
-		config: config, leaseMgr: leaseMgr, electionMgr: electionMgr, state: state, datapath: datapath,
-		runner: runner, scheduler: scheduler, coordinators: make(map[string]*Coordinator),
+	registry := &registry{
+		coordinators: make(map[string]*Coordinator),
+		dependencies: coordinatorDependencies{
+			config: config, leases: leaseMgr, electionManager: electionMgr, state: state,
+			datapath: datapath, runner: runner, scheduler: scheduler,
+		},
 	}
+	registry.dependencies.nextToken = registry.nextToken
+	registry.dependencies.onRetired = registry.remove
+	return &Manager{config: config, state: state, registry: registry}
 }
 
-func (m *Manager) coordinatorFor(id lease.ID) *Coordinator {
-	m.mutex.Lock()
-	defer m.mutex.Unlock()
-	if m.coordinators == nil {
-		m.coordinators = make(map[string]*Coordinator)
+func (r *registry) coordinatorFor(id lease.ID) *Coordinator {
+	r.mutex.Lock()
+	defer r.mutex.Unlock()
+	if r.coordinators == nil {
+		r.coordinators = make(map[string]*Coordinator)
 	}
 	key := id.NamespacedName()
-	if coordinator := m.coordinators[key]; coordinator != nil {
+	if coordinator := r.coordinators[key]; coordinator != nil {
 		return coordinator
 	}
 	retiredCtx, retire := context.WithCancel(context.Background())
 	coordinator := &Coordinator{
-		manager:      m,
+		dependencies: r.dependencies,
 		id:           id,
 		members:      make(map[types.UID]*Member),
 		retiredDone:  make(chan struct{}),
 		retiredCtx:   retiredCtx,
 		retireCancel: retire,
 	}
-	m.coordinators[key] = coordinator
+	r.coordinators[key] = coordinator
 	return coordinator
+}
+
+func (r *registry) nextToken() string {
+	return strconv.FormatUint(r.nextMemberToken.Add(1), 10)
 }
 
 // joinServiceElection registers the current ready generation of a Service. A
 // caller that races coordinator retirement retries against its replacement.
 func (m *Manager) Join(svcCtx *servicecontext.Context, service *v1.Service,
 	readinessGeneration uint64) (*Member, bool) {
-	if svcCtx == nil || service == nil || m.leaseMgr == nil {
+	if svcCtx == nil || service == nil || m.registry.dependencies.leases == nil {
 		return nil, false
 	}
 
@@ -232,7 +253,7 @@ func (m *Manager) Join(svcCtx *servicecontext.Context, service *v1.Service,
 		if !m.state.IsCurrent(service, svcCtx, readinessGeneration) {
 			return nil, false
 		}
-		coordinator := m.coordinatorFor(id)
+		coordinator := m.registry.coordinatorFor(id)
 		member, joined := coordinator.join(svcCtx, service, readinessGeneration)
 		if joined {
 			if m.state.IsCurrent(member.service, member.serviceContext, member.readinessGeneration) {
@@ -274,10 +295,10 @@ func (e *Coordinator) join(svcCtx *servicecontext.Context, service *v1.Service,
 	}
 
 	if previous := e.members[service.UID]; previous != nil {
-		e.manager.leaseMgr.Delete(e.id, previous.claimToken, e.lease)
+		e.dependencies.leases.Delete(e.id, previous.claimToken, e.lease)
 	}
 	member := newMember(e, svcCtx, service, readinessGeneration)
-	member.claimToken = e.nextMemberToken()
+	member.claimToken = e.dependencies.nextToken()
 	member.vipProvider = serviceVIPProvider(member.service)
 	e.members[service.UID] = member
 
@@ -294,7 +315,7 @@ func (e *Coordinator) join(svcCtx *servicecontext.Context, service *v1.Service,
 		}
 		return member, true
 	}
-	if claimed, _ := e.manager.leaseMgr.ClaimWithVIPProvider(e.id, member.claimToken, member.vipProvider); claimed != nil {
+	if claimed, _ := e.dependencies.leases.ClaimWithVIPProvider(e.id, member.claimToken, member.vipProvider); claimed != nil {
 		return member, true
 	}
 
@@ -320,23 +341,19 @@ func (e *Coordinator) createLeaseLocked() *lease.Lease {
 	if first == nil {
 		return nil
 	}
-	svcLease, _ := e.manager.leaseMgr.AcquireWithVIPProvider(context.Background(), e.id, first.claimToken,
+	svcLease, _ := e.dependencies.leases.AcquireWithVIPProvider(context.Background(), e.id, first.claimToken,
 		first.vipProvider)
 	for _, member := range e.members {
 		if member == first {
 			continue
 		}
-		if claimed, _ := e.manager.leaseMgr.ClaimWithVIPProvider(e.id, member.claimToken, member.vipProvider); claimed == nil {
+		if claimed, _ := e.dependencies.leases.ClaimWithVIPProvider(e.id, member.claimToken, member.vipProvider); claimed == nil {
 			svcLease.Cancel()
 			return nil
 		}
 	}
 	e.lease = svcLease
 	return svcLease
-}
-
-func (e *Coordinator) nextMemberToken() string {
-	return strconv.FormatUint(e.manager.nextMemberToken.Add(1), 10)
 }
 
 func (m *Manager) LeaveForContext(svcCtx *servicecontext.Context, service *v1.Service) {
@@ -358,9 +375,13 @@ func (m *Manager) LeaveForContext(svcCtx *servicecontext.Context, service *v1.Se
 }
 
 func (m *Manager) Current(id lease.ID) *Coordinator {
-	m.mutex.Lock()
-	defer m.mutex.Unlock()
-	return m.coordinators[id.NamespacedName()]
+	return m.registry.current(id)
+}
+
+func (r *registry) current(id lease.ID) *Coordinator {
+	r.mutex.Lock()
+	defer r.mutex.Unlock()
+	return r.coordinators[id.NamespacedName()]
 }
 
 func (e *Coordinator) CurrentMember(uid types.UID) *Member {
@@ -393,7 +414,7 @@ func (e *Coordinator) removeMember(member *Member) (campaign *campaign, leaseRet
 		return nil, false, false
 	}
 	delete(e.members, member.service.UID)
-	leaseRetired = e.manager.leaseMgr.Delete(e.id, member.claimToken, e.lease)
+	leaseRetired = e.dependencies.leases.Delete(e.id, member.claimToken, e.lease)
 	if len(e.members) != 0 {
 		return nil, leaseRetired, false
 	}
@@ -413,15 +434,15 @@ func (e *Coordinator) retire() {
 	if e.retireCancel != nil {
 		e.retireCancel()
 	}
-	e.manager.remove(e)
+	e.dependencies.onRetired(e)
 	close(e.retiredDone)
 }
 
-func (m *Manager) remove(coordinator *Coordinator) {
-	m.mutex.Lock()
-	defer m.mutex.Unlock()
-	if m.coordinators[coordinator.id.NamespacedName()] == coordinator {
-		delete(m.coordinators, coordinator.id.NamespacedName())
+func (r *registry) remove(coordinator *Coordinator) {
+	r.mutex.Lock()
+	defer r.mutex.Unlock()
+	if r.coordinators[coordinator.id.NamespacedName()] == coordinator {
+		delete(r.coordinators, coordinator.id.NamespacedName())
 	}
 }
 
@@ -572,9 +593,9 @@ func (e *Coordinator) runCampaign(svcLease *lease.Lease, campaign *campaign, wg 
 	defer close(campaign.done)
 	defer campaign.cancelRunner()
 	run := election.RunConfig{
-		Config:           e.manager.config,
+		Config:           e.dependencies.config,
 		LeaseID:          e.id,
-		Mgr:              e.manager.electionMgr,
+		Mgr:              e.dependencies.electionManager,
 		LeaseAnnotations: map[string]string{},
 		VIPs:             campaign.vips,
 		VIPsProvider:     svcLease.OwnedVIPs,
@@ -583,15 +604,15 @@ func (e *Coordinator) runCampaign(svcLease *lease.Lease, campaign *campaign, wg 
 		},
 		OnStoppedLeading: func() {
 			e.stopCampaign(svcLease, campaign)
-			metrics.IsLeader.WithLabelValues(e.manager.config.NodeName, e.id.Name()).Set(0)
+			metrics.IsLeader.WithLabelValues(e.dependencies.config.NodeName, e.id.Name()).Set(0)
 		},
 		OnNewLeader: func(identity string) {
-			if identity != e.manager.config.NodeName {
+			if identity != e.dependencies.config.NodeName {
 				log.Info("new leader", "leader", identity, "lease", e.id.NamespacedName())
 			}
 		},
 	}
-	if err := e.manager.runner.RunCampaign(campaign.ctx, &run); err != nil {
+	if err := e.dependencies.runner.RunCampaign(campaign.ctx, &run); err != nil {
 		log.Error("services election failed", "lease", e.id.NamespacedName(), "error", err)
 	}
 	e.stopCampaign(svcLease, campaign)
@@ -642,7 +663,7 @@ func (e *Coordinator) startedLeading(ctx context.Context, svcLease *lease.Lease,
 		return
 	}
 	metrics.LeaderTransitionsTotal.WithLabelValues(e.id.Name()).Inc()
-	metrics.IsLeader.WithLabelValues(e.manager.config.NodeName, e.id.Name()).Set(1)
+	metrics.IsLeader.WithLabelValues(e.dependencies.config.NodeName, e.id.Name()).Set(1)
 	e.activateMembers(ctx, svcLease, campaign, wg)
 }
 
@@ -680,11 +701,11 @@ func (e *Coordinator) activateMember(ctx context.Context, member *Member, svcLea
 	member.operationMutex.Lock()
 	defer member.operationMutex.Unlock()
 
-	if !e.manager.state.IsCurrent(member.service, member.serviceContext, member.readinessGeneration) ||
+	if !e.dependencies.state.IsCurrent(member.service, member.serviceContext, member.readinessGeneration) ||
 		!e.markMemberActive(member, svcLease, campaign) {
 		return
 	}
-	if err := e.manager.datapath.Activate(ctx, member.service, member.serviceContext, wg); err != nil {
+	if err := e.dependencies.datapath.Activate(ctx, member.service, member.serviceContext, wg); err != nil {
 		metrics.ServiceElectionErrorsTotal.WithLabelValues(member.service.Namespace, member.service.Name, "service_sync").Inc()
 		log.Error("start service after election", "service", member.service.Name, "namespace", member.service.Namespace, "error", err)
 		e.deactivateMemberOperationHeld(member)
@@ -694,7 +715,7 @@ func (e *Coordinator) activateMember(ctx context.Context, member *Member, svcLea
 		return
 	}
 	e.resetRestartFailures()
-	if !e.manager.state.IsCurrent(member.service, member.serviceContext, member.readinessGeneration) ||
+	if !e.dependencies.state.IsCurrent(member.service, member.serviceContext, member.readinessGeneration) ||
 		!e.memberActivationCurrent(member, svcLease, campaign) {
 		e.deactivateMemberOperationHeld(member)
 	}
@@ -778,7 +799,7 @@ func (e *Coordinator) cleanupMember(member *Member, svcLease *lease.Lease) {
 		return
 	}
 	cleanupCtx := context.WithoutCancel(svcLease.Ctx)
-	if err := e.manager.datapath.Cleanup(cleanupCtx, member.service, member.serviceContext, func() bool {
+	if err := e.dependencies.datapath.Cleanup(cleanupCtx, member.service, member.serviceContext, func() bool {
 		return e.Contains(member)
 	}); err != nil {
 		log.Error("stop service after election", "service", member.service.Name, "namespace", member.service.Namespace, "error", err)
@@ -853,7 +874,7 @@ func (e *Coordinator) finishCampaign(svcLease *lease.Lease, campaign *campaign, 
 		return
 	}
 
-	e.manager.scheduler.ScheduleRestart(e.retiredCtx, delay, wg, func() {
+	e.dependencies.scheduler.ScheduleRestart(e.retiredCtx, delay, wg, func() {
 		e.StartCampaign(wg)
 	})
 }
