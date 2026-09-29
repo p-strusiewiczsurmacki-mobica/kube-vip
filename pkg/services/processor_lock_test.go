@@ -475,7 +475,6 @@ func TestDeleteTrackedServiceCleansUpElectedServiceImmediately(t *testing.T) {
 		ServiceInstances: []*instance.Instance{{ServiceUID: uid, ServiceSnapshot: service}},
 		leaseMgr:         lease.NewManager(),
 		electionRun:      runner.run,
-		serviceSync:      func(context.Context, *servicecontext.Context, *v1.Service, *sync.WaitGroup, bool) error { return nil },
 	}
 	initializeTestElectionCoordinators(processor)
 	svcCtx := servicecontext.New(context.Background())
@@ -518,7 +517,6 @@ func TestDeleteTrackedServiceReturnsPersistentCleanupFailure(t *testing.T) {
 		nodeLabelManager: labeler,
 		leaseMgr:         lease.NewManager(),
 		electionRun:      runner.run,
-		serviceSync:      func(context.Context, *servicecontext.Context, *v1.Service, *sync.WaitGroup, bool) error { return nil },
 	}
 	initializeTestElectionCoordinators(processor)
 	svcCtx := servicecontext.New(context.Background())

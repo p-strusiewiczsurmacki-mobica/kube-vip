@@ -72,7 +72,6 @@ type Processor struct {
 
 	electionMgr             *election.Manager
 	electionRun             func(context.Context, *election.RunConfig, *kubevip.Config) error
-	serviceSync             func(context.Context, *servicecontext.Context, *v1.Service, *sync.WaitGroup, bool) error
 	scheduleElectionRestart func(func())
 	instanceFactory         func(context.Context, *v1.Service, *sync.WaitGroup) (*instance.Instance, error)
 

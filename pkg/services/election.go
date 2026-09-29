@@ -59,7 +59,7 @@ func (a *electionAdapter) IsCurrent(service *v1.Service, svcCtx *servicecontext.
 func (a *electionAdapter) Activate(ctx context.Context, service *v1.Service, svcCtx *servicecontext.Context,
 	wg *sync.WaitGroup) error {
 	p := a.processor
-	return p.syncServices(ctx, svcCtx, service, wg, true)
+	return p.syncServicesWithContext(ctx, svcCtx, service, wg, true)
 }
 
 // Cleanup implements serviceelection.Datapath.
@@ -109,12 +109,4 @@ func (a *electionAdapter) ScheduleRestart(ctx context.Context, delay time.Durati
 			restart()
 		}
 	})
-}
-
-func (p *Processor) syncServices(operationCtx context.Context, svcCtx *servicecontext.Context,
-	service *v1.Service, wg *sync.WaitGroup, usesLeaderElection bool) error {
-	if p.serviceSync != nil {
-		return p.serviceSync(operationCtx, svcCtx, service, wg, usesLeaderElection)
-	}
-	return p.syncServicesWithContext(operationCtx, svcCtx, service, wg, usesLeaderElection)
 }
