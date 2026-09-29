@@ -12,11 +12,20 @@ import (
 	"github.com/kube-vip/kube-vip/pkg/lease"
 	"github.com/kube-vip/kube-vip/pkg/metrics"
 	"github.com/kube-vip/kube-vip/pkg/servicecontext"
+	"github.com/kube-vip/kube-vip/pkg/services/serviceelection"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 	v1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 )
+
+func resetServiceReadiness(t *testing.T, svcCtx *servicecontext.Context) {
+	t.Helper()
+	generation, _, _, ready := svcCtx.ReadinessState()
+	if !ready || !svcCtx.ResetReadinessGeneration(generation) {
+		t.Fatal("Service readiness generation was not reset")
+	}
+}
 
 func TestStartServicesLeaderElectionTracksSharedMembersAcrossReadinessLoss(t *testing.T) {
 	p := &Processor{
@@ -49,9 +58,7 @@ func TestStartServicesLeaderElectionTracksSharedMembersAcrossReadinessLoss(t *te
 	firstCtx.SignalReadiness()
 	secondCtx.SignalReadiness()
 	election := waitForServiceElectionMembers(t, p, id, 2)
-	election.mutex.Lock()
-	firstToken := election.members[firstService.UID].claimToken
-	election.mutex.Unlock()
+	firstToken := election.CurrentMember(firstService.UID).ClaimToken()
 
 	resetServiceReadiness(t, firstCtx)
 	waitForServiceElectionMembers(t, p, id, 1)
@@ -61,9 +68,7 @@ func TestStartServicesLeaderElectionTracksSharedMembersAcrossReadinessLoss(t *te
 
 	firstCtx.SignalReadiness()
 	election = waitForServiceElectionMembers(t, p, id, 2)
-	election.mutex.Lock()
-	secondToken := election.members[firstService.UID].claimToken
-	election.mutex.Unlock()
+	secondToken := election.CurrentMember(firstService.UID).ClaimToken()
 	if secondToken == firstToken {
 		t.Fatal("readiness recovery reused the prior member claim token")
 	}
@@ -105,11 +110,11 @@ func TestServiceMemberLeavingDoesNotCancelControlPlaneLease(t *testing.T) {
 	p.svcMap.Store(service.UID, svcCtx)
 	svcCtx.SignalReadiness()
 	generation, _, _, _ := svcCtx.ReadinessState()
-	member, joined := p.joinServiceElection(svcCtx, service, generation)
+	member, joined := p.joinElectionCoordinator(svcCtx, service, generation)
 	if !joined {
 		t.Fatal("Service did not join the control-plane lease")
 	}
-	p.leaveServiceElection(member)
+	p.leaveElectionCoordinator(member)
 
 	if sharedLease.Ctx.Err() != nil || !sharedLease.Elected.Load() || p.leaseMgr.Get(id) != sharedLease {
 		t.Fatal("leaving Service member cancelled the control-plane lease")
@@ -145,12 +150,12 @@ func TestServiceMemberDeactivatesWhenExternalElectionStops(t *testing.T) {
 	p.svcMap.Store(service.UID, svcCtx)
 	svcCtx.SignalReadiness()
 	generation, _, _, _ := svcCtx.ReadinessState()
-	member, joined := p.joinServiceElection(svcCtx, service, generation)
+	member, joined := p.joinElectionCoordinator(svcCtx, service, generation)
 	if !joined {
 		t.Fatal("Service did not join the external election")
 	}
 	var wg sync.WaitGroup
-	member.election.startCampaign(&wg)
+	member.Coordinator().StartCampaign(&wg)
 	select {
 	case <-activated:
 	case <-time.After(time.Second):
@@ -159,13 +164,11 @@ func TestServiceMemberDeactivatesWhenExternalElectionStops(t *testing.T) {
 
 	sharedLease.ElectionStopped()
 	wg.Wait()
-	member.election.mutex.Lock()
-	active := member.active
-	member.election.mutex.Unlock()
+	active := member.Active()
 	if active {
 		t.Fatal("Service member remained active after external leadership ended")
 	}
-	p.leaveServiceElection(member)
+	p.leaveElectionCoordinator(member)
 	p.leaseMgr.Delete(id, controlPlaneToken, sharedLease)
 }
 
@@ -481,14 +484,11 @@ func TestSharedElectionDeletedCandidateNeverActivates(t *testing.T) {
 	}
 	close(releaseLeading)
 	waitForCondition(t, func() bool {
-		election.mutex.Lock()
-		defer election.mutex.Unlock()
-		return len(election.members) == 1 && election.members[siblingService.UID].active
+		member := election.CurrentMember(siblingService.UID)
+		return election.MemberCount() == 1 && member != nil && member.Active()
 	}, "live sibling activation")
 
-	election.mutex.Lock()
-	_, candidateActive := election.members[candidateService.UID]
-	election.mutex.Unlock()
+	candidateActive := election.CurrentMember(candidateService.UID) != nil
 	if candidateActive {
 		t.Fatal("deleted candidate remained eligible for activation")
 	}
@@ -655,17 +655,13 @@ func waitForCondition(t *testing.T, condition func() bool, description string) {
 	}
 }
 
-func waitForServiceElectionMembers(t *testing.T, p *Processor, id lease.ID, want int) *serviceElection {
+func waitForServiceElectionMembers(t *testing.T, p *Processor, id lease.ID, want int) *serviceelection.Coordinator {
 	t.Helper()
 	deadline := time.Now().Add(time.Second)
 	for time.Now().Before(deadline) {
-		p.electionsMutex.Lock()
-		election := p.elections[id.NamespacedName()]
-		p.electionsMutex.Unlock()
+		election := p.electionCoordinatorManager().Current(id)
 		if election != nil {
-			election.mutex.Lock()
-			count := len(election.members)
-			election.mutex.Unlock()
+			count := election.MemberCount()
 			if count == want {
 				return election
 			}

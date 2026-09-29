@@ -23,6 +23,7 @@ import (
 	"github.com/kube-vip/kube-vip/pkg/node"
 	"github.com/kube-vip/kube-vip/pkg/route"
 	"github.com/kube-vip/kube-vip/pkg/servicecontext"
+	"github.com/kube-vip/kube-vip/pkg/services/serviceelection"
 	"github.com/kube-vip/kube-vip/pkg/utils"
 	"github.com/kube-vip/kube-vip/pkg/vip"
 	"github.com/kube-vip/kube-vip/pkg/wireguard"
@@ -48,19 +49,18 @@ type Processor struct {
 
 	// instancesMutex protects membership of ServiceInstances. Mutable fields on each
 	// instance are protected separately by serviceLocks, keyed by Instance.UID().
-	ServiceInstances []*instance.Instance
-	instancesMutex   sync.RWMutex
-	serviceCleanupMu sync.Mutex
-	recoveryMu       sync.Mutex
-	recovered        bool
-	ownedVIPsMu      sync.Mutex
-	ownedServiceVIPs atomic.Pointer[[]string]
-	serviceLocks     keymutex.KeyMutex
-	serviceLocksOnce sync.Once
-	electionsMutex   sync.Mutex
-	elections        map[string]*serviceElection
-	nextMemberToken  atomic.Uint64
-	electionLoops    sync.Map
+	ServiceInstances         []*instance.Instance
+	instancesMutex           sync.RWMutex
+	serviceCleanupMu         sync.Mutex
+	recoveryMu               sync.Mutex
+	recovered                bool
+	ownedVIPsMu              sync.Mutex
+	ownedServiceVIPs         atomic.Pointer[[]string]
+	serviceLocks             keymutex.KeyMutex
+	serviceLocksOnce         sync.Once
+	electionCoordinatorsOnce sync.Once
+	electionCoordinators     *serviceelection.Manager
+	electionLoops            sync.Map
 
 	bgpServer *bgp.Server
 
@@ -98,12 +98,11 @@ func NewServicesProcessor(config *kubevip.Config, bgpServer *bgp.Server,
 		lbClassFilterFunc = lbClassFilterLegacy
 	}
 
-	return &Processor{
+	processor := &Processor{
 		config:           config,
 		lbClassFilter:    lbClassFilterFunc,
 		ServiceInstances: []*instance.Instance{},
 		serviceLocks:     keymutex.NewHashed(concurrentServiceLocks),
-		elections:        make(map[string]*serviceElection),
 		bgpServer:        bgpServer,
 		clientSet:        clientSet,
 		rwClientSet:      rwClientSet,
@@ -115,6 +114,7 @@ func NewServicesProcessor(config *kubevip.Config, bgpServer *bgp.Server,
 		TunnelMgr:        wireguard.NewTunnelManager(),
 		routeMgr:         routeMgr,
 	}
+	return processor
 }
 
 func (p *Processor) Reconcile(ctx context.Context, event watch.Event, serviceFunc *Callback, forcedOnly bool,
@@ -219,7 +219,7 @@ func (p *Processor) Reconcile(ctx context.Context, event watch.Event, serviceFun
 					metrics.ServiceReconcileErrorsTotal.WithLabelValues(svc.Namespace, svc.Name, "delete_service").Inc()
 					log.Error("(svc) unable to remove", "service", svc.UID)
 				}
-				p.leaveServiceElectionForContext(svcCtx, oldService)
+				p.leaveElectionCoordinatorForContext(svcCtx, oldService)
 				// Reset the the svcCtx when it was garbage collected
 				// As the next function will create a new context when nil
 				svcCtx = nil
@@ -597,7 +597,7 @@ func (p *Processor) ElectionVIPs(ctx context.Context) ([]string, error) {
 			services = append(services, service)
 		}
 	}
-	return orderedServiceVIPs(services), nil
+	return instance.OrderedServiceAddresses(services), nil
 }
 
 func (p *Processor) Delete(event watch.Event, forcedOnly bool) error {
@@ -664,7 +664,7 @@ func (p *Processor) retireServiceContext(svc *v1.Service) (*servicecontext.Conte
 		if currentContext != contextBeforeLock {
 			currentContext.Cancel()
 		}
-		p.leaveServiceElectionForContext(currentContext, svc)
+		p.leaveElectionCoordinatorForContext(currentContext, svc)
 		cleanupCtx = context.WithoutCancel(currentContext.Ctx)
 	}
 	return currentContext, cleanupCtx, nil
@@ -882,7 +882,7 @@ func (p *Processor) refreshOwnedServiceVIPs() {
 		}
 		unlockService()
 	}
-	vips := orderedServiceVIPs(services)
+	vips := instance.OrderedServiceAddresses(services)
 	p.ownedServiceVIPs.Store(&vips)
 }
 
