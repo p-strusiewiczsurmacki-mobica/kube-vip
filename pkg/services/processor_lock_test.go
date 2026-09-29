@@ -430,7 +430,7 @@ func TestDeleteTrackedServiceCleansUpElectedServiceImmediately(t *testing.T) {
 	leaseID := lease.NewID(processor.config.LeaderElectionType, leaseNamespace, serviceLease)
 	svcCtx.SignalReadiness()
 	generation, _, _, _ := svcCtx.ReadinessState()
-	if _, joined := processor.joinServiceElection(svcCtx, service, generation); !joined {
+	if _, joined := processor.joinElectionCoordinator(svcCtx, service, generation); !joined {
 		t.Fatal("service did not join its election")
 	}
 
@@ -466,7 +466,7 @@ func TestDeleteTrackedServiceReturnsPersistentCleanupFailure(t *testing.T) {
 	leaseID := lease.NewID(processor.config.LeaderElectionType, leaseNamespace, serviceLease)
 	svcCtx.SignalReadiness()
 	generation, _, _, _ := svcCtx.ReadinessState()
-	if _, joined := processor.joinServiceElection(svcCtx, service, generation); !joined {
+	if _, joined := processor.joinElectionCoordinator(svcCtx, service, generation); !joined {
 		t.Fatal("service did not join its election")
 	}
 

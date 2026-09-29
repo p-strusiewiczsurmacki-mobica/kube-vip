@@ -7,7 +7,6 @@ import (
 
 	log "log/slog"
 
-	"github.com/kube-vip/kube-vip/pkg/lease"
 	"github.com/kube-vip/kube-vip/pkg/metrics"
 	"github.com/kube-vip/kube-vip/pkg/servicecontext"
 	v1 "k8s.io/api/core/v1"
@@ -59,36 +58,6 @@ func (p *Processor) StartServicesLeaderElection(svcCtx *servicecontext.Context, 
 	loops := metrics.ServiceElectionLoops.WithLabelValues(service.Namespace, service.Name)
 	loops.Inc()
 	defer loops.Dec()
-	p.watchServiceElection(svcCtx, service, wg)
-	return nil
-}
-
-// onStoppedLeadingMember acquires the Service lock and holds it through member
-// validation and datapath cleanup. Callers must not already hold that lock.
-func (p *Processor) onStoppedLeadingMember(member *serviceElectionMember, svcLease *lease.Lease) error {
-	unlockService := p.lockService(member.service.UID)
-	defer unlockService()
-
-	currentSvcCtx, err := p.getServiceContext(member.service.UID)
-	if err != nil {
-		return err
-	}
-	if currentSvcCtx != member.serviceContext {
-		log.Debug("skipping cleanup from superseded service context", "service", member.service.Name, "uid", member.service.UID)
-		return nil
-	}
-
-	currentMember := member.election.currentMember(member.service.UID)
-	if currentMember != member {
-		log.Debug("skipping cleanup from superseded readiness generation", "service", member.service.Name, "uid", member.service.UID)
-		return nil
-	}
-
-	log.Debug("deleting service due to lost leadership", "uid", member.service.UID)
-	err = p.deleteCurrentServiceByUID(context.WithoutCancel(svcLease.Ctx), member.service.UID)
-	if err != nil {
-		log.Error("service deletion", "err", err)
-		return err
-	}
+	p.watchElectionCoordinator(svcCtx, service, wg)
 	return nil
 }

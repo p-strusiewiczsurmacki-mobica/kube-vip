@@ -241,16 +241,19 @@ func TestOnStoppedLeadingDoesNotDeleteReplacementContext(t *testing.T) {
 
 	oldCtx := servicecontext.New(context.Background())
 	replacementCtx := servicecontext.New(context.Background())
+	p.svcMap.Store(service.UID, oldCtx)
+	oldCtx.SignalReadiness()
+	generation, _, _, _ := oldCtx.ReadinessState()
+	member, joined := p.joinElectionCoordinator(oldCtx, service, generation)
+	if !joined {
+		t.Fatal("old Service context did not join its election")
+	}
 	p.svcMap.Store(service.UID, replacementCtx)
 	replacementInstance := &instance.Instance{ServiceUID: service.UID, ServiceSnapshot: service.DeepCopy()}
 	p.ServiceInstances = []*instance.Instance{replacementInstance}
 
-	leaseNamespace, serviceLease := lease.ServiceName(service)
-	svcLease := p.leaseMgr.Add(context.Background(), lease.NewID(p.config.LeaderElectionType, leaseNamespace, serviceLease))
-	member := &serviceElectionMember{service: service, serviceContext: oldCtx}
-
-	if err := p.onStoppedLeadingMember(member, svcLease); err != nil {
-		t.Fatalf("onStoppedLeadingMember returned an error: %v", err)
+	if err := p.CleanupMember(member, member.Coordinator().Lease()); err != nil {
+		t.Fatalf("Cleanup returned an error: %v", err)
 	}
 	if got, err := p.getServiceContext(service.UID); err != nil || got != replacementCtx {
 		t.Fatalf("replacement context was changed: got %v, err %v", got, err)
