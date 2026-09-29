@@ -21,7 +21,8 @@ import (
 // coordinator owns membership and campaign lifetime for one lease.
 // Service contexts remain responsible for endpoint readiness and datapath work.
 type coordinator struct {
-	dependencies coordinatorDependencies
+	registry     *registry
+	dependencies Dependencies
 	id           lease.ID
 
 	mutex        sync.Mutex
@@ -75,10 +76,10 @@ func (e *coordinator) join(svcCtx *servicecontext.Context, service *v1.Service,
 	}
 
 	if previous := e.members[service.UID]; previous != nil {
-		e.dependencies.leases.Delete(e.id, previous.claimToken, e.lease)
+		e.dependencies.Leases.Delete(e.id, previous.claimToken, e.lease)
 	}
 	member := newMember(e, svcCtx, service, readinessGeneration)
-	member.claimToken = e.dependencies.nextToken()
+	member.claimToken = e.registry.nextToken()
 	member.vipProvider = serviceVIPProvider(member.service)
 	e.members[service.UID] = member
 
@@ -95,7 +96,7 @@ func (e *coordinator) join(svcCtx *servicecontext.Context, service *v1.Service,
 		}
 		return member, true
 	}
-	if claimed, _ := e.dependencies.leases.ClaimWithVIPProvider(e.id, member.claimToken, member.vipProvider); claimed != nil {
+	if claimed, _ := e.dependencies.Leases.ClaimWithVIPProvider(e.id, member.claimToken, member.vipProvider); claimed != nil {
 		return member, true
 	}
 
@@ -121,13 +122,13 @@ func (e *coordinator) createLeaseLocked() *lease.Lease {
 	if first == nil {
 		return nil
 	}
-	svcLease, _ := e.dependencies.leases.AcquireWithVIPProvider(context.Background(), e.id, first.claimToken,
+	svcLease, _ := e.dependencies.Leases.AcquireWithVIPProvider(context.Background(), e.id, first.claimToken,
 		first.vipProvider)
 	for _, member := range e.members {
 		if member == first {
 			continue
 		}
-		if claimed, _ := e.dependencies.leases.ClaimWithVIPProvider(e.id, member.claimToken, member.vipProvider); claimed == nil {
+		if claimed, _ := e.dependencies.Leases.ClaimWithVIPProvider(e.id, member.claimToken, member.vipProvider); claimed == nil {
 			svcLease.Cancel()
 			return nil
 		}
@@ -166,7 +167,7 @@ func (e *coordinator) removeMember(member *member) (campaign *campaign, leaseRet
 		return nil, false, false
 	}
 	delete(e.members, member.service.UID)
-	leaseRetired = e.dependencies.leases.Delete(e.id, member.claimToken, e.lease)
+	leaseRetired = e.dependencies.Leases.Delete(e.id, member.claimToken, e.lease)
 	if len(e.members) != 0 {
 		return nil, leaseRetired, false
 	}
@@ -186,7 +187,7 @@ func (e *coordinator) retire() {
 	if e.retireCancel != nil {
 		e.retireCancel()
 	}
-	e.dependencies.onRetired(e)
+	e.registry.remove(e)
 	close(e.retiredDone)
 }
 
@@ -296,9 +297,9 @@ func (e *coordinator) followCampaign(svcLease *lease.Lease, campaign *campaign, 
 func (e *coordinator) runCampaign(svcLease *lease.Lease, campaign *campaign, wg *sync.WaitGroup) {
 	defer campaign.cancelRunner()
 	run := election.RunConfig{
-		Config:           e.dependencies.config,
+		Config:           e.dependencies.Config,
 		LeaseID:          e.id,
-		Mgr:              e.dependencies.electionManager,
+		Mgr:              e.dependencies.ElectionManager,
 		LeaseAnnotations: map[string]string{},
 		VIPs:             campaign.vips,
 		VIPsProvider:     svcLease.OwnedVIPs,
@@ -307,15 +308,15 @@ func (e *coordinator) runCampaign(svcLease *lease.Lease, campaign *campaign, wg 
 		},
 		OnStoppedLeading: func() {
 			e.stopCampaign(svcLease, campaign)
-			metrics.IsLeader.WithLabelValues(e.dependencies.config.NodeName, e.id.Name()).Set(0)
+			metrics.IsLeader.WithLabelValues(e.dependencies.Config.NodeName, e.id.Name()).Set(0)
 		},
 		OnNewLeader: func(identity string) {
-			if identity != e.dependencies.config.NodeName {
+			if identity != e.dependencies.Config.NodeName {
 				log.Info("new leader", "leader", identity, "lease", e.id.NamespacedName())
 			}
 		},
 	}
-	if err := e.dependencies.runner.RunCampaign(campaign.ctx, &run); err != nil {
+	if err := e.dependencies.Runner.RunCampaign(campaign.ctx, &run); err != nil {
 		log.Error("services election failed", "lease", e.id.NamespacedName(), "error", err)
 	}
 	e.stopCampaign(svcLease, campaign)
@@ -366,7 +367,7 @@ func (e *coordinator) startedLeading(ctx context.Context, svcLease *lease.Lease,
 		return
 	}
 	metrics.LeaderTransitionsTotal.WithLabelValues(e.id.Name()).Inc()
-	metrics.IsLeader.WithLabelValues(e.dependencies.config.NodeName, e.id.Name()).Set(1)
+	metrics.IsLeader.WithLabelValues(e.dependencies.Config.NodeName, e.id.Name()).Set(1)
 	e.activateMembers(ctx, svcLease, campaign, wg)
 }
 
@@ -404,11 +405,11 @@ func (e *coordinator) activateMember(ctx context.Context, member *member, svcLea
 	member.operationMutex.Lock()
 	defer member.operationMutex.Unlock()
 
-	if !e.dependencies.state.IsCurrent(member.service, member.serviceContext, member.readinessGeneration) ||
+	if !e.dependencies.State.IsCurrent(member.service, member.serviceContext, member.readinessGeneration) ||
 		!e.markMemberActive(member, svcLease, campaign) {
 		return
 	}
-	if err := e.dependencies.datapath.Activate(ctx, member.service, member.serviceContext, wg); err != nil {
+	if err := e.dependencies.Datapath.Activate(ctx, member.service, member.serviceContext, wg); err != nil {
 		metrics.ServiceElectionErrorsTotal.WithLabelValues(member.service.Namespace, member.service.Name, "service_sync").Inc()
 		log.Error("start service after election", "service", member.service.Name, "namespace", member.service.Namespace, "error", err)
 		e.deactivateMemberOperationHeld(member)
@@ -418,7 +419,7 @@ func (e *coordinator) activateMember(ctx context.Context, member *member, svcLea
 		return
 	}
 	e.resetRestartFailures()
-	if !e.dependencies.state.IsCurrent(member.service, member.serviceContext, member.readinessGeneration) ||
+	if !e.dependencies.State.IsCurrent(member.service, member.serviceContext, member.readinessGeneration) ||
 		!e.memberActivationCurrent(member, svcLease, campaign) {
 		e.deactivateMemberOperationHeld(member)
 	}
@@ -502,7 +503,7 @@ func (e *coordinator) cleanupMember(member *member, svcLease *lease.Lease) {
 		return
 	}
 	cleanupCtx := context.WithoutCancel(svcLease.Ctx)
-	if err := e.dependencies.datapath.Cleanup(cleanupCtx, member.service, member.serviceContext, func() bool {
+	if err := e.dependencies.Datapath.Cleanup(cleanupCtx, member.service, member.serviceContext, func() bool {
 		return e.contains(member)
 	}); err != nil {
 		log.Error("stop service after election", "service", member.service.Name, "namespace", member.service.Namespace, "error", err)
@@ -577,7 +578,7 @@ func (e *coordinator) finishCampaign(svcLease *lease.Lease, campaign *campaign, 
 		return
 	}
 
-	e.dependencies.scheduler.ScheduleRestart(e.retiredCtx, delay, wg, func() {
+	e.dependencies.Scheduler.ScheduleRestart(e.retiredCtx, delay, wg, func() {
 		e.startCampaign(wg)
 	})
 }

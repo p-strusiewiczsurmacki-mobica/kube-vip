@@ -67,7 +67,7 @@ func (p *Processor) watchEndpoint(svcCtx *servicecontext.Context, id string, ser
 		}
 	})
 
-	epProcessor := endpoints.NewEndpointProcessor(p.config, provider, p.bgpServer, &p.ServiceInstances, &p.instancesMutex, p.leaseMgr, p.TunnelMgr, p.routeMgr, p.lockService)
+	epProcessor := endpoints.NewEndpointProcessor(p.config, provider, p.bgpServer, &p.ServiceInstances, &p.instancesMutex, p.leaseMgr, p.TunnelMgr, p.routeMgr, p.serviceLocks)
 
 	ch := rw.ResultChan()
 	if d != nil {

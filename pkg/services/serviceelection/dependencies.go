@@ -50,15 +50,3 @@ type Dependencies struct {
 	Runner          CampaignRunner
 	Scheduler       RestartScheduler
 }
-
-type coordinatorDependencies struct {
-	config          *kubevip.Config
-	leases          LeaseStore
-	electionManager *election.Manager
-	state           ServiceState
-	datapath        Datapath
-	runner          CampaignRunner
-	scheduler       RestartScheduler
-	nextToken       func() string
-	onRetired       func(*coordinator)
-}

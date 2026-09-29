@@ -45,6 +45,7 @@ func TestAddOrModifyStopsTrackedServiceWhenTypeChanges(t *testing.T) {
 			modified.Annotations = annotations
 
 			p := &Processor{
+				serviceLocks:     newTestServiceLocks(),
 				config:           &kubevip.Config{},
 				leaseMgr:         lease.NewManager(),
 				ServiceInstances: []*instance.Instance{{ServiceUID: tracked.UID, ServiceSnapshot: tracked}},
@@ -85,8 +86,9 @@ func TestAddOrModifyStopsTrackedServiceWhenTypeChanges(t *testing.T) {
 func TestDropCancelledServiceContext(t *testing.T) {
 	newProcessor := func() *Processor {
 		return &Processor{
-			config:   &kubevip.Config{},
-			leaseMgr: lease.NewManager(),
+			serviceLocks: newTestServiceLocks(),
+			config:       &kubevip.Config{},
+			leaseMgr:     lease.NewManager(),
 		}
 	}
 
@@ -142,7 +144,7 @@ func TestDropCancelledServiceContext(t *testing.T) {
 }
 
 func TestEnsureServiceContextWaitsForOldWatcherCleanup(t *testing.T) {
-	p := &Processor{config: &kubevip.Config{}}
+	p := &Processor{serviceLocks: newTestServiceLocks(), config: &kubevip.Config{}}
 	service := &v1.Service{ObjectMeta: metav1.ObjectMeta{Name: "service", Namespace: "default", UID: "service"}}
 	oldContext := servicecontext.New(context.Background())
 	if !oldContext.StartWatching() {
@@ -187,8 +189,9 @@ func TestEnsureServiceContextWaitsForOldWatcherCleanup(t *testing.T) {
 // created again, so StartServicesLeaderElection no longer fails with "no existing lease found".
 func TestDropCancelledServiceContextAllowsLeaseRecreation(t *testing.T) {
 	p := &Processor{
-		config:   &kubevip.Config{},
-		leaseMgr: lease.NewManager(),
+		serviceLocks: newTestServiceLocks(),
+		config:       &kubevip.Config{},
+		leaseMgr:     lease.NewManager(),
 	}
 
 	svc := &v1.Service{
@@ -227,8 +230,9 @@ func TestDropCancelledServiceContextAllowsLeaseRecreation(t *testing.T) {
 
 func TestOnStoppedLeadingDoesNotDeleteReplacementContext(t *testing.T) {
 	p := &Processor{
-		config:   &kubevip.Config{},
-		leaseMgr: lease.NewManager(),
+		serviceLocks: newTestServiceLocks(),
+		config:       &kubevip.Config{},
+		leaseMgr:     lease.NewManager(),
 	}
 
 	service := &v1.Service{

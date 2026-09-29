@@ -49,8 +49,8 @@ func (p *Processor) watchElectionCoordinator(svcCtx *servicecontext.Context, ser
 }
 
 func (p *Processor) currentServiceContext(uid types.UID) (*servicecontext.Context, error) {
-	unlockService := p.lockService(uid)
-	defer unlockService()
+	p.serviceLocks.Lock(uid)
+	defer p.serviceLocks.Unlock(uid)
 	return p.getServiceContext(uid)
 }
 
@@ -77,8 +77,8 @@ func (a *electionAdapter) Activate(ctx context.Context, service *v1.Service, svc
 func (a *electionAdapter) Cleanup(ctx context.Context, service *v1.Service, svcCtx *servicecontext.Context,
 	memberCurrent func() bool) error {
 	p := a.processor
-	unlockService := p.lockService(service.UID)
-	defer unlockService()
+	p.serviceLocks.Lock(service.UID)
+	defer p.serviceLocks.Unlock(service.UID)
 
 	currentSvcCtx, err := p.getServiceContext(service.UID)
 	if err != nil {

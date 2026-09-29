@@ -90,8 +90,8 @@ func (p *Processor) syncServicesWithContext(operationCtx context.Context, svcCtx
 }
 
 func (p *Processor) getServiceInstanceAction(svc *v1.Service) ServiceInstanceAction {
-	unlockService := p.lockService(svc.UID)
-	defer unlockService()
+	p.serviceLocks.Lock(svc.UID)
+	defer p.serviceLocks.Unlock(svc.UID)
 
 	// protect against multiple calls
 	// get the annotations or legacy values from manual configuration
@@ -193,8 +193,8 @@ func (p *Processor) addService(ctx context.Context, svc *v1.Service, wg *sync.Wa
 // prepareServiceInstance finds or constructs the instance and marks it added. It
 // acquires the Service lock for svc.UID; callers must not already hold it.
 func (p *Processor) prepareServiceInstance(ctx context.Context, svc *v1.Service, wg *sync.WaitGroup) (*instance.Instance, error) {
-	unlockService := p.lockService(svc.UID)
-	defer unlockService()
+	p.serviceLocks.Lock(svc.UID)
+	defer p.serviceLocks.Unlock(svc.UID)
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -221,8 +221,8 @@ func (p *Processor) prepareServiceInstance(ctx context.Context, svc *v1.Service,
 // configureService configures a tracked instance. It acquires the Service lock
 // for svc.UID and verifies inst is still current; callers must not hold the lock.
 func (p *Processor) configureService(ctx context.Context, inst *instance.Instance, svc *v1.Service, wg *sync.WaitGroup) error {
-	unlockService := p.lockService(svc.UID)
-	defer unlockService()
+	p.serviceLocks.Lock(svc.UID)
+	defer p.serviceLocks.Unlock(svc.UID)
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -415,8 +415,8 @@ func dhcpConfigIndex(configs []*kubevip.Config, ipv6 bool) int {
 // svc.UID and returns false if inst is no longer current; callers must not
 // already hold the lock.
 func (p *Processor) updateDHCPAddress(ctx context.Context, svc *v1.Service, inst *instance.Instance, index int, ip string, ipv6 bool) bool {
-	unlockService := p.lockService(svc.UID)
-	defer unlockService()
+	p.serviceLocks.Lock(svc.UID)
+	defer p.serviceLocks.Unlock(svc.UID)
 
 	if p.findServiceInstance(svc) != inst {
 		return false
@@ -456,8 +456,8 @@ func serviceSnapshotForEgress(inst *instance.Instance, service *v1.Service) *v1.
 // deleteService removes the tracked instance for uid. It acquires the Service
 // lock; callers must not already hold it.
 func (p *Processor) deleteService(ctx context.Context, uid types.UID, expectedCtx ...*servicecontext.Context) error {
-	unlockService := p.lockService(uid)
-	defer unlockService()
+	p.serviceLocks.Lock(uid)
+	defer p.serviceLocks.Unlock(uid)
 	var expected *servicecontext.Context
 	if len(expectedCtx) > 0 {
 		expected = expectedCtx[0]
@@ -495,8 +495,8 @@ func (p *Processor) deleteServiceInstance(ctx context.Context, expected *instanc
 		return nil
 	}
 
-	unlockService := p.lockService(expected.UID())
-	defer unlockService()
+	p.serviceLocks.Lock(expected.UID())
+	defer p.serviceLocks.Unlock(expected.UID())
 	service := &v1.Service{ObjectMeta: metav1.ObjectMeta{UID: expected.UID()}}
 	if p.findServiceInstance(service) != expected {
 		return nil
@@ -533,8 +533,8 @@ func (p *Processor) deleteCurrentService(ctx context.Context, serviceInstance *i
 // updateEgressConfiguration updates egress state for the current instance. It
 // acquires the Service lock for svc.UID; callers must not already hold it.
 func (p *Processor) updateEgressConfiguration(ctx context.Context, svc *v1.Service, expected ...*instance.Instance) error {
-	unlockService := p.lockService(svc.UID)
-	defer unlockService()
+	p.serviceLocks.Lock(svc.UID)
+	defer p.serviceLocks.Unlock(svc.UID)
 
 	i := p.findServiceInstance(svc)
 	if i == nil {
@@ -995,8 +995,8 @@ func (p *Processor) RefreshUPNPForwards(ctx context.Context) {
 // the Service lock for serviceInstance.UID; callers must not already hold it.
 func (p *Processor) refreshUPNPForward(ctx context.Context, serviceInstance *instance.Instance) {
 	uid := serviceInstance.UID()
-	unlockService := p.lockService(uid)
-	defer unlockService()
+	p.serviceLocks.Lock(uid)
+	defer p.serviceLocks.Unlock(uid)
 
 	service := &v1.Service{ObjectMeta: metav1.ObjectMeta{UID: uid}}
 	if p.findServiceInstance(service) != serviceInstance {
