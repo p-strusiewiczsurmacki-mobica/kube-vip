@@ -41,12 +41,6 @@ type ServiceLocker interface {
 	Unlock(types.UID) error
 }
 
-func releaseServiceLock(lock ServiceLocker, uid types.UID) {
-	if err := lock.Unlock(uid); err != nil {
-		log.Error("failed to release service lock", "uid", uid, "err", err)
-	}
-}
-
 func NewEndpointProcessor(config *kubevip.Config, provider providers.Provider, bgpServer *bgp.Server,
 	instances *[]*instance.Instance, instancesMutex *sync.RWMutex, leaseMgr *lease.Manager, tunnelMgr *wireguard.TunnelManager, routeMgr *route.Manager,
 	serviceLocks ServiceLocker) *Processor {
@@ -80,7 +74,11 @@ func (p *Processor) Reconcile(svcCtx *servicecontext.Context, event watch.Event,
 	clearNoEndpoints := false
 	updatedService, inst, changed, skip, err := func() (*v1.Service, *instance.Instance, bool, bool, error) {
 		p.serviceLocks.Lock(service.UID)
-		defer releaseServiceLock(p.serviceLocks, service.UID)
+		defer func() {
+			if err := p.serviceLocks.Unlock(service.UID); err != nil {
+				log.Error("failed to release service lock", "uid", service.UID, "err", err)
+			}
+		}()
 
 		if err := p.applyEvent(svcCtx, event); err != nil {
 			return nil, nil, false, false, err
@@ -145,7 +143,9 @@ func (p *Processor) Reconcile(svcCtx *servicecontext.Context, event watch.Event,
 	if clearNoEndpoints && svcCtx.ResetReadinessGeneration(readinessLossGeneration) {
 		p.serviceLocks.Lock(service.UID)
 		p.handleNoEndpoints(svcCtx, service, inst, lastKnownGoodEndpoint)
-		releaseServiceLock(p.serviceLocks, service.UID)
+		if err := p.serviceLocks.Unlock(service.UID); err != nil {
+			log.Error("failed to release service lock", "uid", service.UID, "err", err)
+		}
 	}
 
 	if changed && egressUpdateFunc != nil {

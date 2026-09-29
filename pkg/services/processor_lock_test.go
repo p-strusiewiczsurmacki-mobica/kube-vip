@@ -41,13 +41,6 @@ func (l *testLabeler) RemoveLabel(map[string]string) error {
 	return l.removeErr
 }
 
-func checkServiceUnlock(t *testing.T, lock *ServiceLock, uid types.UID) {
-	t.Helper()
-	if err := lock.Unlock(uid); err != nil {
-		t.Errorf("Unlock(%q) error = %v", uid, err)
-	}
-}
-
 func TestServiceLockIsScopedByUID(t *testing.T) {
 	serviceLock := NewServiceLock()
 
@@ -57,7 +50,9 @@ func TestServiceLockIsScopedByUID(t *testing.T) {
 		go func() {
 			serviceLock.Lock(types.UID("service-b"))
 			close(acquired)
-			checkServiceUnlock(t, serviceLock, types.UID("service-b"))
+			if err := serviceLock.Unlock(types.UID("service-b")); err != nil {
+				t.Errorf("Unlock() error = %v", err)
+			}
 		}()
 
 		select {
@@ -65,7 +60,9 @@ func TestServiceLockIsScopedByUID(t *testing.T) {
 		case <-time.After(time.Second):
 			t.Fatal("different Service UID was blocked by another Service lock")
 		}
-		checkServiceUnlock(t, serviceLock, types.UID("service-a"))
+		if err := serviceLock.Unlock(types.UID("service-a")); err != nil {
+			t.Fatalf("Unlock() error = %v", err)
+		}
 	})
 
 	t.Run("same Service remains serialized", func(t *testing.T) {
@@ -75,7 +72,9 @@ func TestServiceLockIsScopedByUID(t *testing.T) {
 		go func() {
 			serviceLock.Lock(uid)
 			close(acquired)
-			checkServiceUnlock(t, serviceLock, uid)
+			if err := serviceLock.Unlock(uid); err != nil {
+				t.Errorf("Unlock() error = %v", err)
+			}
 		}()
 
 		select {
@@ -83,7 +82,9 @@ func TestServiceLockIsScopedByUID(t *testing.T) {
 			t.Fatal("same Service UID acquired the lock concurrently")
 		case <-time.After(50 * time.Millisecond):
 		}
-		checkServiceUnlock(t, serviceLock, uid)
+		if err := serviceLock.Unlock(uid); err != nil {
+			t.Fatalf("Unlock() error = %v", err)
+		}
 
 		select {
 		case <-acquired:
@@ -232,10 +233,14 @@ func TestRetireServiceContextCancelsBeforeServiceLockIsAvailable(t *testing.T) {
 	select {
 	case <-svcCtx.Ctx.Done():
 	case <-time.After(time.Second):
-		checkServiceUnlock(t, processor.serviceLock, uid)
+		if err := processor.serviceLock.Unlock(uid); err != nil {
+			t.Fatalf("Unlock() error = %v", err)
+		}
 		t.Fatal("retireServiceContext waited for the Service lock before cancelling")
 	}
-	checkServiceUnlock(t, processor.serviceLock, uid)
+	if err := processor.serviceLock.Unlock(uid); err != nil {
+		t.Fatalf("Unlock() error = %v", err)
+	}
 
 	select {
 	case err := <-done:
@@ -588,7 +593,9 @@ func TestServiceSnapshotsSerializesSnapshotReplacement(t *testing.T) {
 			serviceInstance.ServiceSnapshot = &v1.Service{ObjectMeta: metav1.ObjectMeta{
 				UID: uid, Name: "service-a", Namespace: "default",
 			}}
-			checkServiceUnlock(t, processor.serviceLock, uid)
+			if err := processor.serviceLock.Unlock(uid); err != nil {
+				t.Errorf("Unlock() error = %v", err)
+			}
 		}
 	})
 	wg.Go(func() {
@@ -645,12 +652,16 @@ func TestEndpointReconcileWaitsForServiceLock(t *testing.T) {
 
 	select {
 	case <-reconciled:
-		checkServiceUnlock(t, processor.serviceLock, uid)
+		if err := processor.serviceLock.Unlock(uid); err != nil {
+			t.Fatalf("Unlock() error = %v", err)
+		}
 		t.Fatal("endpoint reconcile ignored the Service lock held by deletion")
 	case <-time.After(50 * time.Millisecond):
 	}
 
-	checkServiceUnlock(t, processor.serviceLock, uid)
+	if err := processor.serviceLock.Unlock(uid); err != nil {
+		t.Fatalf("Unlock() error = %v", err)
+	}
 	select {
 	case err := <-reconciled:
 		if err != nil {

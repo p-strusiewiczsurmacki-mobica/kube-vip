@@ -2,6 +2,7 @@ package services
 
 import (
 	"context"
+	log "log/slog"
 	"sync"
 	"time"
 
@@ -41,7 +42,11 @@ func newElectionCoordinatorManager(p *Processor) *serviceelection.Manager {
 func (a *electionAdapter) IsCurrent(service *v1.Service, svcCtx *servicecontext.Context, readinessGeneration uint64) bool {
 	p := a.processor
 	p.serviceLock.Lock(service.UID)
-	defer releaseServiceLock(p.serviceLock, service.UID)
+	defer func() {
+		if err := p.serviceLock.Unlock(service.UID); err != nil {
+			log.Error("failed to release service lock", "uid", service.UID, "err", err)
+		}
+	}()
 	currentCtx, err := p.getServiceContext(service.UID)
 	if err != nil || currentCtx != svcCtx || svcCtx.Ctx.Err() != nil ||
 		!svcCtx.ReadinessGenerationCurrent(readinessGeneration) {
@@ -62,7 +67,11 @@ func (a *electionAdapter) Cleanup(ctx context.Context, service *v1.Service, svcC
 	memberCurrent func() bool) error {
 	p := a.processor
 	p.serviceLock.Lock(service.UID)
-	defer releaseServiceLock(p.serviceLock, service.UID)
+	defer func() {
+		if err := p.serviceLock.Unlock(service.UID); err != nil {
+			log.Error("failed to release service lock", "uid", service.UID, "err", err)
+		}
+	}()
 
 	currentSvcCtx, err := p.getServiceContext(service.UID)
 	if err != nil {

@@ -91,7 +91,11 @@ func (p *Processor) syncServicesWithContext(operationCtx context.Context, svcCtx
 
 func (p *Processor) getServiceInstanceAction(svc *v1.Service) ServiceInstanceAction {
 	p.serviceLock.Lock(svc.UID)
-	defer releaseServiceLock(p.serviceLock, svc.UID)
+	defer func() {
+		if err := p.serviceLock.Unlock(svc.UID); err != nil {
+			log.Error("failed to release service lock", "uid", svc.UID, "err", err)
+		}
+	}()
 
 	// protect against multiple calls
 	// get the annotations or legacy values from manual configuration
@@ -194,7 +198,11 @@ func (p *Processor) addService(ctx context.Context, svc *v1.Service, wg *sync.Wa
 // acquires the Service lock for svc.UID; callers must not already hold it.
 func (p *Processor) prepareServiceInstance(ctx context.Context, svc *v1.Service, wg *sync.WaitGroup) (*instance.Instance, error) {
 	p.serviceLock.Lock(svc.UID)
-	defer releaseServiceLock(p.serviceLock, svc.UID)
+	defer func() {
+		if err := p.serviceLock.Unlock(svc.UID); err != nil {
+			log.Error("failed to release service lock", "uid", svc.UID, "err", err)
+		}
+	}()
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -222,7 +230,11 @@ func (p *Processor) prepareServiceInstance(ctx context.Context, svc *v1.Service,
 // for svc.UID and verifies inst is still current; callers must not hold the lock.
 func (p *Processor) configureService(ctx context.Context, inst *instance.Instance, svc *v1.Service, wg *sync.WaitGroup) error {
 	p.serviceLock.Lock(svc.UID)
-	defer releaseServiceLock(p.serviceLock, svc.UID)
+	defer func() {
+		if err := p.serviceLock.Unlock(svc.UID); err != nil {
+			log.Error("failed to release service lock", "uid", svc.UID, "err", err)
+		}
+	}()
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -416,7 +428,11 @@ func dhcpConfigIndex(configs []*kubevip.Config, ipv6 bool) int {
 // already hold the lock.
 func (p *Processor) updateDHCPAddress(ctx context.Context, svc *v1.Service, inst *instance.Instance, index int, ip string, ipv6 bool) bool {
 	p.serviceLock.Lock(svc.UID)
-	defer releaseServiceLock(p.serviceLock, svc.UID)
+	defer func() {
+		if err := p.serviceLock.Unlock(svc.UID); err != nil {
+			log.Error("failed to release service lock", "uid", svc.UID, "err", err)
+		}
+	}()
 
 	if p.findServiceInstance(svc) != inst {
 		return false
@@ -457,7 +473,11 @@ func serviceSnapshotForEgress(inst *instance.Instance, service *v1.Service) *v1.
 // lock; callers must not already hold it.
 func (p *Processor) deleteService(ctx context.Context, uid types.UID, expectedCtx ...*servicecontext.Context) error {
 	p.serviceLock.Lock(uid)
-	defer releaseServiceLock(p.serviceLock, uid)
+	defer func() {
+		if err := p.serviceLock.Unlock(uid); err != nil {
+			log.Error("failed to release service lock", "uid", uid, "err", err)
+		}
+	}()
 	var expected *servicecontext.Context
 	if len(expectedCtx) > 0 {
 		expected = expectedCtx[0]
@@ -496,7 +516,11 @@ func (p *Processor) deleteServiceInstance(ctx context.Context, expected *instanc
 	}
 
 	p.serviceLock.Lock(expected.UID())
-	defer releaseServiceLock(p.serviceLock, expected.UID())
+	defer func() {
+		if err := p.serviceLock.Unlock(expected.UID()); err != nil {
+			log.Error("failed to release service lock", "uid", expected.UID(), "err", err)
+		}
+	}()
 	service := &v1.Service{ObjectMeta: metav1.ObjectMeta{UID: expected.UID()}}
 	if p.findServiceInstance(service) != expected {
 		return nil
@@ -534,7 +558,11 @@ func (p *Processor) deleteCurrentService(ctx context.Context, serviceInstance *i
 // acquires the Service lock for svc.UID; callers must not already hold it.
 func (p *Processor) updateEgressConfiguration(ctx context.Context, svc *v1.Service, expected ...*instance.Instance) error {
 	p.serviceLock.Lock(svc.UID)
-	defer releaseServiceLock(p.serviceLock, svc.UID)
+	defer func() {
+		if err := p.serviceLock.Unlock(svc.UID); err != nil {
+			log.Error("failed to release service lock", "uid", svc.UID, "err", err)
+		}
+	}()
 
 	i := p.findServiceInstance(svc)
 	if i == nil {
@@ -996,7 +1024,11 @@ func (p *Processor) RefreshUPNPForwards(ctx context.Context) {
 func (p *Processor) refreshUPNPForward(ctx context.Context, serviceInstance *instance.Instance) {
 	uid := serviceInstance.UID()
 	p.serviceLock.Lock(uid)
-	defer releaseServiceLock(p.serviceLock, uid)
+	defer func() {
+		if err := p.serviceLock.Unlock(uid); err != nil {
+			log.Error("failed to release service lock", "uid", uid, "err", err)
+		}
+	}()
 
 	service := &v1.Service{ObjectMeta: metav1.ObjectMeta{UID: uid}}
 	if p.findServiceInstance(service) != serviceInstance {
