@@ -52,6 +52,19 @@ type LeaseStore interface {
 	Delete(lease.ID, string, *lease.Lease) bool
 }
 
+// Dependencies defines the collaborators required by Service election
+// coordination. Named fields keep construction explicit as the collaborators
+// evolve independently.
+type Dependencies struct {
+	Config          *kubevip.Config
+	Leases          LeaseStore
+	ElectionManager *election.Manager
+	State           ServiceState
+	Datapath        Datapath
+	Runner          CampaignRunner
+	Scheduler       RestartScheduler
+}
+
 // Manager owns the registry of lease coordinators. It deliberately delegates
 // Service state, datapath work, campaign execution, and scheduling to focused
 // interfaces supplied by pkg/services.
@@ -198,18 +211,18 @@ func (e *Coordinator) Contains(member *Member) bool {
 	return !e.retired && e.members[member.service.UID] == member
 }
 
-func NewManager(config *kubevip.Config, leaseMgr LeaseStore, electionMgr *election.Manager,
-	state ServiceState, datapath Datapath, runner CampaignRunner, scheduler RestartScheduler) *Manager {
+func NewManager(dependencies Dependencies) *Manager {
 	registry := &registry{
 		coordinators: make(map[string]*Coordinator),
 		dependencies: coordinatorDependencies{
-			config: config, leases: leaseMgr, electionManager: electionMgr, state: state,
-			datapath: datapath, runner: runner, scheduler: scheduler,
+			config: dependencies.Config, leases: dependencies.Leases,
+			electionManager: dependencies.ElectionManager, state: dependencies.State,
+			datapath: dependencies.Datapath, runner: dependencies.Runner, scheduler: dependencies.Scheduler,
 		},
 	}
 	registry.dependencies.nextToken = registry.nextToken
 	registry.dependencies.onRetired = registry.remove
-	return &Manager{config: config, state: state, registry: registry}
+	return &Manager{config: dependencies.Config, state: dependencies.State, registry: registry}
 }
 
 func (r *registry) coordinatorFor(id lease.ID) *Coordinator {
