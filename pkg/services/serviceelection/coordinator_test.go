@@ -70,7 +70,7 @@ func newTestManager() (*Manager, *testAdapter, *lease.Manager) {
 	return manager, adapter, leaseMgr
 }
 
-func readyMember(t *testing.T, manager *Manager, adapter *testAdapter, service *v1.Service) *Member {
+func readyMember(t *testing.T, manager *Manager, adapter *testAdapter, service *v1.Service) *member {
 	t.Helper()
 	ctx := servicecontext.New(context.Background())
 	adapter.mutex.Lock()
@@ -78,7 +78,7 @@ func readyMember(t *testing.T, manager *Manager, adapter *testAdapter, service *
 	adapter.mutex.Unlock()
 	ctx.SignalReadiness()
 	generation, _, _, _ := ctx.ReadinessState()
-	member, joined := manager.Join(ctx, service, generation)
+	member, joined := manager.join(ctx, service, generation)
 	if !joined {
 		t.Fatal("ready Service did not join its coordinator")
 	}
@@ -89,9 +89,9 @@ func TestManagerIssuesNewClaimForEachReadinessGeneration(t *testing.T) {
 	manager, adapter, leaseMgr := newTestManager()
 	service := &v1.Service{ObjectMeta: metav1.ObjectMeta{Name: "service", Namespace: "default", UID: "service"}}
 	first := readyMember(t, manager, adapter, service)
-	firstToken := first.ClaimToken()
-	firstContext := first.ServiceContext()
-	first.Close()
+	firstToken := first.claimToken
+	firstContext := first.serviceContext
+	first.close()
 
 	generation, _, _, ready := firstContext.ReadinessState()
 	if !ready || !firstContext.ResetReadinessGeneration(generation) {
@@ -99,19 +99,19 @@ func TestManagerIssuesNewClaimForEachReadinessGeneration(t *testing.T) {
 	}
 	firstContext.SignalReadiness()
 	secondGeneration, _, _, _ := firstContext.ReadinessState()
-	second, joined := manager.Join(firstContext, service, secondGeneration)
+	second, joined := manager.join(firstContext, service, secondGeneration)
 	if !joined {
 		t.Fatal("new readiness generation did not join")
 	}
-	if second.ClaimToken() == firstToken {
+	if second.claimToken == firstToken {
 		t.Fatal("new readiness generation reused a claim token")
 	}
 
-	first.Close()
-	if leaseMgr.Get(second.Coordinator().id) == nil {
+	first.close()
+	if leaseMgr.Get(second.coordinator.id) == nil {
 		t.Fatal("stale member retired the replacement lease")
 	}
-	second.Close()
+	second.close()
 }
 
 func TestSharedCoordinatorAggregatesCurrentMemberVIPs(t *testing.T) {
@@ -128,17 +128,17 @@ func TestSharedCoordinatorAggregatesCurrentMemberVIPs(t *testing.T) {
 	first := readyMember(t, manager, adapter, firstService)
 	second := readyMember(t, manager, adapter, secondService)
 
-	if first.Coordinator() != second.Coordinator() {
+	if first.coordinator != second.coordinator {
 		t.Fatal("members with a shared lease got different coordinators")
 	}
-	if got, want := first.Coordinator().Lease().OwnedVIPs(), []string{"192.0.2.10", "192.0.2.20"}; !slices.Equal(got, want) {
+	if got, want := first.coordinator.lease.OwnedVIPs(), []string{"192.0.2.10", "192.0.2.20"}; !slices.Equal(got, want) {
 		t.Fatalf("OwnedVIPs() = %v, want %v", got, want)
 	}
-	first.Close()
-	if got, want := second.Coordinator().Lease().OwnedVIPs(), []string{"192.0.2.20"}; !slices.Equal(got, want) {
+	first.close()
+	if got, want := second.coordinator.lease.OwnedVIPs(), []string{"192.0.2.20"}; !slices.Equal(got, want) {
 		t.Fatalf("OwnedVIPs() after leave = %v, want %v", got, want)
 	}
-	second.Close()
+	second.close()
 }
 
 func TestReplacingUIDGenerationKeepsSiblingClaim(t *testing.T) {
@@ -155,25 +155,25 @@ func TestReplacingUIDGenerationKeepsSiblingClaim(t *testing.T) {
 	adapter.mutex.Unlock()
 	replacementContext.SignalReadiness()
 	generation, _, _, _ := replacementContext.ReadinessState()
-	replacement, joined := manager.Join(replacementContext, service, generation)
+	replacement, joined := manager.join(replacementContext, service, generation)
 	if !joined {
 		t.Fatal("replacement generation did not join")
 	}
-	old.Close()
-	if replacement.Coordinator().CurrentMember(service.UID) != replacement ||
-		replacement.Coordinator().CurrentMember(siblingService.UID) != sibling {
+	old.close()
+	if replacement.coordinator.currentMember(service.UID) != replacement ||
+		replacement.coordinator.currentMember(siblingService.UID) != sibling {
 		t.Fatal("stale generation removed a current shared-lease member")
 	}
-	replacement.Close()
-	sibling.Close()
+	replacement.close()
+	sibling.close()
 }
 
-func TestActivationFailureCancelscampaignAndRecordsBackoff(t *testing.T) {
+func TestActivationFailureCancelsCampaignAndRecordsBackoff(t *testing.T) {
 	manager, adapter, _ := newTestManager()
 	adapter.activateErr = errors.New("datapath failed")
 	service := &v1.Service{ObjectMeta: metav1.ObjectMeta{Name: "service", Namespace: "default", UID: "service"}}
 	member := readyMember(t, manager, adapter, service)
-	coordinator := member.Coordinator()
+	coordinator := member.coordinator
 
 	start := coordinator.prepareCampaign()
 	start.lease.ElectionStarted()
@@ -184,15 +184,15 @@ func TestActivationFailureCancelscampaignAndRecordsBackoff(t *testing.T) {
 	if got, want := coordinator.restartDelayLocked(), 2*restartBaseDelay; got != want {
 		t.Fatalf("restart delay = %v, want %v", got, want)
 	}
-	member.Close()
+	member.close()
 }
 
 func TestCloseActiveMemberCleansUpExactlyOnce(t *testing.T) {
 	manager, adapter, leaseMgr := newTestManager()
 	service := &v1.Service{ObjectMeta: metav1.ObjectMeta{Name: "service", Namespace: "default", UID: "service"}}
 	member := readyMember(t, manager, adapter, service)
-	coordinator := member.Coordinator()
-	serviceLease := coordinator.Lease()
+	coordinator := member.coordinator
+	serviceLease := coordinator.lease
 
 	coordinator.mutex.Lock()
 	campaignCtx, cancelCampaign := context.WithCancel(context.Background())
@@ -202,12 +202,12 @@ func TestCloseActiveMemberCleansUpExactlyOnce(t *testing.T) {
 	serviceLease.ElectionStarted()
 
 	coordinator.activateMember(context.Background(), member, serviceLease, currentCampaign, &sync.WaitGroup{})
-	if !member.Active() {
+	if !member.active {
 		t.Fatal("member was not activated")
 	}
 
-	member.Close()
-	member.Close()
+	member.close()
+	member.close()
 
 	adapter.mutex.Lock()
 	cleanups := len(adapter.cleanups)
@@ -225,7 +225,7 @@ func TestLeavingInactiveMemberDoesNotCleanupDatapath(t *testing.T) {
 	service := &v1.Service{ObjectMeta: metav1.ObjectMeta{Name: "service", Namespace: "default", UID: "service"}}
 	member := readyMember(t, manager, adapter, service)
 
-	member.Close()
+	member.close()
 
 	adapter.mutex.Lock()
 	cleanups := len(adapter.cleanups)
@@ -233,6 +233,58 @@ func TestLeavingInactiveMemberDoesNotCleanupDatapath(t *testing.T) {
 	if cleanups != 0 {
 		t.Fatalf("cleanup calls = %d, want 0", cleanups)
 	}
+}
+
+func TestExternalElectionEndDeactivatesMember(t *testing.T) {
+	manager, adapter, leaseMgr := newTestManager()
+	service := &v1.Service{ObjectMeta: metav1.ObjectMeta{
+		Name: "service", Namespace: "default", UID: "service",
+		Annotations: map[string]string{kubevip.ServiceLease: "shared"},
+	}}
+	namespace, name := lease.ServiceName(service)
+	id := lease.NewID(manager.config.LeaderElectionType, namespace, name)
+	controlPlaneToken := lease.ObjectName(id, "control-plane")
+	member := readyMember(t, manager, adapter, service)
+	sharedLease := member.coordinator.lease
+	if claimed, _ := leaseMgr.Claim(id, controlPlaneToken); claimed != sharedLease {
+		t.Fatal("control plane did not join the Service lease")
+	}
+	if !sharedLease.BeginElection() {
+		t.Fatal("external election did not start")
+	}
+	sharedLease.ElectionStarted()
+
+	var wg sync.WaitGroup
+	member.coordinator.startCampaign(&wg)
+	waitForAdapterCount(t, adapter, func(a *testAdapter) int { return len(a.activations) }, 1, "activation")
+
+	sharedLease.ElectionStopped()
+	member.close()
+	wg.Wait()
+	waitForAdapterCount(t, adapter, func(a *testAdapter) int { return len(a.cleanups) }, 1, "cleanup")
+	member.coordinator.mutex.Lock()
+	active := member.active
+	member.coordinator.mutex.Unlock()
+	if active {
+		t.Fatal("member remained active after external election ended")
+	}
+
+	leaseMgr.Delete(id, controlPlaneToken, sharedLease)
+}
+
+func waitForAdapterCount(t *testing.T, adapter *testAdapter, count func(*testAdapter) int, want int, operation string) {
+	t.Helper()
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		adapter.mutex.Lock()
+		got := count(adapter)
+		adapter.mutex.Unlock()
+		if got == want {
+			return
+		}
+		time.Sleep(time.Millisecond)
+	}
+	t.Fatalf("%s count did not reach %d", operation, want)
 }
 
 func TestManagerRejectsStaleReadinessGeneration(t *testing.T) {
@@ -245,7 +297,7 @@ func TestManagerRejectsStaleReadinessGeneration(t *testing.T) {
 	if !ctx.ResetReadinessGeneration(generation) {
 		t.Fatal("failed to advance readiness generation")
 	}
-	if member, joined := manager.Join(ctx, service, generation); joined || member != nil {
+	if member, joined := manager.join(ctx, service, generation); joined || member != nil {
 		t.Fatal("stale readiness generation joined a coordinator")
 	}
 }

@@ -12,7 +12,6 @@ import (
 	"github.com/kube-vip/kube-vip/pkg/lease"
 	"github.com/kube-vip/kube-vip/pkg/metrics"
 	"github.com/kube-vip/kube-vip/pkg/servicecontext"
-	"github.com/kube-vip/kube-vip/pkg/services/serviceelection"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 	v1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -31,14 +30,17 @@ func TestStartServicesLeaderElectionTracksSharedMembersAcrossReadinessLoss(t *te
 	p := &Processor{
 		config:   &kubevip.Config{EnableServicesElection: true},
 		leaseMgr: lease.NewManager(),
+		serviceSync: func(context.Context, *servicecontext.Context, *v1.Service, *sync.WaitGroup, bool) error {
+			return nil
+		},
 	}
 	annotations := map[string]string{kubevip.ServiceLease: "shared"}
 	firstService := &v1.Service{ObjectMeta: metav1.ObjectMeta{
 		Name: "first", Namespace: "default", UID: types.UID("first"), Annotations: annotations,
-	}}
+	}, Spec: v1.ServiceSpec{LoadBalancerIP: "192.0.2.10"}}
 	secondService := &v1.Service{ObjectMeta: metav1.ObjectMeta{
 		Name: "second", Namespace: "default", UID: types.UID("second"), Annotations: annotations,
-	}}
+	}, Spec: v1.ServiceSpec{LoadBalancerIP: "192.0.2.20"}}
 	namespace, name := lease.ServiceName(firstService)
 	id := lease.NewID(p.config.LeaderElectionType, namespace, name)
 	sharedLease := p.leaseMgr.Add(context.Background(), id)
@@ -57,24 +59,19 @@ func TestStartServicesLeaderElectionTracksSharedMembersAcrossReadinessLoss(t *te
 
 	firstCtx.SignalReadiness()
 	secondCtx.SignalReadiness()
-	election := waitForServiceElectionMembers(t, p, id, 2)
-	firstToken := election.CurrentMember(firstService.UID).ClaimToken()
+	waitForLeaseVIPCount(t, p.leaseMgr, id, 2)
 
 	resetServiceReadiness(t, firstCtx)
-	waitForServiceElectionMembers(t, p, id, 1)
+	waitForLeaseVIPCount(t, p.leaseMgr, id, 1)
 	if !sharedLease.Elected.Load() || p.leaseMgr.Get(id) != sharedLease {
 		t.Fatal("one shared member losing readiness ended the healthy sibling campaign")
 	}
 
 	firstCtx.SignalReadiness()
-	election = waitForServiceElectionMembers(t, p, id, 2)
-	secondToken := election.CurrentMember(firstService.UID).ClaimToken()
-	if secondToken == firstToken {
-		t.Fatal("readiness recovery reused the prior member claim token")
-	}
+	waitForLeaseVIPCount(t, p.leaseMgr, id, 2)
 
 	secondCtx.Cancel()
-	waitForServiceElectionMembers(t, p, id, 1)
+	waitForLeaseVIPCount(t, p.leaseMgr, id, 1)
 	if firstCtx.Ctx.Err() != nil || !sharedLease.Elected.Load() || p.leaseMgr.Get(id) != sharedLease {
 		t.Fatal("deleting one shared member ended the healthy sibling campaign")
 	}
@@ -92,11 +89,14 @@ func TestStartServicesLeaderElectionTracksSharedMembersAcrossReadinessLoss(t *te
 }
 
 func TestServiceMemberLeavingDoesNotCancelControlPlaneLease(t *testing.T) {
-	p := &Processor{config: &kubevip.Config{}, leaseMgr: lease.NewManager()}
+	p := &Processor{
+		config: &kubevip.Config{}, leaseMgr: lease.NewManager(),
+		serviceSync: func(context.Context, *servicecontext.Context, *v1.Service, *sync.WaitGroup, bool) error { return nil },
+	}
 	service := &v1.Service{ObjectMeta: metav1.ObjectMeta{
 		Name: "service", Namespace: "default", UID: types.UID("service"),
 		Annotations: map[string]string{kubevip.ServiceLease: "shared"},
-	}}
+	}, Spec: v1.ServiceSpec{LoadBalancerIP: "192.0.2.10"}}
 	namespace, name := lease.ServiceName(service)
 	id := lease.NewID(p.config.LeaderElectionType, namespace, name)
 	controlPlaneToken := lease.ObjectName(id, "cp")
@@ -108,67 +108,18 @@ func TestServiceMemberLeavingDoesNotCancelControlPlaneLease(t *testing.T) {
 
 	svcCtx := servicecontext.New(context.Background())
 	p.svcMap.Store(service.UID, svcCtx)
+	done := make(chan error, 1)
+	go func() { done <- p.StartServicesLeaderElection(svcCtx, service, nil, true) }()
 	svcCtx.SignalReadiness()
-	generation, _, _, _ := svcCtx.ReadinessState()
-	member, joined := p.joinElectionCoordinator(svcCtx, service, generation)
-	if !joined {
-		t.Fatal("Service did not join the control-plane lease")
+	waitForLeaseVIPCount(t, p.leaseMgr, id, 1)
+	svcCtx.Cancel()
+	if err := <-done; err != nil {
+		t.Fatalf("service election returned error: %v", err)
 	}
-	member.Close()
 
 	if sharedLease.Ctx.Err() != nil || !sharedLease.Elected.Load() || p.leaseMgr.Get(id) != sharedLease {
 		t.Fatal("leaving Service member cancelled the control-plane lease")
 	}
-	p.leaseMgr.Delete(id, controlPlaneToken, sharedLease)
-}
-
-func TestServiceMemberDeactivatesWhenExternalElectionStops(t *testing.T) {
-	activated := make(chan struct{}, 1)
-	p := &Processor{
-		config:                  &kubevip.Config{},
-		leaseMgr:                lease.NewManager(),
-		scheduleElectionRestart: func(func()) {},
-		serviceSync: func(_ context.Context, _ *servicecontext.Context, _ *v1.Service, _ *sync.WaitGroup, _ bool) error {
-			activated <- struct{}{}
-			return nil
-		},
-	}
-	service := &v1.Service{ObjectMeta: metav1.ObjectMeta{
-		Name: "service", Namespace: "default", UID: types.UID("service"),
-		Annotations: map[string]string{kubevip.ServiceLease: "shared"},
-	}}
-	namespace, name := lease.ServiceName(service)
-	id := lease.NewID(p.config.LeaderElectionType, namespace, name)
-	controlPlaneToken := lease.ObjectName(id, "cp")
-	sharedLease, _ := p.leaseMgr.Acquire(context.Background(), id, controlPlaneToken)
-	if !sharedLease.BeginElection() {
-		t.Fatal("external election did not start")
-	}
-	sharedLease.ElectionStarted()
-
-	svcCtx := servicecontext.New(context.Background())
-	p.svcMap.Store(service.UID, svcCtx)
-	svcCtx.SignalReadiness()
-	generation, _, _, _ := svcCtx.ReadinessState()
-	member, joined := p.joinElectionCoordinator(svcCtx, service, generation)
-	if !joined {
-		t.Fatal("Service did not join the external election")
-	}
-	var wg sync.WaitGroup
-	member.Coordinator().StartCampaign(&wg)
-	select {
-	case <-activated:
-	case <-time.After(time.Second):
-		t.Fatal("Service member was not activated by external leadership")
-	}
-
-	sharedLease.ElectionStopped()
-	wg.Wait()
-	active := member.Active()
-	if active {
-		t.Fatal("Service member remained active after external leadership ended")
-	}
-	member.Close()
 	p.leaseMgr.Delete(id, controlPlaneToken, sharedLease)
 }
 
@@ -241,8 +192,6 @@ func TestStartServicesLeaderElectionRegistersOneMemberForConcurrentCalls(t *test
 	}
 	close(start)
 	waitForElectionRunner(t, runner.started)
-	namespace, name := lease.ServiceName(service)
-	waitForServiceElectionMembers(t, p, lease.NewID(p.config.LeaderElectionType, namespace, name), 1)
 	if got := runner.starts.Load(); got != 1 {
 		t.Fatalf("campaign starts = %d, want 1", got)
 	}
@@ -398,14 +347,15 @@ func TestSharedElectionDrainsBeforeRestartAfterAllMembersLoseReadiness(t *testin
 	p := &Processor{
 		config: &kubevip.Config{}, leaseMgr: lease.NewManager(), electionRun: runner.run,
 		scheduleElectionRestart: func(restart func()) { restart() },
+		serviceSync:             func(context.Context, *servicecontext.Context, *v1.Service, *sync.WaitGroup, bool) error { return nil },
 	}
 	annotations := map[string]string{kubevip.ServiceLease: "shared"}
 	firstService := &v1.Service{ObjectMeta: metav1.ObjectMeta{
 		Name: "first", Namespace: "default", UID: types.UID("first"), Annotations: annotations,
-	}}
+	}, Spec: v1.ServiceSpec{LoadBalancerIP: "192.0.2.10"}}
 	secondService := &v1.Service{ObjectMeta: metav1.ObjectMeta{
 		Name: "second", Namespace: "default", UID: types.UID("second"), Annotations: annotations,
-	}}
+	}, Spec: v1.ServiceSpec{LoadBalancerIP: "192.0.2.20"}}
 	firstCtx := servicecontext.New(context.Background())
 	secondCtx := servicecontext.New(context.Background())
 	p.svcMap.Store(firstService.UID, firstCtx)
@@ -419,7 +369,7 @@ func TestSharedElectionDrainsBeforeRestartAfterAllMembersLoseReadiness(t *testin
 	go func() { secondDone <- p.StartServicesLeaderElection(secondCtx, secondService, nil, true) }()
 	waitForElectionRunner(t, runner.started)
 	namespace, name := lease.ServiceName(firstService)
-	waitForServiceElectionMembers(t, p, lease.NewID(p.config.LeaderElectionType, namespace, name), 2)
+	waitForLeaseVIPCount(t, p.leaseMgr, lease.NewID(p.config.LeaderElectionType, namespace, name), 2)
 
 	resetServiceReadiness(t, firstCtx)
 	resetServiceReadiness(t, secondCtx)
@@ -459,10 +409,10 @@ func TestSharedElectionDeletedCandidateNeverActivates(t *testing.T) {
 	annotations := map[string]string{kubevip.ServiceLease: "shared"}
 	candidateService := &v1.Service{ObjectMeta: metav1.ObjectMeta{
 		Name: "candidate", Namespace: "default", UID: types.UID("candidate"), Annotations: annotations,
-	}}
+	}, Spec: v1.ServiceSpec{LoadBalancerIP: "192.0.2.10"}}
 	siblingService := &v1.Service{ObjectMeta: metav1.ObjectMeta{
 		Name: "sibling", Namespace: "default", UID: types.UID("sibling"), Annotations: annotations,
-	}}
+	}, Spec: v1.ServiceSpec{LoadBalancerIP: "192.0.2.20"}}
 	candidateCtx := servicecontext.New(context.Background())
 	siblingCtx := servicecontext.New(context.Background())
 	p.svcMap.Store(candidateService.UID, candidateCtx)
@@ -476,7 +426,7 @@ func TestSharedElectionDeletedCandidateNeverActivates(t *testing.T) {
 	go func() { siblingDone <- p.StartServicesLeaderElection(siblingCtx, siblingService, nil, true) }()
 	waitForElectionRunner(t, runner.started)
 	namespace, name := lease.ServiceName(candidateService)
-	election := waitForServiceElectionMembers(t, p, lease.NewID(p.config.LeaderElectionType, namespace, name), 2)
+	waitForLeaseVIPCount(t, p.leaseMgr, lease.NewID(p.config.LeaderElectionType, namespace, name), 2)
 
 	candidateCtx.Cancel()
 	if err := <-candidateDone; err != nil {
@@ -484,14 +434,11 @@ func TestSharedElectionDeletedCandidateNeverActivates(t *testing.T) {
 	}
 	close(releaseLeading)
 	waitForCondition(t, func() bool {
-		member := election.CurrentMember(siblingService.UID)
-		return election.MemberCount() == 1 && member != nil && member.Active()
+		syncMutex.Lock()
+		defer syncMutex.Unlock()
+		return syncCalls[siblingService.UID] == 1
 	}, "live sibling activation")
 
-	candidateActive := election.CurrentMember(candidateService.UID) != nil
-	if candidateActive {
-		t.Fatal("deleted candidate remained eligible for activation")
-	}
 	syncMutex.Lock()
 	candidateSyncs := syncCalls[candidateService.UID]
 	siblingSyncs := syncCalls[siblingService.UID]
@@ -510,14 +457,17 @@ func TestSharedElectionDeletedCandidateNeverActivates(t *testing.T) {
 
 func TestSharedElectionReadinessIsMemberLocal(t *testing.T) {
 	runner := &electionTestRunner{started: make(chan struct{})}
-	p := &Processor{config: &kubevip.Config{}, leaseMgr: lease.NewManager(), electionRun: runner.run}
+	p := &Processor{
+		config: &kubevip.Config{}, leaseMgr: lease.NewManager(), electionRun: runner.run,
+		serviceSync: func(context.Context, *servicecontext.Context, *v1.Service, *sync.WaitGroup, bool) error { return nil },
+	}
 	annotations := map[string]string{kubevip.ServiceLease: "shared"}
 	firstService := &v1.Service{ObjectMeta: metav1.ObjectMeta{
 		Name: "first", Namespace: "default", UID: types.UID("first"), Annotations: annotations,
-	}}
+	}, Spec: v1.ServiceSpec{LoadBalancerIP: "192.0.2.10"}}
 	secondService := &v1.Service{ObjectMeta: metav1.ObjectMeta{
 		Name: "second", Namespace: "default", UID: types.UID("second"), Annotations: annotations,
-	}}
+	}, Spec: v1.ServiceSpec{LoadBalancerIP: "192.0.2.20"}}
 	firstCtx := servicecontext.New(context.Background())
 	secondCtx := servicecontext.New(context.Background())
 	p.svcMap.Store(firstService.UID, firstCtx)
@@ -532,15 +482,15 @@ func TestSharedElectionReadinessIsMemberLocal(t *testing.T) {
 	waitForElectionRunner(t, runner.started)
 	namespace, name := lease.ServiceName(firstService)
 	id := lease.NewID(p.config.LeaderElectionType, namespace, name)
-	waitForServiceElectionMembers(t, p, id, 2)
+	waitForLeaseVIPCount(t, p.leaseMgr, id, 2)
 
 	resetServiceReadiness(t, firstCtx)
-	waitForServiceElectionMembers(t, p, id, 1)
+	waitForLeaseVIPCount(t, p.leaseMgr, id, 1)
 	if runner.starts.Load() != 1 {
 		t.Fatalf("campaign starts after one member lost readiness = %d, want 1", runner.starts.Load())
 	}
 	firstCtx.SignalReadiness()
-	waitForServiceElectionMembers(t, p, id, 2)
+	waitForLeaseVIPCount(t, p.leaseMgr, id, 2)
 	if runner.starts.Load() != 1 {
 		t.Fatalf("campaign starts after one member recovered readiness = %d, want 1", runner.starts.Load())
 	}
@@ -655,19 +605,10 @@ func waitForCondition(t *testing.T, condition func() bool, description string) {
 	}
 }
 
-func waitForServiceElectionMembers(t *testing.T, p *Processor, id lease.ID, want int) *serviceelection.Coordinator {
+func waitForLeaseVIPCount(t *testing.T, manager *lease.Manager, id lease.ID, want int) {
 	t.Helper()
-	deadline := time.Now().Add(time.Second)
-	for time.Now().Before(deadline) {
-		election := p.electionCoordinatorManager().Current(id)
-		if election != nil {
-			count := election.MemberCount()
-			if count == want {
-				return election
-			}
-		}
-		time.Sleep(time.Millisecond)
-	}
-	t.Fatalf("service election member count did not reach %d", want)
-	return nil
+	waitForCondition(t, func() bool {
+		serviceLease := manager.Get(id)
+		return serviceLease != nil && len(serviceLease.OwnedVIPs()) == want
+	}, "service election VIP count")
 }

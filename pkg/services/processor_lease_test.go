@@ -241,19 +241,12 @@ func TestOnStoppedLeadingDoesNotDeleteReplacementContext(t *testing.T) {
 
 	oldCtx := servicecontext.New(context.Background())
 	replacementCtx := servicecontext.New(context.Background())
-	p.svcMap.Store(service.UID, oldCtx)
-	oldCtx.SignalReadiness()
-	generation, _, _, _ := oldCtx.ReadinessState()
-	member, joined := p.joinElectionCoordinator(oldCtx, service, generation)
-	if !joined {
-		t.Fatal("old Service context did not join its election")
-	}
 	p.svcMap.Store(service.UID, replacementCtx)
 	replacementInstance := &instance.Instance{ServiceUID: service.UID, ServiceSnapshot: service.DeepCopy()}
 	p.ServiceInstances = []*instance.Instance{replacementInstance}
 
-	if err := (&electionAdapter{processor: p}).Cleanup(context.WithoutCancel(member.Coordinator().Lease().Ctx), service, oldCtx,
-		func() bool { return member.Coordinator().Contains(member) }); err != nil {
+	if err := (&electionAdapter{processor: p}).Cleanup(context.Background(), service, oldCtx,
+		func() bool { return true }); err != nil {
 		t.Fatalf("Cleanup returned an error: %v", err)
 	}
 	if got, err := p.getServiceContext(service.UID); err != nil || got != replacementCtx {
