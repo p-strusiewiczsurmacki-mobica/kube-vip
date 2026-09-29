@@ -5,6 +5,7 @@ import (
 	"fmt"
 	log "log/slog"
 	"os"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -36,16 +37,29 @@ func (m *Manager) Add(ctx context.Context, id ID) *Lease {
 // Acquire creates or retrieves a lease and atomically registers objectName as a
 // member. The returned bool reports whether this object was newly registered.
 func (m *Manager) Acquire(ctx context.Context, id ID, objectName string) (*Lease, bool) {
+	return m.AcquireWithVIPProvider(ctx, id, objectName, nil)
+}
+
+// AcquireWithVIPProvider creates or retrieves a lease and atomically registers
+// objectName together with its current VIP ownership provider.
+func (m *Manager) AcquireWithVIPProvider(ctx context.Context, id ID, objectName string,
+	vipProvider VIPProvider) (*Lease, bool) {
 	m.lock.Lock()
 	defer m.lock.Unlock()
 
 	lease := m.addLocked(ctx, id)
-	return lease, lease.Add(objectName)
+	return lease, lease.AddWithVIPProvider(objectName, vipProvider)
 }
 
 // Claim atomically registers objectName against an existing lease. It returns
 // nil when the lease was retired before the caller could join it.
 func (m *Manager) Claim(id ID, objectName string) (*Lease, bool) {
+	return m.ClaimWithVIPProvider(id, objectName, nil)
+}
+
+// ClaimWithVIPProvider atomically registers objectName and its VIP ownership
+// provider against an existing lease.
+func (m *Manager) ClaimWithVIPProvider(id ID, objectName string, vipProvider VIPProvider) (*Lease, bool) {
 	m.lock.Lock()
 	defer m.lock.Unlock()
 
@@ -53,7 +67,7 @@ func (m *Manager) Claim(id ID, objectName string) (*Lease, bool) {
 	if !exists {
 		return nil, false
 	}
-	return lease, lease.Add(objectName)
+	return lease, lease.AddWithVIPProvider(objectName, vipProvider)
 }
 
 func (m *Manager) addLocked(ctx context.Context, id ID) *Lease {
@@ -141,6 +155,23 @@ type Lease struct {
 	changed  chan struct{}
 }
 
+// VIPProvider returns the VIPs currently owned by one local Lease member.
+// Implementations must be safe for concurrent use and must not return mutable
+// state that can change while the caller is reading it.
+type VIPProvider func() []string
+
+// StaticVIPProvider returns a provider backed by an immutable copy of vips.
+func StaticVIPProvider(vips []string) VIPProvider {
+	owned := append([]string(nil), vips...)
+	return func() []string {
+		return append([]string(nil), owned...)
+	}
+}
+
+type member struct {
+	vipProvider VIPProvider
+}
+
 func newLease(ctx context.Context, cancel context.CancelFunc) *Lease {
 	return &Lease{
 		Ctx:     ctx,
@@ -164,11 +195,45 @@ func (l *Lease) NewElectionContext(parent context.Context) (context.Context, con
 // Add adds the object to the lease and increments counter
 // it will return true if object was added
 func (l *Lease) Add(name string) bool {
-	if _, exists := l.services.LoadOrStore(name, true); !exists {
+	return l.AddWithVIPProvider(name, nil)
+}
+
+// AddWithVIPProvider adds an object and its VIP ownership provider to the
+// lease. Re-adding the same object leaves the original registration intact.
+func (l *Lease) AddWithVIPProvider(name string, vipProvider VIPProvider) bool {
+	if _, exists := l.services.LoadOrStore(name, member{vipProvider: vipProvider}); !exists {
 		l.cnt.Add(1)
 		return true
 	}
 	return false
+}
+
+// OwnedVIPs returns a stable, deduplicated snapshot of VIPs contributed by all
+// local members sharing this Lease.
+func (l *Lease) OwnedVIPs() []string {
+	providers := make([]VIPProvider, 0, l.cnt.Load())
+	l.services.Range(func(_, value any) bool {
+		registered, ok := value.(member)
+		if ok && registered.vipProvider != nil {
+			providers = append(providers, registered.vipProvider)
+		}
+		return true
+	})
+
+	unique := make(map[string]struct{})
+	for _, provider := range providers {
+		for _, vip := range provider() {
+			if vip != "" {
+				unique[vip] = struct{}{}
+			}
+		}
+	}
+	vips := make([]string, 0, len(unique))
+	for vip := range unique {
+		vips = append(vips, vip)
+	}
+	slices.Sort(vips)
+	return vips
 }
 
 // delete removes the service from the lease and decrements the counter.

@@ -54,6 +54,43 @@ func TestAnnotatedLeaseLockPersistsAnnotationsOnCreateAndUpdate(t *testing.T) {
 	}
 }
 
+func TestAnnotatedLeaseLockRefreshesAnnotationsFromProvider(t *testing.T) {
+	client := fake.NewSimpleClientset()
+	leaseClient := client.CoordinationV1().Leases("default")
+	base := &resourcelock.LeaseLock{
+		LeaseMeta: metav1.ObjectMeta{Name: "lease", Namespace: "default"},
+		Client:    client.CoordinationV1(),
+		LockConfig: resourcelock.ResourceLockConfig{
+			Identity: "node-a",
+		},
+	}
+	vips := []string{"192.0.2.10"}
+	lock := newAnnotatedLeaseLockWithProvider(base, leaseClient, "lease", func() (map[string]string, error) {
+		return kubevip.WithLeaseVIPs(nil, "release_a", 248, vips)
+	})
+	record := resourcelock.LeaderElectionRecord{HolderIdentity: "node-a"}
+	if err := lock.Create(context.Background(), record); err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+
+	vips = []string{"192.0.2.10", "192.0.2.20"}
+	if err := lock.Update(context.Background(), record); err != nil {
+		t.Fatalf("Update() error = %v", err)
+	}
+
+	resource, err := leaseClient.Get(context.Background(), "lease", metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("get Lease: %v", err)
+	}
+	value, err := kubevip.ParseLeaseVIPs(resource.Annotations[kubevip.LeaseVIPs])
+	if err != nil {
+		t.Fatalf("ParseLeaseVIPs() error = %v", err)
+	}
+	if len(value.VIPs) != 2 || value.VIPs[0].Value != "192.0.2.10" || value.VIPs[1].Value != "192.0.2.20" {
+		t.Fatalf("Lease VIPs = %v, want refreshed provider values", value.VIPs)
+	}
+}
+
 // A failed annotation write must not be reported to the leader elector: the lease itself
 // was already written, and an error makes the elector stand down while it still holds it.
 func TestAnnotatedLeaseLockAnnotationFailureDoesNotSurfaceToElector(t *testing.T) {

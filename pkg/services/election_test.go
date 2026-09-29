@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/kube-vip/kube-vip/pkg/election"
 	"github.com/kube-vip/kube-vip/pkg/instance"
 	"github.com/kube-vip/kube-vip/pkg/kubevip"
 	"github.com/kube-vip/kube-vip/pkg/lease"
@@ -201,6 +202,176 @@ func TestServiceElectionActivatesMemberJoiningActiveCampaign(t *testing.T) {
 	election.mutex.Unlock()
 	p.leaveServiceElection(first)
 	p.leaveServiceElection(second)
+}
+
+func TestServiceElectionOwnedVIPsFollowMemberJoinAndLeave(t *testing.T) {
+	p := &Processor{config: &kubevip.Config{}, leaseMgr: lease.NewManager()}
+	annotations := map[string]string{kubevip.ServiceLease: "shared"}
+	firstService := &v1.Service{
+		ObjectMeta: metav1.ObjectMeta{Name: "first", Namespace: "default", UID: types.UID("first"), Annotations: annotations},
+		Spec:       v1.ServiceSpec{LoadBalancerIP: "192.0.2.10"},
+	}
+	secondService := &v1.Service{
+		ObjectMeta: metav1.ObjectMeta{Name: "second", Namespace: "default", UID: types.UID("second"), Annotations: annotations},
+		Spec:       v1.ServiceSpec{LoadBalancerIP: "192.0.2.20"},
+	}
+
+	join := func(service *v1.Service) *serviceElectionMember {
+		t.Helper()
+		svcCtx := servicecontext.New(context.Background())
+		p.svcMap.Store(service.UID, svcCtx)
+		svcCtx.SignalReadiness()
+		generation, _, _, _ := svcCtx.ReadinessState()
+		member, joined := p.joinServiceElection(svcCtx, service, generation)
+		if !joined {
+			t.Fatalf("Service %s did not join its election", service.Name)
+		}
+		return member
+	}
+
+	first := join(firstService)
+	if got, want := first.election.lease.OwnedVIPs(), []string{"192.0.2.10"}; !slices.Equal(got, want) {
+		t.Fatalf("OwnedVIPs() after first join = %v, want %v", got, want)
+	}
+	second := join(secondService)
+	if got, want := first.election.lease.OwnedVIPs(), []string{"192.0.2.10", "192.0.2.20"}; !slices.Equal(got, want) {
+		t.Fatalf("OwnedVIPs() after second join = %v, want %v", got, want)
+	}
+
+	p.leaveServiceElection(first)
+	if got, want := second.election.lease.OwnedVIPs(), []string{"192.0.2.20"}; !slices.Equal(got, want) {
+		t.Fatalf("OwnedVIPs() after first leave = %v, want %v", got, want)
+	}
+	// A delayed duplicate leave must not remove the surviving member's claim.
+	p.leaveServiceElection(first)
+	if got, want := second.election.lease.OwnedVIPs(), []string{"192.0.2.20"}; !slices.Equal(got, want) {
+		t.Fatalf("OwnedVIPs() after stale leave = %v, want %v", got, want)
+	}
+	p.leaveServiceElection(second)
+}
+
+func TestServiceElectionOwnedVIPsReplaceStaleServiceGeneration(t *testing.T) {
+	p := &Processor{config: &kubevip.Config{}, leaseMgr: lease.NewManager()}
+	annotations := map[string]string{kubevip.ServiceLease: "shared"}
+	oldService := &v1.Service{
+		ObjectMeta: metav1.ObjectMeta{Name: "service", Namespace: "default", UID: types.UID("service"), Annotations: annotations},
+		Spec:       v1.ServiceSpec{LoadBalancerIP: "192.0.2.10"},
+	}
+	siblingService := &v1.Service{
+		ObjectMeta: metav1.ObjectMeta{Name: "sibling", Namespace: "default", UID: types.UID("sibling"), Annotations: annotations},
+		Spec:       v1.ServiceSpec{LoadBalancerIP: "192.0.2.20"},
+	}
+
+	join := func(service *v1.Service) (*servicecontext.Context, *serviceElectionMember) {
+		t.Helper()
+		svcCtx := servicecontext.New(context.Background())
+		p.svcMap.Store(service.UID, svcCtx)
+		svcCtx.SignalReadiness()
+		generation, _, _, _ := svcCtx.ReadinessState()
+		member, joined := p.joinServiceElection(svcCtx, service, generation)
+		if !joined {
+			t.Fatalf("Service %s did not join its election", service.Name)
+		}
+		return svcCtx, member
+	}
+
+	_, oldMember := join(oldService)
+	_, sibling := join(siblingService)
+	replacement := oldService.DeepCopy()
+	replacement.Spec.LoadBalancerIP = "192.0.2.30"
+	_, replacementMember := join(replacement)
+
+	if got, want := replacementMember.election.lease.OwnedVIPs(), []string{"192.0.2.20", "192.0.2.30"}; !slices.Equal(got, want) {
+		t.Fatalf("OwnedVIPs() after generation replacement = %v, want %v", got, want)
+	}
+	p.leaveServiceElection(oldMember)
+	if got, want := replacementMember.election.lease.OwnedVIPs(), []string{"192.0.2.20", "192.0.2.30"}; !slices.Equal(got, want) {
+		t.Fatalf("OwnedVIPs() after stale generation leave = %v, want %v", got, want)
+	}
+	p.leaveServiceElection(replacementMember)
+	p.leaveServiceElection(sibling)
+}
+
+func TestServiceElectionCampaignPublishesDynamicLeaseVIPs(t *testing.T) {
+	runConfig := make(chan *election.RunConfig, 1)
+	p := &Processor{
+		config:   &kubevip.Config{},
+		leaseMgr: lease.NewManager(),
+		electionRun: func(ctx context.Context, run *election.RunConfig, _ *kubevip.Config) error {
+			runConfig <- run
+			<-ctx.Done()
+			return nil
+		},
+	}
+	annotations := map[string]string{kubevip.ServiceLease: "shared"}
+	service := &v1.Service{
+		ObjectMeta: metav1.ObjectMeta{Name: "first", Namespace: "default", UID: types.UID("first"), Annotations: annotations},
+		Spec:       v1.ServiceSpec{LoadBalancerIP: "192.0.2.10"},
+	}
+	svcCtx := servicecontext.New(context.Background())
+	p.svcMap.Store(service.UID, svcCtx)
+	svcCtx.SignalReadiness()
+	generation, _, _, _ := svcCtx.ReadinessState()
+	member, joined := p.joinServiceElection(svcCtx, service, generation)
+	if !joined {
+		t.Fatal("Service did not join its election")
+	}
+
+	var wg sync.WaitGroup
+	member.election.startCampaign(&wg)
+	var run *election.RunConfig
+	select {
+	case run = <-runConfig:
+	case <-time.After(time.Second):
+		t.Fatal("election runner did not start")
+	}
+	if run.VIPsProvider == nil {
+		t.Fatal("campaign did not publish a dynamic VIP provider")
+	}
+	if got, want := run.VIPsProvider(), []string{"192.0.2.10"}; !slices.Equal(got, want) {
+		t.Fatalf("campaign VIPs = %v, want %v", got, want)
+	}
+
+	p.leaveServiceElection(member)
+	wg.Wait()
+}
+
+func TestOwnedServiceVIPsPublishesOnlyActiveDatapaths(t *testing.T) {
+	p := &Processor{config: &kubevip.Config{}}
+	active := &v1.Service{
+		ObjectMeta: metav1.ObjectMeta{Name: "active", Namespace: "default", UID: types.UID("active")},
+		Spec:       v1.ServiceSpec{LoadBalancerIP: "192.0.2.10"},
+	}
+	inactive := &v1.Service{
+		ObjectMeta: metav1.ObjectMeta{Name: "inactive", Namespace: "default", UID: types.UID("inactive")},
+		Spec:       v1.ServiceSpec{LoadBalancerIP: "192.0.2.20"},
+	}
+	p.ServiceInstances = []*instance.Instance{
+		{ServiceUID: active.UID, ServiceSnapshot: active.DeepCopy(), AddCalled: true},
+		{ServiceUID: inactive.UID, ServiceSnapshot: inactive.DeepCopy()},
+	}
+
+	p.refreshOwnedServiceVIPs()
+	if got, want := p.OwnedServiceVIPs(), []string{"192.0.2.10"}; !slices.Equal(got, want) {
+		t.Fatalf("OwnedServiceVIPs() = %v, want %v", got, want)
+	}
+
+	unlockService := p.lockService(active.UID)
+	p.ServiceInstances[0].ServiceSnapshot = active.DeepCopy()
+	p.ServiceInstances[0].ServiceSnapshot.Spec.LoadBalancerIP = "192.0.2.30"
+	unlockService()
+	p.refreshOwnedServiceVIPs()
+	if got, want := p.OwnedServiceVIPs(), []string{"192.0.2.30"}; !slices.Equal(got, want) {
+		t.Fatalf("OwnedServiceVIPs() after VIP change = %v, want %v", got, want)
+	}
+
+	unlockService = p.lockService(active.UID)
+	p.ServiceInstances[0].AddCalled = false
+	unlockService()
+	p.refreshOwnedServiceVIPs()
+	if got := p.OwnedServiceVIPs(); len(got) != 0 {
+		t.Fatalf("OwnedServiceVIPs() after deactivation = %v, want empty", got)
+	}
 }
 
 func TestServiceElectionLeadershipLossWaitsForMemberActivation(t *testing.T) {
