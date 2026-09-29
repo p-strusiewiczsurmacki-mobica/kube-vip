@@ -419,20 +419,22 @@ func TestDeleteTrackedServiceCleansUpElectedServiceImmediately(t *testing.T) {
 	service := &v1.Service{ObjectMeta: metav1.ObjectMeta{
 		UID: uid, Name: "service-a", Namespace: "default",
 	}}
+	runner := &electionTestRunner{started: make(chan struct{})}
 	processor := &Processor{
 		config:           &kubevip.Config{EnableServicesElection: true},
 		ServiceInstances: []*instance.Instance{{ServiceUID: uid, ServiceSnapshot: service}},
 		leaseMgr:         lease.NewManager(),
+		electionRun:      runner.run,
+		serviceSync:      func(context.Context, *servicecontext.Context, *v1.Service, *sync.WaitGroup, bool) error { return nil },
 	}
 	svcCtx := servicecontext.New(context.Background())
 	processor.svcMap.Store(uid, svcCtx)
 	leaseNamespace, serviceLease := lease.ServiceName(service)
 	leaseID := lease.NewID(processor.config.LeaderElectionType, leaseNamespace, serviceLease)
 	svcCtx.SignalReadiness()
-	generation, _, _, _ := svcCtx.ReadinessState()
-	if _, joined := processor.joinElectionCoordinator(svcCtx, service, generation); !joined {
-		t.Fatal("service did not join its election")
-	}
+	done := make(chan error, 1)
+	go func() { done <- processor.StartServicesLeaderElection(svcCtx, service, nil, true) }()
+	waitForElectionRunner(t, runner.started)
 
 	if err := processor.deleteTrackedService(service); err != nil {
 		t.Fatalf("deleteTrackedService() error = %v", err)
@@ -446,6 +448,9 @@ func TestDeleteTrackedServiceCleansUpElectedServiceImmediately(t *testing.T) {
 	if processor.leaseMgr.Get(leaseID) != nil {
 		t.Fatal("deleted Service lease remained available for a replacement")
 	}
+	if err := <-done; err != nil {
+		t.Fatalf("service election returned error: %v", err)
+	}
 }
 
 func TestDeleteTrackedServiceReturnsPersistentCleanupFailure(t *testing.T) {
@@ -454,21 +459,23 @@ func TestDeleteTrackedServiceReturnsPersistentCleanupFailure(t *testing.T) {
 		UID: uid, Name: "service-a", Namespace: "default",
 	}}
 	labeler := &testLabeler{removeErr: errors.New("permanent remove label")}
+	runner := &electionTestRunner{started: make(chan struct{})}
 	processor := &Processor{
 		config:           &kubevip.Config{},
 		ServiceInstances: []*instance.Instance{{ServiceUID: uid, ServiceSnapshot: service, LabelAdded: true}},
 		nodeLabelManager: labeler,
 		leaseMgr:         lease.NewManager(),
+		electionRun:      runner.run,
+		serviceSync:      func(context.Context, *servicecontext.Context, *v1.Service, *sync.WaitGroup, bool) error { return nil },
 	}
 	svcCtx := servicecontext.New(context.Background())
 	processor.svcMap.Store(uid, svcCtx)
 	leaseNamespace, serviceLease := lease.ServiceName(service)
 	leaseID := lease.NewID(processor.config.LeaderElectionType, leaseNamespace, serviceLease)
 	svcCtx.SignalReadiness()
-	generation, _, _, _ := svcCtx.ReadinessState()
-	if _, joined := processor.joinElectionCoordinator(svcCtx, service, generation); !joined {
-		t.Fatal("service did not join its election")
-	}
+	done := make(chan error, 1)
+	go func() { done <- processor.StartServicesLeaderElection(svcCtx, service, nil, true) }()
+	waitForElectionRunner(t, runner.started)
 
 	if err := processor.deleteTrackedService(service); err == nil {
 		t.Fatal("deleteTrackedService() error = nil, want cleanup failure")
@@ -481,6 +488,9 @@ func TestDeleteTrackedServiceReturnsPersistentCleanupFailure(t *testing.T) {
 	}
 	if processor.leaseMgr.Get(leaseID) != nil {
 		t.Fatal("failed cleanup left the retired lease available to a replacement")
+	}
+	if err := <-done; err != nil {
+		t.Fatalf("service election returned error: %v", err)
 	}
 
 	labeler.removeErr = nil
