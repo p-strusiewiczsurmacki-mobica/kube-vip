@@ -67,6 +67,7 @@ type serviceElectionMember struct {
 	serviceContext      *servicecontext.Context
 	readinessGeneration uint64
 	claimToken          string
+	vipProvider         lease.VIPProvider
 	operationMutex      sync.Mutex
 	active              bool
 }
@@ -169,6 +170,7 @@ func (e *serviceElection) join(svcCtx *servicecontext.Context, service *v1.Servi
 		readinessGeneration: readinessGeneration,
 		claimToken:          e.nextMemberToken(),
 	}
+	member.vipProvider = serviceVIPProvider(member.service)
 	e.members[service.UID] = member
 
 	// A member can become ready again while the old campaign is still stopping.
@@ -184,7 +186,7 @@ func (e *serviceElection) join(svcCtx *servicecontext.Context, service *v1.Servi
 		}
 		return member, true
 	}
-	if claimed, _ := e.processor.leaseMgr.Claim(e.id, member.claimToken); claimed != nil {
+	if claimed, _ := e.processor.leaseMgr.ClaimWithVIPProvider(e.id, member.claimToken, member.vipProvider); claimed != nil {
 		return member, true
 	}
 
@@ -210,12 +212,13 @@ func (e *serviceElection) createLeaseLocked() *lease.Lease {
 	if first == nil {
 		return nil
 	}
-	svcLease, _ := e.processor.leaseMgr.Acquire(context.Background(), e.id, first.claimToken)
+	svcLease, _ := e.processor.leaseMgr.AcquireWithVIPProvider(context.Background(), e.id, first.claimToken,
+		first.vipProvider)
 	for _, member := range e.members {
 		if member == first {
 			continue
 		}
-		if claimed, _ := e.processor.leaseMgr.Claim(e.id, member.claimToken); claimed == nil {
+		if claimed, _ := e.processor.leaseMgr.ClaimWithVIPProvider(e.id, member.claimToken, member.vipProvider); claimed == nil {
 			svcLease.Cancel()
 			return nil
 		}
@@ -475,6 +478,7 @@ func (e *serviceElection) runCampaign(svcLease *lease.Lease, campaign *serviceEl
 		Mgr:              e.processor.electionMgr,
 		LeaseAnnotations: map[string]string{},
 		VIPs:             campaign.vips,
+		VIPsProvider:     svcLease.OwnedVIPs,
 		OnStartedLeading: func(ctx context.Context) {
 			e.startedLeading(ctx, svcLease, campaign, wg)
 		},
@@ -504,6 +508,11 @@ func memberVIPs(members []*serviceElectionMember) []string {
 		}
 	}
 	return orderedServiceVIPs(services)
+}
+
+func serviceVIPProvider(service *v1.Service) lease.VIPProvider {
+	addresses, _ := instance.FetchServiceAddresses(service)
+	return lease.StaticVIPProvider(addresses)
 }
 
 func orderedServiceVIPs(services []*v1.Service) []string {

@@ -3,6 +3,7 @@ package lease
 import (
 	"context"
 	"fmt"
+	"slices"
 	"sync"
 	"testing"
 	"time"
@@ -87,6 +88,42 @@ func TestManagerAcquireRegistersMembership(t *testing.T) {
 	manager.Delete(id, objectName, lease)
 	if manager.Get(id) != nil {
 		t.Fatal("lease remained after its only acquired member was deleted")
+	}
+}
+
+func TestLeaseOwnedVIPsAggregatesDynamicMemberProviders(t *testing.T) {
+	manager := NewManager()
+	id := NewID("kubernetes", "default", "shared")
+	controlPlaneVIPs := []string{"192.0.2.10"}
+	serviceVIPs := []string{"192.0.2.20", "192.0.2.10"}
+
+	sharedLease, added := manager.AcquireWithVIPProvider(context.Background(), id, "control-plane", func() []string {
+		return append([]string(nil), controlPlaneVIPs...)
+	})
+	if !added {
+		t.Fatal("control-plane member was not registered")
+	}
+	claimed, added := manager.ClaimWithVIPProvider(id, "service", func() []string {
+		return append([]string(nil), serviceVIPs...)
+	})
+	if claimed != sharedLease || !added {
+		t.Fatal("Service member did not join the shared Lease")
+	}
+
+	if got, want := sharedLease.OwnedVIPs(), []string{"192.0.2.10", "192.0.2.20"}; !slices.Equal(got, want) {
+		t.Fatalf("OwnedVIPs() = %v, want %v", got, want)
+	}
+
+	serviceVIPs = []string{"192.0.2.30"}
+	if got, want := sharedLease.OwnedVIPs(), []string{"192.0.2.10", "192.0.2.30"}; !slices.Equal(got, want) {
+		t.Fatalf("OwnedVIPs() after provider update = %v, want %v", got, want)
+	}
+
+	if manager.Delete(id, "service", sharedLease) {
+		t.Fatal("deleting the Service member retired a shared Lease")
+	}
+	if got, want := sharedLease.OwnedVIPs(), []string{"192.0.2.10"}; !slices.Equal(got, want) {
+		t.Fatalf("OwnedVIPs() after member deletion = %v, want %v", got, want)
 	}
 }
 

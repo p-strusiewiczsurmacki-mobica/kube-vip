@@ -215,8 +215,8 @@ func TestRetainControlPlaneVIPsWithoutLeaderElection(t *testing.T) {
 	}
 }
 
-func TestRetainAnnotatedLeaseVIPsAcrossInstances(t *testing.T) {
-	annotations, err := kubevip.WithLeaseVIPs(nil, "release_b", recoveryProtocol, []string{"192.0.2.20"})
+func TestRetainAnnotatedLeaseVIPsRetainsDesiredVIP(t *testing.T) {
+	annotations, err := kubevip.WithLeaseVIPs(nil, "release_a", recoveryProtocol, []string{"192.0.2.20"})
 	if err != nil {
 		t.Fatalf("WithLeaseVIPs() error = %v", err)
 	}
@@ -231,14 +231,51 @@ func TestRetainAnnotatedLeaseVIPsAcrossInstances(t *testing.T) {
 	}
 	holders := make(map[string]string)
 	retained := make(map[string]struct{})
-	if err := processor.retainAnnotatedLeaseVIPs(context.Background(), holders, retained); err != nil {
+	desired := map[string]struct{}{"192.0.2.20": {}}
+	if err := processor.retainAnnotatedLeaseVIPs(context.Background(), holders, retained, desired); err != nil {
 		t.Fatalf("retainAnnotatedLeaseVIPs() error = %v", err)
 	}
 	if _, found := retained["192.0.2.20"]; !found {
-		t.Fatal("locally held VIP from another kube-vip instance was not retained")
+		t.Fatal("desired VIP from a locally held Lease was not retained")
 	}
 	if holders["other/release-b"] != holder {
 		t.Fatal("Lease holder cache was not populated from the ownership scan")
+	}
+}
+
+func TestRetainAnnotatedLeaseVIPsDoesNotRetainDeletedServiceVIP(t *testing.T) {
+	annotations, err := kubevip.WithLeaseVIPs(nil, "release_a", recoveryProtocol, []string{
+		"192.0.2.10", // still belongs to the Service returned by the API
+		"192.0.2.20", // stale claim left behind after another Service was deleted
+	})
+	if err != nil {
+		t.Fatalf("WithLeaseVIPs() error = %v", err)
+	}
+	holder := "node-a"
+	clientSet := recoveryTestClientWithLeases(t, holder, []coordinationv1.Lease{{
+		ObjectMeta: metav1.ObjectMeta{Name: "shared", Namespace: "default", Annotations: annotations},
+		Spec:       coordinationv1.LeaseSpec{HolderIdentity: &holder},
+	}})
+	processor := &Processor{
+		config: &kubevip.Config{
+			NodeName:         holder,
+			RoutingProtocol:  recoveryProtocol,
+			ServiceNamespace: "default",
+		},
+		clientSet: clientSet,
+	}
+
+	holders := make(map[string]string)
+	retained := make(map[string]struct{})
+	desired := map[string]struct{}{"192.0.2.10": {}}
+	if err := processor.retainAnnotatedLeaseVIPs(context.Background(), holders, retained, desired); err != nil {
+		t.Fatalf("retainAnnotatedLeaseVIPs() error = %v", err)
+	}
+	if _, found := retained["192.0.2.10"]; !found {
+		t.Fatal("current Service VIP was not retained")
+	}
+	if _, found := retained["192.0.2.20"]; found {
+		t.Fatal("deleted Service VIP was retained from stale Lease metadata")
 	}
 }
 

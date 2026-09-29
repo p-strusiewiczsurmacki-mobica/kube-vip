@@ -47,6 +47,8 @@ func (p *Processor) SyncServices(ctx *servicecontext.Context, svc *v1.Service, w
 
 func (p *Processor) syncServicesWithContext(operationCtx context.Context, svcCtx *servicecontext.Context,
 	svc *v1.Service, wg *sync.WaitGroup, usesLeaderElection bool) error {
+	defer p.refreshOwnedServiceVIPs()
+
 	log.Debug("[STARTING] Service Sync", "namespace", svc.Namespace, "name", svc.Name, "uid", svc.UID)
 
 	// Iterate through the synchronising services

@@ -26,7 +26,9 @@ func (cluster *Cluster) StartCluster(ctx context.Context, c *kubevip.Config,
 	log.Info("cluster membership", "namespace", leaseID.Namespace(), "lock", leaseID.Name(), "id", c.NodeName)
 
 	objectName := lease.ObjectName(leaseID, "cp")
-	objLease, _ := leaseMgr.Acquire(context.Background(), leaseID, objectName)
+	controlPlaneVIPs := controlPlaneElectionVIPs(c)
+	objLease, _ := leaseMgr.AcquireWithVIPProvider(context.Background(), leaseID, objectName,
+		lease.StaticVIPProvider(controlPlaneVIPs))
 	defer leaseMgr.Delete(leaseID, objectName, objLease)
 
 	wg := sync.WaitGroup{}
@@ -93,7 +95,8 @@ func (cluster *Cluster) StartCluster(ctx context.Context, c *kubevip.Config,
 		Config:           c,
 		LeaseID:          leaseID,
 		LeaseAnnotations: c.LeaseAnnotations,
-		VIPs:             controlPlaneElectionVIPs(c),
+		VIPs:             controlPlaneVIPs,
+		VIPsProvider:     objLease.OwnedVIPs,
 		Mgr:              em,
 		OnStartedLeading: func(ctx context.Context) {
 			objLease.ElectionStarted()

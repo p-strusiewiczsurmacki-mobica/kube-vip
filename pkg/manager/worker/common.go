@@ -97,15 +97,11 @@ func (c *Common) GlobalLeader(ctx context.Context, leaseName string) {
 		})
 	}
 
-	var vips []string
+	var vipProvider lease.VIPProvider
 	if c.svcProcessor != nil {
-		var err error
-		vips, err = c.svcProcessor.ElectionVIPs(servicesCtx)
-		if err != nil {
-			log.Warn("unable to list Service VIPs for Lease metadata", "err", err)
-		}
+		vipProvider = c.svcProcessor.OwnedServiceVIPs
 	}
-	c.runGlobalElection(servicesCtx, c, leaseName, c.config, c.electionMgr, vips)
+	c.runGlobalElectionWithVIPProvider(servicesCtx, c, leaseName, c.config, c.electionMgr, vipProvider)
 }
 
 func (c *Common) ServicesNoLeader(ctx context.Context) error {
@@ -165,6 +161,11 @@ func (c *Common) OnNewLeader(identity string) {
 
 func (c *Common) runGlobalElection(ctx context.Context, a election.Actions, leaseName string,
 	config *kubevip.Config, electionManager *election.Manager, vips []string) {
+	c.runGlobalElectionWithVIPProvider(ctx, a, leaseName, config, electionManager, lease.StaticVIPProvider(vips))
+}
+
+func (c *Common) runGlobalElectionWithVIPProvider(ctx context.Context, a election.Actions, leaseName string,
+	config *kubevip.Config, electionManager *election.Manager, vipProvider lease.VIPProvider) {
 
 	log.Debug("starting global election")
 	ns, leaseName := lease.NamespaceName(leaseName, config)
@@ -172,7 +173,7 @@ func (c *Common) runGlobalElection(ctx context.Context, a election.Actions, leas
 	leaseID := lease.NewID(config.LeaderElectionType, ns, leaseName)
 	objectName := lease.ObjectName(leaseID, "svcs0")
 
-	objLease, _ := c.leaseMgr.Acquire(context.Background(), leaseID, objectName)
+	objLease, _ := c.leaseMgr.AcquireWithVIPProvider(context.Background(), leaseID, objectName, vipProvider)
 	defer c.leaseMgr.Delete(leaseID, objectName, objLease)
 	electionCtx, cancelElection := objLease.NewElectionContext(ctx)
 	defer cancelElection()
@@ -212,7 +213,7 @@ func (c *Common) runGlobalElection(ctx context.Context, a election.Actions, leas
 		Config:           config,
 		LeaseID:          leaseID,
 		LeaseAnnotations: map[string]string{},
-		VIPs:             vips,
+		VIPsProvider:     objLease.OwnedVIPs,
 		Mgr:              electionManager,
 		OnStartedLeading: func(ctx context.Context) {
 			objLease.ElectionStarted()

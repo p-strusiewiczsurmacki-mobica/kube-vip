@@ -53,6 +53,8 @@ type Processor struct {
 	serviceCleanupMu sync.Mutex
 	recoveryMu       sync.Mutex
 	recovered        bool
+	ownedVIPsMu      sync.Mutex
+	ownedServiceVIPs atomic.Pointer[[]string]
 	serviceLocks     keymutex.KeyMutex
 	serviceLocksOnce sync.Once
 	electionsMutex   sync.Mutex
@@ -353,10 +355,20 @@ func (p *Processor) RecoverAddresses(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("list Services for address recovery: %w", err)
 	}
+	desiredServiceVIPs := make(map[string]struct{})
+	for index := range services.Items {
+		service := &services.Items[index]
+		if !p.serviceOwnsRecoverableVIP(service) {
+			continue
+		}
+		for _, address := range serviceVIPAddresses(service) {
+			desiredServiceVIPs[address] = struct{}{}
+		}
+	}
 	holders := make(map[string]string)
 	retainedVIPs := make(map[string]struct{})
 	if p.config.LeaderElectionType != "etcd" {
-		if err := p.retainAnnotatedLeaseVIPs(ctx, holders, retainedVIPs); err != nil {
+		if err := p.retainAnnotatedLeaseVIPs(ctx, holders, retainedVIPs, desiredServiceVIPs); err != nil {
 			return err
 		}
 	}
@@ -400,7 +412,7 @@ func (p *Processor) RecoverAddresses(ctx context.Context) error {
 }
 
 func (p *Processor) retainAnnotatedLeaseVIPs(ctx context.Context, holders map[string]string,
-	retainedVIPs map[string]struct{}) error {
+	retainedVIPs, desiredServiceVIPs map[string]struct{}) error {
 	namespace := v1.NamespaceAll
 	if p.config.ServiceNamespace != "" {
 		namespace = p.config.ServiceNamespace
@@ -428,7 +440,9 @@ func (p *Processor) retainAnnotatedLeaseVIPs(ctx context.Context, holders map[st
 			continue
 		}
 		for _, claimedVIP := range metadata.VIPs {
-			retainedVIPs[claimedVIP.Value] = struct{}{}
+			if _, desired := desiredServiceVIPs[claimedVIP.Value]; desired {
+				retainedVIPs[claimedVIP.Value] = struct{}{}
+			}
 		}
 	}
 	return nil
@@ -605,6 +619,8 @@ func serviceMatchesWatcher(svc *v1.Service, forcedOnly bool) bool {
 }
 
 func (p *Processor) deleteTrackedService(svc *v1.Service) error {
+	defer p.refreshOwnedServiceVIPs()
+
 	svcCtx, cleanupCtx, err := p.retireServiceContext(svc)
 	if err != nil {
 		return err
@@ -668,6 +684,8 @@ func (p *Processor) cancelPublishedServiceContext(uid types.UID) (*servicecontex
 // Stop acquires each instance's Service lock while stopping its workers and
 // marking it for reconfiguration.
 func (p *Processor) Stop() {
+	defer p.refreshOwnedServiceVIPs()
+
 	p.svcMap.Range(func(_, value any) bool {
 		if svcCtx, ok := value.(*servicecontext.Context); ok {
 			svcCtx.Cancel()
@@ -836,6 +854,36 @@ func (p *Processor) ServiceSnapshots() []*v1.Service {
 		unlockService()
 	}
 	return snapshots
+}
+
+// OwnedServiceVIPs returns the VIPs whose Service datapath is currently active.
+// It is safe to use as a dynamic provider for Lease ownership metadata.
+func (p *Processor) OwnedServiceVIPs() []string {
+	vips := p.ownedServiceVIPs.Load()
+	if vips == nil {
+		return nil
+	}
+	return append([]string(nil), (*vips)...)
+}
+
+func (p *Processor) refreshOwnedServiceVIPs() {
+	p.ownedVIPsMu.Lock()
+	defer p.ownedVIPsMu.Unlock()
+
+	instances := p.serviceInstances()
+	services := make([]*v1.Service, 0, len(instances))
+	for _, inst := range instances {
+		if inst == nil {
+			continue
+		}
+		unlockService := p.lockService(inst.UID())
+		if inst.AddCalled && inst.ServiceSnapshot != nil {
+			services = append(services, inst.ServiceSnapshot.DeepCopy())
+		}
+		unlockService()
+	}
+	vips := orderedServiceVIPs(services)
+	p.ownedServiceVIPs.Store(&vips)
 }
 
 // appendServiceInstance adds inst to the tracked collection. The caller must
