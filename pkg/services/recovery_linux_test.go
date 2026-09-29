@@ -86,7 +86,7 @@ func TestRecoverServiceAddressesUsesLeaseHolderIdentity(t *testing.T) {
 
 			clientSet := recoveryTestClient(t, test.holder)
 			processor := &Processor{
-				serviceLocks: newTestServiceLocks(),
+				serviceLock: newTestServiceLocks(),
 				config: &kubevip.Config{
 					EnableServicesElection: true,
 					LeaderElectionType:     "kubernetes",
@@ -97,6 +97,7 @@ func TestRecoverServiceAddressesUsesLeaseHolderIdentity(t *testing.T) {
 				clientSet:     clientSet,
 				lbClassFilter: lbClassFilter,
 			}
+			initializeTestElectionCoordinators(processor)
 			if err := processor.RecoverAddresses(context.Background()); err != nil {
 				t.Fatalf("recovering addresses: %v", err)
 			}
@@ -130,7 +131,7 @@ func TestServiceAddressRetainedUsesGlobalLeaseHolder(t *testing.T) {
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			processor := &Processor{
-				serviceLocks: newTestServiceLocks(),
+				serviceLock: newTestServiceLocks(),
 				config: &kubevip.Config{
 					EnableARP:          true,
 					NodeName:           "node-a",
@@ -139,6 +140,7 @@ func TestServiceAddressRetainedUsesGlobalLeaseHolder(t *testing.T) {
 				},
 				clientSet: recoveryTestClient(t, test.holder),
 			}
+			initializeTestElectionCoordinators(processor)
 			retained, err := processor.serviceAddressRetained(context.Background(), service, make(map[string]string))
 			if err != nil {
 				t.Fatalf("checking global lease ownership: %v", err)
@@ -161,7 +163,7 @@ func TestRetainControlPlaneVIPsUsesLeaseHolder(t *testing.T) {
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			processor := &Processor{
-				serviceLocks: newTestServiceLocks(),
+				serviceLock: newTestServiceLocks(),
 				config: &kubevip.Config{
 					EnableControlPlane: true,
 					NodeName:           "node-a",
@@ -174,6 +176,7 @@ func TestRetainControlPlaneVIPsUsesLeaseHolder(t *testing.T) {
 				},
 				clientSet: recoveryTestClient(t, test.holder),
 			}
+			initializeTestElectionCoordinators(processor)
 			retained := make(map[string]struct{})
 			canClean, err := processor.retainControlPlaneVIPs(context.Background(), make(map[string]string), retained)
 			if err != nil {
@@ -194,7 +197,7 @@ func TestRetainControlPlaneVIPsUsesLeaseHolder(t *testing.T) {
 // lease held elsewhere must not cause recovery to sweep it.
 func TestRetainControlPlaneVIPsWithoutLeaderElection(t *testing.T) {
 	processor := &Processor{
-		serviceLocks: newTestServiceLocks(),
+		serviceLock: newTestServiceLocks(),
 		config: &kubevip.Config{
 			EnableControlPlane: true,
 			NodeName:           "node-a",
@@ -206,6 +209,7 @@ func TestRetainControlPlaneVIPsWithoutLeaderElection(t *testing.T) {
 		},
 		clientSet: recoveryTestClient(t, "node-b"),
 	}
+	initializeTestElectionCoordinators(processor)
 	retained := make(map[string]struct{})
 	canClean, err := processor.retainControlPlaneVIPs(context.Background(), make(map[string]string), retained)
 	if err != nil {
@@ -230,10 +234,11 @@ func TestRetainAnnotatedLeaseVIPsRetainsDesiredVIP(t *testing.T) {
 		Spec:       coordinationv1.LeaseSpec{HolderIdentity: &holder},
 	}})
 	processor := &Processor{
-		serviceLocks: newTestServiceLocks(),
-		config:       &kubevip.Config{NodeName: holder, RoutingProtocol: recoveryProtocol},
-		clientSet:    clientSet,
+		serviceLock: newTestServiceLocks(),
+		config:      &kubevip.Config{NodeName: holder, RoutingProtocol: recoveryProtocol},
+		clientSet:   clientSet,
 	}
+	initializeTestElectionCoordinators(processor)
 	holders := make(map[string]string)
 	retained := make(map[string]struct{})
 	desired := map[string]struct{}{"192.0.2.20": {}}
@@ -262,7 +267,7 @@ func TestRetainAnnotatedLeaseVIPsDoesNotRetainDeletedServiceVIP(t *testing.T) {
 		Spec:       coordinationv1.LeaseSpec{HolderIdentity: &holder},
 	}})
 	processor := &Processor{
-		serviceLocks: newTestServiceLocks(),
+		serviceLock: newTestServiceLocks(),
 		config: &kubevip.Config{
 			NodeName:         holder,
 			RoutingProtocol:  recoveryProtocol,
@@ -270,6 +275,7 @@ func TestRetainAnnotatedLeaseVIPsDoesNotRetainDeletedServiceVIP(t *testing.T) {
 		},
 		clientSet: clientSet,
 	}
+	initializeTestElectionCoordinators(processor)
 
 	holders := make(map[string]string)
 	retained := make(map[string]struct{})
@@ -305,7 +311,7 @@ func TestLeaseOwnershipCurrentRejectsExpiredLease(t *testing.T) {
 
 func TestRecoverAddressesRemainsRetryableForHostnameControlPlaneVIP(t *testing.T) {
 	processor := &Processor{
-		serviceLocks: newTestServiceLocks(),
+		serviceLock: newTestServiceLocks(),
 		config: &kubevip.Config{
 			EnableControlPlane: true,
 			LeaderElectionType: "kubernetes",
@@ -316,6 +322,7 @@ func TestRecoverAddressesRemainsRetryableForHostnameControlPlaneVIP(t *testing.T
 		clientSet:     recoveryTestClient(t, "node-a"),
 		lbClassFilter: lbClassFilter,
 	}
+	initializeTestElectionCoordinators(processor)
 	if err := processor.RecoverAddresses(context.Background()); err != nil {
 		t.Fatalf("RecoverAddresses() error = %v", err)
 	}

@@ -45,11 +45,12 @@ func TestAddOrModifyStopsTrackedServiceWhenTypeChanges(t *testing.T) {
 			modified.Annotations = annotations
 
 			p := &Processor{
-				serviceLocks:     newTestServiceLocks(),
+				serviceLock:      newTestServiceLocks(),
 				config:           &kubevip.Config{},
 				leaseMgr:         lease.NewManager(),
 				ServiceInstances: []*instance.Instance{{ServiceUID: tracked.UID, ServiceSnapshot: tracked}},
 			}
+			initializeTestElectionCoordinators(p)
 			svcCtx := servicecontext.New(context.Background())
 			p.svcMap.Store(uid, svcCtx)
 
@@ -85,11 +86,13 @@ func TestAddOrModifyStopsTrackedServiceWhenTypeChanges(t *testing.T) {
 // always has a matching lease in the lease manager.
 func TestDropCancelledServiceContext(t *testing.T) {
 	newProcessor := func() *Processor {
-		return &Processor{
-			serviceLocks: newTestServiceLocks(),
-			config:       &kubevip.Config{},
-			leaseMgr:     lease.NewManager(),
+		processor := &Processor{
+			serviceLock: newTestServiceLocks(),
+			config:      &kubevip.Config{},
+			leaseMgr:    lease.NewManager(),
 		}
+		initializeTestElectionCoordinators(processor)
+		return processor
 	}
 
 	uid := types.UID("service-uid")
@@ -144,7 +147,8 @@ func TestDropCancelledServiceContext(t *testing.T) {
 }
 
 func TestEnsureServiceContextWaitsForOldWatcherCleanup(t *testing.T) {
-	p := &Processor{serviceLocks: newTestServiceLocks(), config: &kubevip.Config{}}
+	p := &Processor{serviceLock: newTestServiceLocks(), config: &kubevip.Config{}}
+	initializeTestElectionCoordinators(p)
 	service := &v1.Service{ObjectMeta: metav1.ObjectMeta{Name: "service", Namespace: "default", UID: "service"}}
 	oldContext := servicecontext.New(context.Background())
 	if !oldContext.StartWatching() {
@@ -189,10 +193,11 @@ func TestEnsureServiceContextWaitsForOldWatcherCleanup(t *testing.T) {
 // created again, so StartServicesLeaderElection no longer fails with "no existing lease found".
 func TestDropCancelledServiceContextAllowsLeaseRecreation(t *testing.T) {
 	p := &Processor{
-		serviceLocks: newTestServiceLocks(),
-		config:       &kubevip.Config{},
-		leaseMgr:     lease.NewManager(),
+		serviceLock: newTestServiceLocks(),
+		config:      &kubevip.Config{},
+		leaseMgr:    lease.NewManager(),
 	}
+	initializeTestElectionCoordinators(p)
 
 	svc := &v1.Service{
 		ObjectMeta: metav1.ObjectMeta{
@@ -230,10 +235,11 @@ func TestDropCancelledServiceContextAllowsLeaseRecreation(t *testing.T) {
 
 func TestOnStoppedLeadingDoesNotDeleteReplacementContext(t *testing.T) {
 	p := &Processor{
-		serviceLocks: newTestServiceLocks(),
-		config:       &kubevip.Config{},
-		leaseMgr:     lease.NewManager(),
+		serviceLock: newTestServiceLocks(),
+		config:      &kubevip.Config{},
+		leaseMgr:    lease.NewManager(),
 	}
+	initializeTestElectionCoordinators(p)
 
 	service := &v1.Service{
 		ObjectMeta: metav1.ObjectMeta{

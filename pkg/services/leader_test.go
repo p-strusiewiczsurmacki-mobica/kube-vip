@@ -28,13 +28,14 @@ func resetServiceReadiness(t *testing.T, svcCtx *servicecontext.Context) {
 
 func TestStartServicesLeaderElectionTracksSharedMembersAcrossReadinessLoss(t *testing.T) {
 	p := &Processor{
-		serviceLocks: newTestServiceLocks(),
-		config:       &kubevip.Config{EnableServicesElection: true},
-		leaseMgr:     lease.NewManager(),
+		serviceLock: newTestServiceLocks(),
+		config:      &kubevip.Config{EnableServicesElection: true},
+		leaseMgr:    lease.NewManager(),
 		serviceSync: func(context.Context, *servicecontext.Context, *v1.Service, *sync.WaitGroup, bool) error {
 			return nil
 		},
 	}
+	initializeTestElectionCoordinators(p)
 	annotations := map[string]string{kubevip.ServiceLease: "shared"}
 	firstService := &v1.Service{ObjectMeta: metav1.ObjectMeta{
 		Name: "first", Namespace: "default", UID: types.UID("first"), Annotations: annotations,
@@ -91,10 +92,11 @@ func TestStartServicesLeaderElectionTracksSharedMembersAcrossReadinessLoss(t *te
 
 func TestServiceMemberLeavingDoesNotCancelControlPlaneLease(t *testing.T) {
 	p := &Processor{
-		serviceLocks: newTestServiceLocks(),
-		config:       &kubevip.Config{}, leaseMgr: lease.NewManager(),
+		serviceLock: newTestServiceLocks(),
+		config:      &kubevip.Config{}, leaseMgr: lease.NewManager(),
 		serviceSync: func(context.Context, *servicecontext.Context, *v1.Service, *sync.WaitGroup, bool) error { return nil },
 	}
+	initializeTestElectionCoordinators(p)
 	service := &v1.Service{ObjectMeta: metav1.ObjectMeta{
 		Name: "service", Namespace: "default", UID: types.UID("service"),
 		Annotations: map[string]string{kubevip.ServiceLease: "shared"},
@@ -126,7 +128,8 @@ func TestServiceMemberLeavingDoesNotCancelControlPlaneLease(t *testing.T) {
 }
 
 func TestStartServicesLeaderElectionRejectsNilContext(t *testing.T) {
-	p := &Processor{serviceLocks: newTestServiceLocks()}
+	p := &Processor{serviceLock: newTestServiceLocks()}
+	initializeTestElectionCoordinators(p)
 	service := &v1.Service{ObjectMeta: metav1.ObjectMeta{Name: "service", UID: types.UID("service")}}
 	if err := p.StartServicesLeaderElection(nil, service, nil, true); err == nil {
 		t.Fatal("nil service context started leader election")
@@ -134,7 +137,8 @@ func TestStartServicesLeaderElectionRejectsNilContext(t *testing.T) {
 }
 
 func TestStartServicesLeaderElectionStaleContextReturnsPromptly(t *testing.T) {
-	p := &Processor{serviceLocks: newTestServiceLocks(), config: &kubevip.Config{}, leaseMgr: lease.NewManager()}
+	p := &Processor{serviceLock: newTestServiceLocks(), config: &kubevip.Config{}, leaseMgr: lease.NewManager()}
+	initializeTestElectionCoordinators(p)
 	service := &v1.Service{ObjectMeta: metav1.ObjectMeta{Name: "stale", Namespace: "default", UID: types.UID("stale")}}
 	staleContext := servicecontext.New(context.Background())
 	p.svcMap.Store(service.UID, servicecontext.New(context.Background()))
@@ -152,7 +156,8 @@ func TestStartServicesLeaderElectionStaleContextReturnsPromptly(t *testing.T) {
 }
 
 func TestStartServicesLeaderElectionRejectsTypedNilService(t *testing.T) {
-	p := &Processor{serviceLocks: newTestServiceLocks()}
+	p := &Processor{serviceLock: newTestServiceLocks()}
+	initializeTestElectionCoordinators(p)
 	var service *v1.Service
 	if err := p.StartServicesLeaderElection(servicecontext.New(context.Background()), service, nil, true); err == nil {
 		t.Fatal("typed-nil service started leader election")
@@ -160,7 +165,8 @@ func TestStartServicesLeaderElectionRejectsTypedNilService(t *testing.T) {
 }
 
 func TestStartServicesLeaderElectionDoesNotRegisterCancelledContext(t *testing.T) {
-	p := &Processor{serviceLocks: newTestServiceLocks(), config: &kubevip.Config{}, leaseMgr: lease.NewManager()}
+	p := &Processor{serviceLock: newTestServiceLocks(), config: &kubevip.Config{}, leaseMgr: lease.NewManager()}
+	initializeTestElectionCoordinators(p)
 	service := &v1.Service{ObjectMeta: metav1.ObjectMeta{Name: "cancelled", Namespace: "default", UID: types.UID("cancelled")}}
 	svcCtx := servicecontext.New(context.Background())
 	p.svcMap.Store(service.UID, svcCtx)
@@ -177,7 +183,8 @@ func TestStartServicesLeaderElectionDoesNotRegisterCancelledContext(t *testing.T
 
 func TestStartServicesLeaderElectionRegistersOneMemberForConcurrentCalls(t *testing.T) {
 	runner := &electionTestRunner{started: make(chan struct{})}
-	p := &Processor{serviceLocks: newTestServiceLocks(), config: &kubevip.Config{}, leaseMgr: lease.NewManager(), electionRun: runner.run}
+	p := &Processor{serviceLock: newTestServiceLocks(), config: &kubevip.Config{}, leaseMgr: lease.NewManager(), electionRun: runner.run}
+	initializeTestElectionCoordinators(p)
 	service := &v1.Service{ObjectMeta: metav1.ObjectMeta{Name: "concurrent", Namespace: "default", UID: types.UID("concurrent")}}
 	svcCtx := servicecontext.New(context.Background())
 	p.svcMap.Store(service.UID, svcCtx)
@@ -211,7 +218,8 @@ func TestStartServicesLeaderElectionRegistersOneMemberForConcurrentCalls(t *test
 
 func TestStartServicesLeaderElectionRecreatesCancelledLease(t *testing.T) {
 	runner := &electionTestRunner{started: make(chan struct{})}
-	p := &Processor{serviceLocks: newTestServiceLocks(), config: &kubevip.Config{}, leaseMgr: lease.NewManager(), electionRun: runner.run}
+	p := &Processor{serviceLock: newTestServiceLocks(), config: &kubevip.Config{}, leaseMgr: lease.NewManager(), electionRun: runner.run}
+	initializeTestElectionCoordinators(p)
 	service := &v1.Service{ObjectMeta: metav1.ObjectMeta{Name: "recreate", Namespace: "default", UID: types.UID("recreate")}}
 	namespace, name := lease.ServiceName(service)
 	id := lease.NewID(p.config.LeaderElectionType, namespace, name)
@@ -235,7 +243,8 @@ func TestStartServicesLeaderElectionRecreatesCancelledLease(t *testing.T) {
 
 func TestStartServicesLeaderElectionRestartsAfterLeaseLoss(t *testing.T) {
 	runner := &electionTestRunner{started: make(chan struct{})}
-	p := &Processor{serviceLocks: newTestServiceLocks(), config: &kubevip.Config{}, leaseMgr: lease.NewManager(), electionRun: runner.run}
+	p := &Processor{serviceLock: newTestServiceLocks(), config: &kubevip.Config{}, leaseMgr: lease.NewManager(), electionRun: runner.run}
+	initializeTestElectionCoordinators(p)
 	service := &v1.Service{ObjectMeta: metav1.ObjectMeta{Name: "restart", Namespace: "default", UID: types.UID("restart")}}
 	metrics.ServiceElectionAttemptsTotal.DeleteLabelValues(service.Namespace, service.Name)
 	defer metrics.ServiceElectionAttemptsTotal.DeleteLabelValues(service.Namespace, service.Name)
@@ -265,7 +274,8 @@ func TestStartServicesLeaderElectionRestartsAfterLeaseLoss(t *testing.T) {
 func TestServiceElectionWaitGroupDrainsCampaignOnShutdown(t *testing.T) {
 	releaseStop := make(chan struct{})
 	runner := &electionTestRunner{started: make(chan struct{}), stopping: make(chan struct{}), releaseStop: releaseStop}
-	p := &Processor{serviceLocks: newTestServiceLocks(), config: &kubevip.Config{}, leaseMgr: lease.NewManager(), electionRun: runner.run}
+	p := &Processor{serviceLock: newTestServiceLocks(), config: &kubevip.Config{}, leaseMgr: lease.NewManager(), electionRun: runner.run}
+	initializeTestElectionCoordinators(p)
 	service := &v1.Service{ObjectMeta: metav1.ObjectMeta{
 		Name: "shutdown", Namespace: "default", UID: types.UID("shutdown"),
 	}}
@@ -314,7 +324,8 @@ func TestServiceElectionWaitGroupDrainsCampaignOnShutdown(t *testing.T) {
 
 func TestServiceElectionAttemptWaitsForReadiness(t *testing.T) {
 	runner := &electionTestRunner{started: make(chan struct{})}
-	p := &Processor{serviceLocks: newTestServiceLocks(), config: &kubevip.Config{}, leaseMgr: lease.NewManager(), electionRun: runner.run}
+	p := &Processor{serviceLock: newTestServiceLocks(), config: &kubevip.Config{}, leaseMgr: lease.NewManager(), electionRun: runner.run}
+	initializeTestElectionCoordinators(p)
 	service := &v1.Service{ObjectMeta: metav1.ObjectMeta{Name: "readiness", Namespace: "default", UID: types.UID("readiness")}}
 	metrics.ServiceElectionAttemptsTotal.DeleteLabelValues(service.Namespace, service.Name)
 	defer metrics.ServiceElectionAttemptsTotal.DeleteLabelValues(service.Namespace, service.Name)
@@ -347,11 +358,12 @@ func TestSharedElectionDrainsBeforeRestartAfterAllMembersLoseReadiness(t *testin
 	releaseStop := make(chan struct{})
 	runner := &electionTestRunner{started: make(chan struct{}), stopping: make(chan struct{}), releaseStop: releaseStop}
 	p := &Processor{
-		serviceLocks: newTestServiceLocks(),
-		config:       &kubevip.Config{}, leaseMgr: lease.NewManager(), electionRun: runner.run,
+		serviceLock: newTestServiceLocks(),
+		config:      &kubevip.Config{}, leaseMgr: lease.NewManager(), electionRun: runner.run,
 		scheduleElectionRestart: func(restart func()) { restart() },
 		serviceSync:             func(context.Context, *servicecontext.Context, *v1.Service, *sync.WaitGroup, bool) error { return nil },
 	}
+	initializeTestElectionCoordinators(p)
 	annotations := map[string]string{kubevip.ServiceLease: "shared"}
 	firstService := &v1.Service{ObjectMeta: metav1.ObjectMeta{
 		Name: "first", Namespace: "default", UID: types.UID("first"), Annotations: annotations,
@@ -401,8 +413,8 @@ func TestSharedElectionDeletedCandidateNeverActivates(t *testing.T) {
 	var syncMutex sync.Mutex
 	syncCalls := map[types.UID]int{}
 	p := &Processor{
-		serviceLocks: newTestServiceLocks(),
-		config:       &kubevip.Config{}, leaseMgr: lease.NewManager(), electionRun: runner.run,
+		serviceLock: newTestServiceLocks(),
+		config:      &kubevip.Config{}, leaseMgr: lease.NewManager(), electionRun: runner.run,
 		serviceSync: func(_ context.Context, _ *servicecontext.Context, service *v1.Service, _ *sync.WaitGroup, _ bool) error {
 			syncMutex.Lock()
 			defer syncMutex.Unlock()
@@ -410,6 +422,7 @@ func TestSharedElectionDeletedCandidateNeverActivates(t *testing.T) {
 			return nil
 		},
 	}
+	initializeTestElectionCoordinators(p)
 	annotations := map[string]string{kubevip.ServiceLease: "shared"}
 	candidateService := &v1.Service{ObjectMeta: metav1.ObjectMeta{
 		Name: "candidate", Namespace: "default", UID: types.UID("candidate"), Annotations: annotations,
@@ -462,10 +475,11 @@ func TestSharedElectionDeletedCandidateNeverActivates(t *testing.T) {
 func TestSharedElectionReadinessIsMemberLocal(t *testing.T) {
 	runner := &electionTestRunner{started: make(chan struct{})}
 	p := &Processor{
-		serviceLocks: newTestServiceLocks(),
-		config:       &kubevip.Config{}, leaseMgr: lease.NewManager(), electionRun: runner.run,
+		serviceLock: newTestServiceLocks(),
+		config:      &kubevip.Config{}, leaseMgr: lease.NewManager(), electionRun: runner.run,
 		serviceSync: func(context.Context, *servicecontext.Context, *v1.Service, *sync.WaitGroup, bool) error { return nil },
 	}
+	initializeTestElectionCoordinators(p)
 	annotations := map[string]string{kubevip.ServiceLease: "shared"}
 	firstService := &v1.Service{ObjectMeta: metav1.ObjectMeta{
 		Name: "first", Namespace: "default", UID: types.UID("first"), Annotations: annotations,
@@ -513,12 +527,13 @@ func TestSharedElectionReadinessIsMemberLocal(t *testing.T) {
 func TestServiceOwnedCampaignSurvivesFinalServiceWhileControlPlaneRemains(t *testing.T) {
 	runner := &electionTestRunner{started: make(chan struct{}), stopping: make(chan struct{})}
 	p := &Processor{
-		serviceLocks: newTestServiceLocks(),
-		config:       &kubevip.Config{},
-		leaseMgr:     lease.NewManager(),
-		electionRun:  runner.run,
-		serviceSync:  func(context.Context, *servicecontext.Context, *v1.Service, *sync.WaitGroup, bool) error { return nil },
+		serviceLock: newTestServiceLocks(),
+		config:      &kubevip.Config{},
+		leaseMgr:    lease.NewManager(),
+		electionRun: runner.run,
+		serviceSync: func(context.Context, *servicecontext.Context, *v1.Service, *sync.WaitGroup, bool) error { return nil },
 	}
+	initializeTestElectionCoordinators(p)
 	service := &v1.Service{ObjectMeta: metav1.ObjectMeta{
 		Name: "service", Namespace: "default", UID: types.UID("service"),
 		Annotations: map[string]string{kubevip.ServiceLease: "shared"},

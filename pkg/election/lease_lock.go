@@ -18,13 +18,6 @@ type annotatedLeaseLock struct {
 	annotationsProvider func() (map[string]string, error)
 }
 
-func newAnnotatedLeaseLock(lock resourcelock.Interface, leases coordinationv1client.LeaseInterface,
-	name string, annotations map[string]string) resourcelock.Interface {
-	return newAnnotatedLeaseLockWithProvider(lock, leases, name, func() (map[string]string, error) {
-		return annotations, nil
-	})
-}
-
 func newAnnotatedLeaseLockWithProvider(lock resourcelock.Interface, leases coordinationv1client.LeaseInterface,
 	name string, annotationsProvider func() (map[string]string, error)) resourcelock.Interface {
 	return &annotatedLeaseLock{

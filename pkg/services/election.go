@@ -9,7 +9,6 @@ import (
 	"github.com/kube-vip/kube-vip/pkg/servicecontext"
 	"github.com/kube-vip/kube-vip/pkg/services/serviceelection"
 	v1 "k8s.io/api/core/v1"
-	"k8s.io/apimachinery/pkg/types"
 )
 
 var (
@@ -23,42 +22,27 @@ type electionAdapter struct {
 	processor *Processor
 }
 
-// electionCoordinatorManager wires the generic election coordinator to the
+// newElectionCoordinatorManager wires the generic election coordinator to the
 // Service processor. The coordinator itself does not depend on pkg/services.
-func (p *Processor) electionCoordinatorManager() *serviceelection.Manager {
-	p.electionCoordinatorsOnce.Do(func() {
-		var leaseStore serviceelection.LeaseStore
-		if p.leaseMgr != nil {
-			leaseStore = p.leaseMgr
-		}
-		adapter := &electionAdapter{processor: p}
-		p.electionCoordinators = serviceelection.NewManager(serviceelection.Dependencies{
-			Config: p.config, Leases: leaseStore, ElectionManager: p.electionMgr,
-			State: adapter, Datapath: adapter, Runner: adapter, Scheduler: adapter,
-		})
+func newElectionCoordinatorManager(p *Processor) *serviceelection.Manager {
+	var leaseStore serviceelection.LeaseStore
+	if p.leaseMgr != nil {
+		leaseStore = p.leaseMgr
+	}
+	adapter := &electionAdapter{processor: p}
+	return serviceelection.NewManager(serviceelection.Dependencies{
+		Config: p.config, Leases: leaseStore, ElectionManager: p.electionMgr,
+		State: adapter, Datapath: adapter, Runner: adapter, Scheduler: adapter,
 	})
-	return p.electionCoordinators
-}
-
-func (p *Processor) leaveElectionCoordinatorForContext(svcCtx *servicecontext.Context, service *v1.Service) {
-	p.electionCoordinatorManager().LeaveForContext(svcCtx, service)
-}
-
-func (p *Processor) watchElectionCoordinator(svcCtx *servicecontext.Context, service *v1.Service, wg *sync.WaitGroup) {
-	p.electionCoordinatorManager().Watch(svcCtx, service, wg)
-}
-
-func (p *Processor) currentServiceContext(uid types.UID) (*servicecontext.Context, error) {
-	p.serviceLocks.Lock(uid)
-	defer p.serviceLocks.Unlock(uid)
-	return p.getServiceContext(uid)
 }
 
 // IsCurrent implements serviceelection.ServiceState.
 
 func (a *electionAdapter) IsCurrent(service *v1.Service, svcCtx *servicecontext.Context, readinessGeneration uint64) bool {
 	p := a.processor
-	currentCtx, err := p.currentServiceContext(service.UID)
+	p.serviceLock.Lock(service.UID)
+	defer releaseServiceLock(p.serviceLock, service.UID)
+	currentCtx, err := p.getServiceContext(service.UID)
 	if err != nil || currentCtx != svcCtx || svcCtx.Ctx.Err() != nil ||
 		!svcCtx.ReadinessGenerationCurrent(readinessGeneration) {
 		return false
@@ -77,8 +61,8 @@ func (a *electionAdapter) Activate(ctx context.Context, service *v1.Service, svc
 func (a *electionAdapter) Cleanup(ctx context.Context, service *v1.Service, svcCtx *servicecontext.Context,
 	memberCurrent func() bool) error {
 	p := a.processor
-	p.serviceLocks.Lock(service.UID)
-	defer p.serviceLocks.Unlock(service.UID)
+	p.serviceLock.Lock(service.UID)
+	defer releaseServiceLock(p.serviceLock, service.UID)
 
 	currentSvcCtx, err := p.getServiceContext(service.UID)
 	if err != nil {

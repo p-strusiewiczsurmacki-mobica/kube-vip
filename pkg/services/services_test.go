@@ -92,7 +92,7 @@ func TestAddServiceDoesNotOverwriteActiveEndpoint(t *testing.T) {
 		t.Fatalf("create Kubernetes client: %v", err)
 	}
 	processor := &Processor{
-		serviceLocks: newTestServiceLocks(),
+		serviceLock: newTestServiceLocks(),
 		config: &kubevip.Config{
 			EnableServicesElection: true,
 			EnableARP:              true,
@@ -101,6 +101,7 @@ func TestAddServiceDoesNotOverwriteActiveEndpoint(t *testing.T) {
 		clientSet:        clientSet,
 		nodeLabelManager: noop.NewManager(),
 	}
+	initializeTestElectionCoordinators(processor)
 	serviceInstance := &instance.Instance{ServiceUID: staleService.UID, ServiceSnapshot: staleService}
 	processor.ServiceInstances = []*instance.Instance{serviceInstance}
 	if err := processor.addService(context.Background(), staleService, &sync.WaitGroup{}); err != nil {
@@ -123,10 +124,11 @@ func TestConfigureServiceRejectsCancelledContext(t *testing.T) {
 	}}
 	serviceInstance := &instance.Instance{ServiceUID: service.UID, ServiceSnapshot: service}
 	processor := &Processor{
-		serviceLocks:     newTestServiceLocks(),
+		serviceLock:      newTestServiceLocks(),
 		config:           &kubevip.Config{EnableServicesElection: true},
 		ServiceInstances: []*instance.Instance{serviceInstance},
 	}
+	initializeTestElectionCoordinators(processor)
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
@@ -168,11 +170,12 @@ func TestUpdateEgressConfigurationRejectsRecreatedService(t *testing.T) {
 	snapshot := trackedService.DeepCopy()
 	serviceInstance := &instance.Instance{ServiceUID: trackedService.UID, ServiceSnapshot: snapshot}
 	processor := &Processor{
-		serviceLocks:     newTestServiceLocks(),
+		serviceLock:      newTestServiceLocks(),
 		config:           &kubevip.Config{},
 		clientSet:        clientSet,
 		ServiceInstances: []*instance.Instance{serviceInstance},
 	}
+	initializeTestElectionCoordinators(processor)
 
 	if err := processor.updateEgressConfiguration(context.Background(), updatedService); err != nil {
 		t.Fatalf("updateEgressConfiguration() error = %v", err)
@@ -201,7 +204,7 @@ func TestConfigureServiceWatchesBothDHCPFamilies(t *testing.T) {
 		DHCPv6Client: dhcpv6,
 	}
 	processor := &Processor{
-		serviceLocks: newTestServiceLocks(),
+		serviceLock: newTestServiceLocks(),
 		config: &kubevip.Config{
 			DisableServiceUpdates: true,
 			EnableARP:             true,
@@ -212,6 +215,7 @@ func TestConfigureServiceWatchesBothDHCPFamilies(t *testing.T) {
 		ServiceInstances: []*instance.Instance{serviceInstance},
 		nodeLabelManager: noop.NewManager(),
 	}
+	initializeTestElectionCoordinators(processor)
 	wg := &sync.WaitGroup{}
 
 	ctx, cancel := context.WithCancel(context.Background())

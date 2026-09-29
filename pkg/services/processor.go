@@ -46,17 +46,16 @@ type Processor struct {
 
 	// instancesMutex protects membership of ServiceInstances. Mutable fields on each
 	// instance are protected separately by serviceLocks, keyed by Instance.UID().
-	ServiceInstances         []*instance.Instance
-	instancesMutex           sync.RWMutex
-	serviceCleanupMu         sync.Mutex
-	recoveryMu               sync.Mutex
-	recovered                bool
-	ownedVIPsMu              sync.Mutex
-	ownedServiceVIPs         atomic.Pointer[[]string]
-	serviceLocks             *ServiceLock
-	electionCoordinatorsOnce sync.Once
-	electionCoordinators     *serviceelection.Manager
-	electionLoops            sync.Map
+	ServiceInstances     []*instance.Instance
+	instancesMutex       sync.RWMutex
+	serviceCleanupMu     sync.Mutex
+	recoveryMu           sync.Mutex
+	recovered            bool
+	ownedVIPsMu          sync.Mutex
+	ownedServiceVIPs     atomic.Pointer[[]string]
+	serviceLock          *ServiceLock
+	electionCoordinators *serviceelection.Manager
+	electionLoops        sync.Map
 
 	bgpServer *bgp.Server
 
@@ -98,7 +97,7 @@ func NewServicesProcessor(config *kubevip.Config, bgpServer *bgp.Server,
 		config:           config,
 		lbClassFilter:    lbClassFilterFunc,
 		ServiceInstances: []*instance.Instance{},
-		serviceLocks:     NewServiceLock(),
+		serviceLock:      NewServiceLock(),
 		bgpServer:        bgpServer,
 		clientSet:        clientSet,
 		rwClientSet:      rwClientSet,
@@ -110,6 +109,7 @@ func NewServicesProcessor(config *kubevip.Config, bgpServer *bgp.Server,
 		TunnelMgr:        wireguard.NewTunnelManager(),
 		routeMgr:         routeMgr,
 	}
+	processor.electionCoordinators = newElectionCoordinatorManager(processor)
 	return processor
 }
 
@@ -168,8 +168,8 @@ func (p *Processor) Reconcile(ctx context.Context, event watch.Event, serviceFun
 	shouldGarbageCollect := false
 	var err error
 	if err := func() error {
-		p.serviceLocks.Lock(svc.UID)
-		defer p.serviceLocks.Unlock(svc.UID)
+		p.serviceLock.Lock(svc.UID)
+		defer releaseServiceLock(p.serviceLock, svc.UID)
 
 		svcInstance = p.findServiceInstance(svc)
 		_, usesCommonLease := svc.Annotations[kubevip.ServiceLease]
@@ -215,7 +215,7 @@ func (p *Processor) Reconcile(ctx context.Context, event watch.Event, serviceFun
 					metrics.ServiceReconcileErrorsTotal.WithLabelValues(svc.Namespace, svc.Name, "delete_service").Inc()
 					log.Error("(svc) unable to remove", "service", svc.UID)
 				}
-				p.leaveElectionCoordinatorForContext(svcCtx, oldService)
+				p.electionCoordinators.LeaveForContext(svcCtx, oldService)
 				// Reset the the svcCtx when it was garbage collected
 				// As the next function will create a new context when nil
 				svcCtx = nil
@@ -301,8 +301,8 @@ func (p *Processor) Reconcile(ctx context.Context, event watch.Event, serviceFun
 // admitServiceInstance constructs and tracks a Service instance under its
 // Service lock. Callers must not already hold that lock.
 func (p *Processor) admitServiceInstance(ctx context.Context, svc *v1.Service, wg *sync.WaitGroup) (*instance.Instance, bool, error) {
-	p.serviceLocks.Lock(svc.UID)
-	defer p.serviceLocks.Unlock(svc.UID)
+	p.serviceLock.Lock(svc.UID)
+	defer releaseServiceLock(p.serviceLock, svc.UID)
 
 	serviceInstance := p.findServiceInstance(svc)
 	if serviceInstance != nil {
@@ -645,8 +645,8 @@ func (p *Processor) retireServiceContext(svc *v1.Service) (*servicecontext.Conte
 		return nil, nil, fmt.Errorf("(svcs) unable to get context: %w", err)
 	}
 
-	p.serviceLocks.Lock(svc.UID)
-	defer p.serviceLocks.Unlock(svc.UID)
+	p.serviceLock.Lock(svc.UID)
+	defer releaseServiceLock(p.serviceLock, svc.UID)
 
 	// A replacement context may have been published while waiting for the lock.
 	currentContext, err := p.getServiceContext(svc.UID)
@@ -660,7 +660,7 @@ func (p *Processor) retireServiceContext(svc *v1.Service) (*servicecontext.Conte
 		if currentContext != contextBeforeLock {
 			currentContext.Cancel()
 		}
-		p.leaveElectionCoordinatorForContext(currentContext, svc)
+		p.electionCoordinators.LeaveForContext(currentContext, svc)
 		cleanupCtx = context.WithoutCancel(currentContext.Ctx)
 	}
 	return currentContext, cleanupCtx, nil
@@ -690,12 +690,12 @@ func (p *Processor) Stop() {
 	})
 	for _, instance := range p.serviceInstances() {
 		uid := instance.UID()
-		p.serviceLocks.Lock(uid)
+		p.serviceLock.Lock(uid)
 		for _, cluster := range instance.Clusters {
 			cluster.StopAndWait()
 		}
 		instance.AddCalled = false
-		p.serviceLocks.Unlock(uid)
+		releaseServiceLock(p.serviceLock, uid)
 	}
 }
 
@@ -740,8 +740,8 @@ func (p *Processor) ensureServiceContext(ctx context.Context, svc *v1.Service) (
 
 func (p *Processor) ensureServiceContextLocked(ctx context.Context, svc *v1.Service,
 	observed *servicecontext.Context) (*servicecontext.Context, bool, error) {
-	p.serviceLocks.Lock(svc.UID)
-	defer p.serviceLocks.Unlock(svc.UID)
+	p.serviceLock.Lock(svc.UID)
+	defer releaseServiceLock(p.serviceLock, svc.UID)
 
 	current, err := p.getServiceContext(svc.UID)
 	if err != nil {
@@ -808,11 +808,11 @@ func (p *Processor) updateActiveServicesMetric() {
 	counts := map[string]int{}
 	for _, inst := range p.serviceInstances() {
 		uid := inst.UID()
-		p.serviceLocks.Lock(uid)
+		p.serviceLock.Lock(uid)
 		if inst.ServiceSnapshot != nil {
 			counts[inst.ServiceSnapshot.Namespace]++
 		}
-		p.serviceLocks.Unlock(uid)
+		releaseServiceLock(p.serviceLock, uid)
 	}
 	metrics.ActiveServices.Reset()
 	for ns, count := range counts {
@@ -846,11 +846,11 @@ func (p *Processor) ServiceSnapshots() []*v1.Service {
 			continue
 		}
 		uid := inst.UID()
-		p.serviceLocks.Lock(uid)
+		p.serviceLock.Lock(uid)
 		if inst.ServiceSnapshot != nil {
 			snapshots = append(snapshots, inst.ServiceSnapshot.DeepCopy())
 		}
-		p.serviceLocks.Unlock(uid)
+		releaseServiceLock(p.serviceLock, uid)
 	}
 	return snapshots
 }
@@ -876,11 +876,11 @@ func (p *Processor) refreshOwnedServiceVIPs() {
 			continue
 		}
 		uid := inst.UID()
-		p.serviceLocks.Lock(uid)
+		p.serviceLock.Lock(uid)
 		if inst.AddCalled && inst.ServiceSnapshot != nil {
 			services = append(services, inst.ServiceSnapshot.DeepCopy())
 		}
-		p.serviceLocks.Unlock(uid)
+		releaseServiceLock(p.serviceLock, uid)
 	}
 	vips := instance.OrderedServiceAddresses(services)
 	p.ownedServiceVIPs.Store(&vips)
