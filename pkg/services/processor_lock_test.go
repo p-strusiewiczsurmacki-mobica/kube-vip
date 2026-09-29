@@ -41,6 +41,13 @@ func (l *testLabeler) RemoveLabel(map[string]string) error {
 	return l.removeErr
 }
 
+func checkServiceUnlock(t *testing.T, lock *ServiceLock, uid types.UID) {
+	t.Helper()
+	if err := lock.Unlock(uid); err != nil {
+		t.Errorf("Unlock(%q) error = %v", uid, err)
+	}
+}
+
 func TestServiceLockIsScopedByUID(t *testing.T) {
 	serviceLock := NewServiceLock()
 
@@ -50,7 +57,7 @@ func TestServiceLockIsScopedByUID(t *testing.T) {
 		go func() {
 			serviceLock.Lock(types.UID("service-b"))
 			close(acquired)
-			serviceLock.Unlock(types.UID("service-b"))
+			checkServiceUnlock(t, serviceLock, types.UID("service-b"))
 		}()
 
 		select {
@@ -58,7 +65,7 @@ func TestServiceLockIsScopedByUID(t *testing.T) {
 		case <-time.After(time.Second):
 			t.Fatal("different Service UID was blocked by another Service lock")
 		}
-		serviceLock.Unlock(types.UID("service-a"))
+		checkServiceUnlock(t, serviceLock, types.UID("service-a"))
 	})
 
 	t.Run("same Service remains serialized", func(t *testing.T) {
@@ -68,7 +75,7 @@ func TestServiceLockIsScopedByUID(t *testing.T) {
 		go func() {
 			serviceLock.Lock(uid)
 			close(acquired)
-			serviceLock.Unlock(uid)
+			checkServiceUnlock(t, serviceLock, uid)
 		}()
 
 		select {
@@ -76,7 +83,7 @@ func TestServiceLockIsScopedByUID(t *testing.T) {
 			t.Fatal("same Service UID acquired the lock concurrently")
 		case <-time.After(50 * time.Millisecond):
 		}
-		serviceLock.Unlock(uid)
+		checkServiceUnlock(t, serviceLock, uid)
 
 		select {
 		case <-acquired:
@@ -111,8 +118,8 @@ func TestAdmissionDoesNotSerializeUnrelatedInstanceConstruction(t *testing.T) {
 	var releaseOnce sync.Once
 	t.Cleanup(func() { releaseOnce.Do(func() { close(release) }) })
 	processor := &Processor{
-		serviceLocks: newTestServiceLocks(),
-		config:       &kubevip.Config{},
+		serviceLock: newTestServiceLocks(),
+		config:      &kubevip.Config{},
 		instanceFactory: func(_ context.Context, svc *v1.Service, _ *sync.WaitGroup) (*instance.Instance, error) {
 			if svc.Name == "slow" {
 				close(started)
@@ -121,6 +128,7 @@ func TestAdmissionDoesNotSerializeUnrelatedInstanceConstruction(t *testing.T) {
 			return &instance.Instance{ServiceUID: svc.UID, ServiceSnapshot: svc.DeepCopy()}, nil
 		},
 	}
+	initializeTestElectionCoordinators(processor)
 	slow := admissionTestService("slow", "192.0.2.10")
 	fast := admissionTestService("fast", "192.0.2.11")
 
@@ -164,7 +172,8 @@ func admissionTestService(name, address string) *v1.Service {
 func TestReconcileAndDeleteRejectTypedNilService(t *testing.T) {
 	var service *v1.Service
 	event := watch.Event{Object: service}
-	processor := &Processor{serviceLocks: newTestServiceLocks()}
+	processor := &Processor{serviceLock: newTestServiceLocks()}
+	initializeTestElectionCoordinators(processor)
 
 	if err := processor.Reconcile(context.Background(), event, nil, false, nil, nil); err == nil {
 		t.Fatal("Reconcile() accepted a typed-nil Service")
@@ -191,10 +200,11 @@ func TestDeleteServiceCleansUpAfterContextRemoval(t *testing.T) {
 	uid := types.UID("service-a")
 	service := &v1.Service{ObjectMeta: metav1.ObjectMeta{UID: uid, Name: "service-a", Namespace: "default"}}
 	processor := &Processor{
-		serviceLocks:     newTestServiceLocks(),
+		serviceLock:      newTestServiceLocks(),
 		config:           &kubevip.Config{EnableServicesElection: true},
 		ServiceInstances: []*instance.Instance{{ServiceUID: uid, ServiceSnapshot: service}},
 	}
+	initializeTestElectionCoordinators(processor)
 
 	if err := processor.deleteService(context.Background(), uid, servicecontext.New(context.Background())); err != nil {
 		t.Fatalf("deleteService() error = %v", err)
@@ -208,10 +218,11 @@ func TestRetireServiceContextCancelsBeforeServiceLockIsAvailable(t *testing.T) {
 	uid := types.UID("service-a")
 	service := &v1.Service{ObjectMeta: metav1.ObjectMeta{UID: uid, Name: "service-a", Namespace: "default"}}
 	svcCtx := servicecontext.New(context.Background())
-	processor := &Processor{serviceLocks: newTestServiceLocks(), config: &kubevip.Config{}}
+	processor := &Processor{serviceLock: newTestServiceLocks(), config: &kubevip.Config{}}
+	initializeTestElectionCoordinators(processor)
 	processor.svcMap.Store(uid, svcCtx)
 
-	processor.serviceLocks.Lock(uid)
+	processor.serviceLock.Lock(uid)
 	done := make(chan error, 1)
 	go func() {
 		_, _, err := processor.retireServiceContext(service)
@@ -221,10 +232,10 @@ func TestRetireServiceContextCancelsBeforeServiceLockIsAvailable(t *testing.T) {
 	select {
 	case <-svcCtx.Ctx.Done():
 	case <-time.After(time.Second):
-		processor.serviceLocks.Unlock(uid)
+		checkServiceUnlock(t, processor.serviceLock, uid)
 		t.Fatal("retireServiceContext waited for the Service lock before cancelling")
 	}
-	processor.serviceLocks.Unlock(uid)
+	checkServiceUnlock(t, processor.serviceLock, uid)
 
 	select {
 	case err := <-done:
@@ -237,7 +248,8 @@ func TestRetireServiceContextCancelsBeforeServiceLockIsAvailable(t *testing.T) {
 }
 
 func TestDeleteServiceIsIdempotentWhenInstanceIsMissing(t *testing.T) {
-	processor := &Processor{serviceLocks: newTestServiceLocks()}
+	processor := &Processor{serviceLock: newTestServiceLocks()}
+	initializeTestElectionCoordinators(processor)
 	if err := processor.deleteService(context.Background(), types.UID("missing-service")); err != nil {
 		t.Fatalf("deleteService() error = %v, want nil", err)
 	}
@@ -250,11 +262,12 @@ func TestAddServiceMarksPreTrackedInstanceAdded(t *testing.T) {
 	}}
 	serviceInstance := &instance.Instance{ServiceUID: uid, ServiceSnapshot: service}
 	processor := &Processor{
-		serviceLocks:     newTestServiceLocks(),
+		serviceLock:      newTestServiceLocks(),
 		config:           &kubevip.Config{DisableServiceUpdates: true, EnableServicesElection: true},
 		ServiceInstances: []*instance.Instance{serviceInstance},
 		nodeLabelManager: &testLabeler{},
 	}
+	initializeTestElectionCoordinators(processor)
 
 	if err := processor.addService(context.Background(), service, &sync.WaitGroup{}); err != nil {
 		t.Fatalf("addService() error = %v", err)
@@ -273,7 +286,8 @@ func TestPrepareServiceInstanceRejectsCancelledContext(t *testing.T) {
 	}}
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	processor := &Processor{serviceLocks: newTestServiceLocks(), config: &kubevip.Config{}}
+	processor := &Processor{serviceLock: newTestServiceLocks(), config: &kubevip.Config{}}
+	initializeTestElectionCoordinators(processor)
 
 	created, err := processor.prepareServiceInstance(ctx, service, &sync.WaitGroup{})
 	if !errors.Is(err, context.Canceled) {
@@ -291,13 +305,14 @@ func TestPrepareServiceInstanceUsesSharedFactory(t *testing.T) {
 	service := admissionTestService("service", "192.0.2.10")
 	called := false
 	processor := &Processor{
-		serviceLocks: newTestServiceLocks(),
-		config:       &kubevip.Config{},
+		serviceLock: newTestServiceLocks(),
+		config:      &kubevip.Config{},
 		instanceFactory: func(_ context.Context, svc *v1.Service, _ *sync.WaitGroup) (*instance.Instance, error) {
 			called = true
 			return &instance.Instance{ServiceUID: svc.UID, ServiceSnapshot: svc.DeepCopy()}, nil
 		},
 	}
+	initializeTestElectionCoordinators(processor)
 
 	created, err := processor.prepareServiceInstance(context.Background(), service, &sync.WaitGroup{})
 	if err != nil {
@@ -316,7 +331,7 @@ func TestStopMarksServiceInstanceForReconfiguration(t *testing.T) {
 	service := &v1.Service{ObjectMeta: metav1.ObjectMeta{
 		UID: uid, Name: "service-a", Namespace: "default",
 	}}
-	processor := &Processor{serviceLocks: newTestServiceLocks(), ServiceInstances: []*instance.Instance{{
+	processor := &Processor{serviceLock: newTestServiceLocks(), ServiceInstances: []*instance.Instance{{
 		ServiceUID:      uid,
 		ServiceSnapshot: service,
 		AddCalled:       true,
@@ -343,11 +358,12 @@ func TestAddServiceAfterDeleteTracksOneFreshInstance(t *testing.T) {
 		UID: uid, Name: "service-a", Namespace: "default",
 	}}
 	processor := &Processor{
-		serviceLocks:     newTestServiceLocks(),
+		serviceLock:      newTestServiceLocks(),
 		config:           &kubevip.Config{DisableServiceUpdates: true, EnableServicesElection: true},
 		ServiceInstances: []*instance.Instance{{ServiceUID: uid, ServiceSnapshot: service}},
 		nodeLabelManager: &testLabeler{},
 	}
+	initializeTestElectionCoordinators(processor)
 
 	action := processor.getServiceInstanceAction(service)
 	if action != ActionAdd {
@@ -379,11 +395,12 @@ func TestAddServiceCleansUpAfterConfigurationFailure(t *testing.T) {
 	serviceInstance := &instance.Instance{ServiceUID: uid, ServiceSnapshot: service}
 	labeler := &testLabeler{addErr: errors.New("add label")}
 	processor := &Processor{
-		serviceLocks:     newTestServiceLocks(),
+		serviceLock:      newTestServiceLocks(),
 		config:           &kubevip.Config{DisableServiceUpdates: true, EnableServicesElection: true},
 		ServiceInstances: []*instance.Instance{serviceInstance},
 		nodeLabelManager: labeler,
 	}
+	initializeTestElectionCoordinators(processor)
 
 	if err := processor.addService(context.Background(), service, &sync.WaitGroup{}); err == nil {
 		t.Fatal("addService() error = nil, want configuration failure")
@@ -403,11 +420,12 @@ func TestDeleteServiceKeepsInstanceWhenLabelRemovalFails(t *testing.T) {
 	}}
 	serviceInstance := &instance.Instance{ServiceUID: uid, ServiceSnapshot: service, LabelAdded: true}
 	processor := &Processor{
-		serviceLocks:     newTestServiceLocks(),
+		serviceLock:      newTestServiceLocks(),
 		config:           &kubevip.Config{},
 		ServiceInstances: []*instance.Instance{serviceInstance},
 		nodeLabelManager: &testLabeler{removeErr: errors.New("remove label")},
 	}
+	initializeTestElectionCoordinators(processor)
 
 	if err := processor.deleteService(context.Background(), uid); err == nil {
 		t.Fatal("deleteService() error = nil, want label removal error")
@@ -425,11 +443,12 @@ func TestDeleteServiceInstanceDoesNotDeleteReplacement(t *testing.T) {
 	failedInstance := &instance.Instance{ServiceUID: uid, ServiceSnapshot: service}
 	replacement := &instance.Instance{ServiceUID: uid, ServiceSnapshot: service.DeepCopy()}
 	processor := &Processor{
-		serviceLocks:     newTestServiceLocks(),
+		serviceLock:      newTestServiceLocks(),
 		config:           &kubevip.Config{},
 		ServiceInstances: []*instance.Instance{replacement},
 		nodeLabelManager: &testLabeler{},
 	}
+	initializeTestElectionCoordinators(processor)
 
 	if err := processor.deleteServiceInstance(context.Background(), failedInstance); err != nil {
 		t.Fatalf("deleteServiceInstance() error = %v", err)
@@ -446,13 +465,14 @@ func TestDeleteTrackedServiceCleansUpElectedServiceImmediately(t *testing.T) {
 	}}
 	runner := &electionTestRunner{started: make(chan struct{})}
 	processor := &Processor{
-		serviceLocks:     newTestServiceLocks(),
+		serviceLock:      newTestServiceLocks(),
 		config:           &kubevip.Config{EnableServicesElection: true},
 		ServiceInstances: []*instance.Instance{{ServiceUID: uid, ServiceSnapshot: service}},
 		leaseMgr:         lease.NewManager(),
 		electionRun:      runner.run,
 		serviceSync:      func(context.Context, *servicecontext.Context, *v1.Service, *sync.WaitGroup, bool) error { return nil },
 	}
+	initializeTestElectionCoordinators(processor)
 	svcCtx := servicecontext.New(context.Background())
 	processor.svcMap.Store(uid, svcCtx)
 	leaseNamespace, serviceLease := lease.ServiceName(service)
@@ -487,7 +507,7 @@ func TestDeleteTrackedServiceReturnsPersistentCleanupFailure(t *testing.T) {
 	labeler := &testLabeler{removeErr: errors.New("permanent remove label")}
 	runner := &electionTestRunner{started: make(chan struct{})}
 	processor := &Processor{
-		serviceLocks:     newTestServiceLocks(),
+		serviceLock:      newTestServiceLocks(),
 		config:           &kubevip.Config{},
 		ServiceInstances: []*instance.Instance{{ServiceUID: uid, ServiceSnapshot: service, LabelAdded: true}},
 		nodeLabelManager: labeler,
@@ -495,6 +515,7 @@ func TestDeleteTrackedServiceReturnsPersistentCleanupFailure(t *testing.T) {
 		electionRun:      runner.run,
 		serviceSync:      func(context.Context, *servicecontext.Context, *v1.Service, *sync.WaitGroup, bool) error { return nil },
 	}
+	initializeTestElectionCoordinators(processor)
 	svcCtx := servicecontext.New(context.Background())
 	processor.svcMap.Store(uid, svcCtx)
 	leaseNamespace, serviceLease := lease.ServiceName(service)
@@ -534,7 +555,7 @@ func TestServiceSnapshotsCopiesMutableServiceState(t *testing.T) {
 	service := &v1.Service{ObjectMeta: metav1.ObjectMeta{
 		UID: uid, Name: "service-a", Namespace: "default",
 	}}
-	processor := &Processor{serviceLocks: newTestServiceLocks(), ServiceInstances: []*instance.Instance{{
+	processor := &Processor{serviceLock: newTestServiceLocks(), ServiceInstances: []*instance.Instance{{
 		ServiceUID:      uid,
 		ServiceSnapshot: service,
 	}}}
@@ -557,16 +578,17 @@ func TestServiceSnapshotsSerializesSnapshotReplacement(t *testing.T) {
 			UID: uid, Name: "service-a", Namespace: "default",
 		}},
 	}
-	processor := &Processor{serviceLocks: newTestServiceLocks(), ServiceInstances: []*instance.Instance{serviceInstance}}
+	processor := &Processor{serviceLock: newTestServiceLocks(), ServiceInstances: []*instance.Instance{serviceInstance}}
+	initializeTestElectionCoordinators(processor)
 
 	var wg sync.WaitGroup
 	wg.Go(func() {
 		for range 100 {
-			processor.serviceLocks.Lock(uid)
+			processor.serviceLock.Lock(uid)
 			serviceInstance.ServiceSnapshot = &v1.Service{ObjectMeta: metav1.ObjectMeta{
 				UID: uid, Name: "service-a", Namespace: "default",
 			}}
-			processor.serviceLocks.Unlock(uid)
+			checkServiceUnlock(t, processor.serviceLock, uid)
 		}
 	})
 	wg.Go(func() {
@@ -589,13 +611,14 @@ func TestEndpointReconcileWaitsForServiceLock(t *testing.T) {
 	uid := types.UID("service-a")
 	config := &kubevip.Config{}
 	processor := &Processor{
-		serviceLocks: newTestServiceLocks(),
-		config:       config,
+		serviceLock: newTestServiceLocks(),
+		config:      config,
 	}
+	initializeTestElectionCoordinators(processor)
 	epProcessor := endpoints.NewEndpointProcessor(config, providers.NewEndpointslices(), nil,
-		&processor.ServiceInstances, &processor.instancesMutex, nil, nil, nil, processor.serviceLocks)
+		&processor.ServiceInstances, &processor.instancesMutex, nil, nil, nil, processor.serviceLock)
 
-	processor.serviceLocks.Lock(uid)
+	processor.serviceLock.Lock(uid)
 
 	service := &v1.Service{
 		ObjectMeta: metav1.ObjectMeta{Name: "svc", Namespace: "default", UID: uid},
@@ -622,12 +645,12 @@ func TestEndpointReconcileWaitsForServiceLock(t *testing.T) {
 
 	select {
 	case <-reconciled:
-		processor.serviceLocks.Unlock(uid)
+		checkServiceUnlock(t, processor.serviceLock, uid)
 		t.Fatal("endpoint reconcile ignored the Service lock held by deletion")
 	case <-time.After(50 * time.Millisecond):
 	}
 
-	processor.serviceLocks.Unlock(uid)
+	checkServiceUnlock(t, processor.serviceLock, uid)
 	select {
 	case err := <-reconciled:
 		if err != nil {

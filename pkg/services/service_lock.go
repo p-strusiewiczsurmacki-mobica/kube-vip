@@ -2,6 +2,7 @@ package services
 
 import (
 	"fmt"
+	log "log/slog"
 
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/utils/keymutex"
@@ -31,4 +32,10 @@ func (l *ServiceLock) Unlock(uid types.UID) error {
 		return fmt.Errorf("unlock service %q: %w", uid, err)
 	}
 	return nil
+}
+
+func releaseServiceLock(lock *ServiceLock, uid types.UID) {
+	if err := lock.Unlock(uid); err != nil {
+		log.Error("failed to release service lock", "uid", uid, "err", err)
+	}
 }
