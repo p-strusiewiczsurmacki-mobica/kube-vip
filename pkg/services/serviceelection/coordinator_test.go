@@ -28,7 +28,8 @@ type testAdapter struct {
 	releaseCleanup     <-chan struct{}
 }
 
-func (a *testAdapter) IsCurrent(service *v1.Service, ctx *servicecontext.Context, generation uint64) bool {
+func (a *testAdapter) IsCurrent(service *v1.Service, ctx *servicecontext.Context,
+	generation servicecontext.ReadinessGeneration) bool {
 	a.mutex.Lock()
 	current := a.current[service.UID]
 	a.mutex.Unlock()
@@ -132,7 +133,7 @@ func readyMember(t *testing.T, manager *Manager, adapter *testAdapter, service *
 	adapter.current[service.UID] = ctx
 	adapter.mutex.Unlock()
 	ctx.SignalReadiness()
-	generation, _, _ := ctx.ReadinessState()
+	generation := ctx.CurrentReadiness()
 	member, joined := manager.join(ctx, service, generation)
 	if !joined {
 		t.Fatal("ready Service did not join its coordinator")
@@ -148,12 +149,12 @@ func TestManagerIssuesNewClaimForEachReadinessGeneration(t *testing.T) {
 	firstContext := first.serviceContext
 	first.coordinator.closeMember(first)
 
-	generation, _, _ := firstContext.ReadinessState()
+	generation := firstContext.CurrentReadiness()
 	if !firstContext.ResetReadinessGeneration(generation) {
 		t.Fatal("failed to reset readiness generation")
 	}
 	firstContext.SignalReadiness()
-	secondGeneration, _, _ := firstContext.ReadinessState()
+	secondGeneration := firstContext.CurrentReadiness()
 	second, joined := manager.join(firstContext, service, secondGeneration)
 	if !joined {
 		t.Fatal("new readiness generation did not join")
@@ -242,7 +243,7 @@ func TestReplacingUIDGenerationKeepsSiblingClaim(t *testing.T) {
 	adapter.current[service.UID] = replacementContext
 	adapter.mutex.Unlock()
 	replacementContext.SignalReadiness()
-	generation, _, _ := replacementContext.ReadinessState()
+	generation := replacementContext.CurrentReadiness()
 	replacement, joined := manager.join(replacementContext, service, generation)
 	if !joined {
 		t.Fatal("replacement generation did not join")
@@ -484,7 +485,7 @@ func TestManagerRejectsStaleReadinessGeneration(t *testing.T) {
 	ctx := servicecontext.New(context.Background())
 	adapter.current[service.UID] = ctx
 	ctx.SignalReadiness()
-	generation, _, _ := ctx.ReadinessState()
+	generation := ctx.CurrentReadiness()
 	if !ctx.ResetReadinessGeneration(generation) {
 		t.Fatal("failed to advance readiness generation")
 	}

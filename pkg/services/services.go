@@ -62,11 +62,11 @@ func (p *Processor) syncServicesWithContext(operationCtx context.Context, svcCtx
 	case ActionAdd:
 		log.Debug("[service] add", "namespace", svc.Namespace, "name", svc.Name, "uid", svc.UID)
 		if !usesLeaderElection {
-			releaseReadiness, ready := svcCtx.WaitForReadiness()
+			readinessReservation, ready := svcCtx.WaitForReadiness()
 			if !ready {
 				return nil
 			}
-			defer releaseReadiness()
+			defer readinessReservation.Release()
 		}
 
 		if err := p.addService(operationCtx, svc, wg); err != nil {

@@ -70,7 +70,7 @@ func (p *Processor) Reconcile(svcCtx *servicecontext.Context, event watch.Event,
 		return false, fmt.Errorf("service operation lock is not configured")
 	}
 	endpointCount := 0
-	var readinessLossGeneration uint64
+	var readinessLossGeneration servicecontext.ReadinessGeneration
 	clearNoEndpoints := false
 	updatedService, inst, changed, skip, err := func() (*v1.Service, *instance.Instance, bool, bool, error) {
 		p.serviceLocks.Lock(service.UID)
@@ -129,7 +129,7 @@ func (p *Processor) Reconcile(svcCtx *servicecontext.Context, event watch.Event,
 					}
 				}
 			} else if svcCtx.IsReady() {
-				readinessLossGeneration, _, _ = svcCtx.ReadinessState()
+				readinessLossGeneration = svcCtx.CurrentReadiness()
 				clearNoEndpoints = true
 			}
 		}

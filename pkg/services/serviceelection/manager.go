@@ -33,7 +33,7 @@ func NewManager(dependencies *Dependencies) (*Manager, error) {
 // join registers the current ready generation of a Service. A caller racing
 // coordinator retirement retries against its replacement.
 func (m *Manager) join(svcCtx *servicecontext.Context, service *v1.Service,
-	readinessGeneration uint64) (*member, bool) {
+	readinessGeneration servicecontext.ReadinessGeneration) (*member, bool) {
 	if svcCtx == nil || service == nil {
 		return nil, false
 	}
@@ -91,11 +91,11 @@ func (m *Manager) Watch(svcCtx *servicecontext.Context, service *v1.Service, wg 
 		if svcCtx.Ctx.Err() != nil {
 			return
 		}
-		generation, ready, lost := svcCtx.ReadinessState()
+		generation := svcCtx.CurrentReadiness()
 		select {
 		case <-svcCtx.Ctx.Done():
 			return
-		case <-ready:
+		case <-generation.Ready():
 		}
 		if !svcCtx.ReadinessGenerationCurrent(generation) {
 			continue
@@ -119,7 +119,7 @@ func (m *Manager) Watch(svcCtx *servicecontext.Context, service *v1.Service, wg 
 		case <-svcCtx.Ctx.Done():
 			member.coordinator.closeMember(member)
 			return
-		case <-lost:
+		case <-generation.Lost():
 			member.coordinator.closeMember(member)
 		}
 	}

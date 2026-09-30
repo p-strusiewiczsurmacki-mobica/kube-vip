@@ -563,17 +563,17 @@ func TestReconcileServicesElectionDoesNotStartElectionLoop(t *testing.T) {
 		}
 	}
 
-	generation, ready, lost := svcCtx.ReadinessState()
-	if generation != 1 || !svcCtx.IsReady() {
-		t.Fatalf("readiness state = generation %d, ready %t; want generation 1 ready", generation, svcCtx.IsReady())
+	generation := svcCtx.CurrentReadiness()
+	if generation.ID() != 1 || !svcCtx.IsReady() {
+		t.Fatalf("readiness state = generation %d, ready %t; want generation 1 ready", generation.ID(), svcCtx.IsReady())
 	}
 	select {
-	case <-ready:
+	case <-generation.Ready():
 	default:
 		t.Fatal("endpoint reconciliation did not signal readiness")
 	}
 	select {
-	case <-lost:
+	case <-generation.Lost():
 		t.Fatal("endpoint reconciliation unexpectedly reset readiness")
 	default:
 	}
