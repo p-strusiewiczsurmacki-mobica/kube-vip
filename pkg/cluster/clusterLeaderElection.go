@@ -58,11 +58,12 @@ func (cluster *Cluster) StartCluster(ctx context.Context, c *kubevip.Config,
 		}
 	}
 
+	var electionSession *lease.ElectionSession
 	for {
-		if !objLease.BeginElection() {
+		session, owner := objLease.AcquireElection()
+		if !owner {
 			log.Debug("this election was already done, shared lease", "lease", leaseName)
-			leaderGeneration, elected := objLease.WaitForLeaderGeneration(electionCtx)
-			if !elected {
+			if !session.WaitForLeader(electionCtx) {
 				if electionCtx.Err() != nil {
 					return nil
 				}
@@ -79,7 +80,7 @@ func (cluster *Cluster) StartCluster(ctx context.Context, c *kubevip.Config,
 			})
 
 			log.Debug("cluster waiting for shared election to finish", "lease", leaseName)
-			objLease.WaitForElectionEndAfter(electionCtx, leaderGeneration)
+			session.WaitForEnd(electionCtx)
 			cancelLeader()
 			leaderWG.Wait()
 
@@ -87,9 +88,10 @@ func (cluster *Cluster) StartCluster(ctx context.Context, c *kubevip.Config,
 
 			return nil
 		}
+		electionSession = session
 		break
 	}
-	defer objLease.ElectionStopped()
+	defer electionSession.Stopped()
 
 	run := &election.RunConfig{
 		Config:           c,
@@ -99,11 +101,15 @@ func (cluster *Cluster) StartCluster(ctx context.Context, c *kubevip.Config,
 		VIPsProvider:     objLease.OwnedVIPs,
 		Mgr:              em,
 		OnStartedLeading: func(ctx context.Context) {
-			objLease.ElectionStarted()
+			if !electionSession.Started() {
+				return
+			}
 			cluster.OnStartedLeading(ctx, c, em, bgpServer, killFunc, false)
 		},
 		OnStoppedLeading: func() {
-			objLease.ElectionStopped()
+			if !electionSession.Stopped() {
+				return
+			}
 			cluster.OnStoppedLeading(c, bgpServer)
 		},
 		OnNewLeader: func(identity string) {
