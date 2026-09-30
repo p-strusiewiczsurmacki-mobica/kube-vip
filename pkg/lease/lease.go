@@ -5,6 +5,7 @@ import (
 	"fmt"
 	log "log/slog"
 	"os"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -26,17 +27,45 @@ func NewManager() *Manager {
 	}
 }
 
-// Add adds lease to the manager.
-// It returns three values:
-// - lease for the object
-// - isNewObject, which reports if it is a new object that is being handled
-// - isSharedLease, which is true if object shares the lease with another object
-// If object is new but not shared, we should start leaderelection and sync it
-// If object is new and shared, we should only sync it as the leaderelection should be already handled
-// If object is not new we should do nothing
+// Add creates or retrieves the lease identified by id.
 func (m *Manager) Add(ctx context.Context, id ID) *Lease {
 	m.lock.Lock()
 	defer m.lock.Unlock()
+	return m.addLocked(ctx, id)
+}
+
+// Acquire creates or retrieves a lease and atomically registers objectName
+// together with its current VIP ownership provider. The returned bool reports
+// whether this object was newly registered.
+func (m *Manager) Acquire(ctx context.Context, id ID, objectName string,
+	vipProvider VIPProvider) (*Lease, bool) {
+	m.lock.Lock()
+	defer m.lock.Unlock()
+
+	lease := m.addLocked(ctx, id)
+	return lease, lease.AddWithVIPProvider(objectName, vipProvider)
+}
+
+// Claim atomically registers objectName against an existing lease. It returns
+// nil when the lease was retired before the caller could join it.
+func (m *Manager) Claim(id ID, objectName string) (*Lease, bool) {
+	return m.ClaimWithVIPProvider(id, objectName, nil)
+}
+
+// ClaimWithVIPProvider atomically registers objectName and its VIP ownership
+// provider against an existing lease.
+func (m *Manager) ClaimWithVIPProvider(id ID, objectName string, vipProvider VIPProvider) (*Lease, bool) {
+	m.lock.Lock()
+	defer m.lock.Unlock()
+
+	lease, exists := m.leases[id.NamespacedName()]
+	if !exists {
+		return nil, false
+	}
+	return lease, lease.AddWithVIPProvider(objectName, vipProvider)
+}
+
+func (m *Manager) addLocked(ctx context.Context, id ID) *Lease {
 
 	// A lease whose context is already cancelled cannot be handed out again:
 	// anything derived from it would be cancelled straight away. Replace it.
@@ -49,8 +78,8 @@ func (m *Manager) Add(ctx context.Context, id ID) *Lease {
 }
 
 // Delete removes the object from the lease it was added to and cancels that lease
-// once its last object is gone. With a common lease, the siblings that still use
-// it keep it alive.
+// once its last object is gone. It reports whether the lease was retired. With a
+// common lease, the siblings that still use it keep it alive.
 //
 // The lease the caller was given has to be passed in, because cleanup is usually
 // deferred to a goroutine that runs long after the object went away. By then the
@@ -62,19 +91,21 @@ func (m *Manager) Add(ctx context.Context, id ID) *Lease {
 // deferred cleanup: until the lease is out of the map, Add hands the same
 // instance back, so a service that is rebuilt straight away gets parented to a
 // lease that the pending cleanup is about to cancel.
-func (m *Manager) Delete(id ID, objectName string, l *Lease) {
+func (m *Manager) Delete(id ID, objectName string, l *Lease) bool {
 	m.lock.Lock()
 	defer m.lock.Unlock()
 
 	current := m.currentFor(id, l)
 	if current == nil {
-		return
+		return false
 	}
 
 	current.delete(objectName)
 	if current.cnt.Load() < 1 {
 		m.retire(id, current)
+		return true
 	}
+	return false
 }
 
 // currentFor returns the registered lease for id, or nil when the caller is
@@ -110,61 +141,265 @@ func (m *Manager) Get(id ID) *Lease {
 type Lease struct {
 	Ctx      context.Context
 	Cancel   context.CancelFunc
-	Started  chan any
 	services sync.Map
 	cnt      atomic.Int64
-	Elected  atomic.Bool
-	Mtx      sync.Mutex
-	locked   bool
+	stateMu  sync.Mutex
+	election *electionGeneration
+}
+
+type electionPhase uint8
+
+const (
+	electionIdle electionPhase = iota
+	electionCampaigning
+	electionLeading
+)
+
+// electionGeneration owns the one-shot notifications for one local election.
+// decided closes when the campaign either becomes leader or stops before doing
+// so. done closes whenever the generation stops.
+type electionGeneration struct {
+	phase   electionPhase
+	decided chan struct{}
+	done    chan struct{}
+}
+
+// ElectionSession identifies one generation of the local runner coordinating
+// a shared Lease. Only the session that started a generation may change its
+// state; delayed callbacks from older generations are ignored.
+type ElectionSession struct {
+	lease      *Lease
+	generation *electionGeneration
+	owner      bool
+}
+
+// VIPProvider returns the VIPs currently owned by one local Lease member.
+// Implementations must be safe for concurrent use and must not return mutable
+// state that can change while the caller is reading it.
+type VIPProvider func() []string
+
+// StaticVIPProvider returns a provider backed by an immutable copy of vips.
+func StaticVIPProvider(vips []string) VIPProvider {
+	owned := append([]string(nil), vips...)
+	return func() []string {
+		return append([]string(nil), owned...)
+	}
+}
+
+type member struct {
+	vipProvider VIPProvider
 }
 
 func newLease(ctx context.Context, cancel context.CancelFunc) *Lease {
 	return &Lease{
-		Ctx:     ctx,
-		Cancel:  cancel,
-		Started: make(chan any),
+		Ctx:    ctx,
+		Cancel: cancel,
+	}
+}
+
+// NewElectionContext returns a context for one election runner. Cancelling it
+// stops only that runner; the Lease context remains live until its final member
+// is deleted from the Manager.
+func (l *Lease) NewElectionContext(parent context.Context) (context.Context, context.CancelFunc) {
+	ctx, cancel := context.WithCancel(l.Ctx)
+	stopParent := context.AfterFunc(parent, cancel)
+	return ctx, func() {
+		stopParent()
+		cancel()
 	}
 }
 
 // Add adds the object to the lease and increments counter
 // it will return true if object was added
 func (l *Lease) Add(name string) bool {
-	if _, exists := l.services.LoadOrStore(name, true); !exists {
+	return l.AddWithVIPProvider(name, nil)
+}
+
+// AddWithVIPProvider adds an object and its VIP ownership provider to the
+// lease. Re-adding the same object leaves the original registration intact.
+func (l *Lease) AddWithVIPProvider(name string, vipProvider VIPProvider) bool {
+	if _, exists := l.services.LoadOrStore(name, member{vipProvider: vipProvider}); !exists {
 		l.cnt.Add(1)
 		return true
 	}
 	return false
 }
 
-// delete removes the service from the lease and decrements the counter
+// OwnedVIPs returns a stable, deduplicated snapshot of VIPs contributed by all
+// local members sharing this Lease.
+func (l *Lease) OwnedVIPs() []string {
+	providers := make([]VIPProvider, 0, l.cnt.Load())
+	l.services.Range(func(_, value any) bool {
+		registered, ok := value.(member)
+		if ok && registered.vipProvider != nil {
+			providers = append(providers, registered.vipProvider)
+		}
+		return true
+	})
+
+	unique := make(map[string]struct{})
+	for _, provider := range providers {
+		for _, vip := range provider() {
+			if vip != "" {
+				unique[vip] = struct{}{}
+			}
+		}
+	}
+	vips := make([]string, 0, len(unique))
+	for vip := range unique {
+		vips = append(vips, vip)
+	}
+	slices.Sort(vips)
+	return vips
+}
+
+// delete removes the service from the lease and decrements the counter.
 func (l *Lease) delete(service string) {
-	if _, exists := l.services.Load(service); exists {
-		l.services.Delete(service)
+	if _, exists := l.services.LoadAndDelete(service); exists {
 		l.cnt.Add(-1)
 	}
 }
 
-func (l *Lease) Lock() {
-	l.Mtx.Lock()
-	l.locked = true
+// AcquireElection starts a new election generation when the Lease is idle, or
+// returns a session observing the current generation. The returned bool is true
+// only for the caller responsible for running that election.
+func (l *Lease) AcquireElection() (*ElectionSession, bool) {
+	l.stateMu.Lock()
+	defer l.stateMu.Unlock()
+
+	owner := l.election == nil
+	if owner {
+		l.election = &electionGeneration{
+			phase:   electionCampaigning,
+			decided: make(chan struct{}),
+			done:    make(chan struct{}),
+		}
+	}
+	return &ElectionSession{lease: l, generation: l.election, owner: owner}, owner
 }
 
-func (l *Lease) Unlock() {
-	if l.locked {
-		l.locked = false
-		l.Mtx.Unlock()
+// Started marks this session as leading. It returns false for observers,
+// already-stopped sessions, and sessions superseded by a newer generation.
+func (s *ElectionSession) Started() bool {
+	if s == nil || s.lease == nil || s.generation == nil || !s.owner {
+		return false
 	}
+	l := s.lease
+	l.stateMu.Lock()
+	defer l.stateMu.Unlock()
+	if l.election != s.generation || s.generation.phase != electionCampaigning {
+		return false
+	}
+	s.generation.phase = electionLeading
+	close(s.generation.decided)
+	return true
+}
+
+// Stopped ends this session. It is safe to call repeatedly: once another
+// generation starts, a delayed call from this session cannot stop it.
+func (s *ElectionSession) Stopped() bool {
+	if s == nil || s.lease == nil || s.generation == nil || !s.owner {
+		return false
+	}
+	l := s.lease
+	l.stateMu.Lock()
+	defer l.stateMu.Unlock()
+	if l.election != s.generation || s.generation.phase == electionIdle {
+		return false
+	}
+	if s.generation.phase == electionCampaigning {
+		close(s.generation.decided)
+	}
+	s.generation.phase = electionIdle
+	l.election = nil
+	close(s.generation.done)
+	return true
+}
+
+// IsLeading reports whether this exact election generation is still leading.
+func (s *ElectionSession) IsLeading() bool {
+	if s == nil || s.lease == nil || s.generation == nil {
+		return false
+	}
+	phase, current := s.lease.electionState(s.generation)
+	return current && phase == electionLeading
+}
+
+// WaitForLeader waits for this election generation to either become leader or
+// end. A replacement generation is not silently adopted.
+func (s *ElectionSession) WaitForLeader(ctx context.Context) bool {
+	if s == nil || s.lease == nil || s.generation == nil {
+		return false
+	}
+	for {
+		phase, current := s.lease.electionState(s.generation)
+		if !current {
+			return false
+		}
+		switch phase {
+		case electionLeading:
+			return true
+		case electionIdle:
+			return false
+		}
+
+		select {
+		case <-ctx.Done():
+			return false
+		case <-s.lease.Ctx.Done():
+			return false
+		case <-s.generation.decided:
+		}
+	}
+}
+
+// WaitForEnd waits until this election generation is no longer leading.
+func (s *ElectionSession) WaitForEnd(ctx context.Context) {
+	if s == nil || s.lease == nil || s.generation == nil {
+		return
+	}
+	phase, current := s.lease.electionState(s.generation)
+	if !current || phase != electionLeading {
+		return
+	}
+
+	select {
+	case <-ctx.Done():
+	case <-s.lease.Ctx.Done():
+	case <-s.generation.done:
+	}
+}
+
+// IsLeading reports whether the Lease's current election generation is
+// leading. Callers that participate in an election should prefer the
+// generation-scoped ElectionSession.IsLeading method.
+func (l *Lease) IsLeading() bool {
+	l.stateMu.Lock()
+	defer l.stateMu.Unlock()
+	return l.election != nil && l.election.phase == electionLeading
+}
+
+func (l *Lease) electionState(generation *electionGeneration) (electionPhase, bool) {
+	l.stateMu.Lock()
+	defer l.stateMu.Unlock()
+	if generation == nil || l.election != generation {
+		return electionIdle, false
+	}
+	return generation.phase, true
 }
 
 // ServiceName gets lease name and id for the service.
 func ServiceName(service *v1.Service) (string, string) {
-	name, exists := service.Annotations[kubevip.ServiceLease]
-	if !exists || name == "" {
-		name = fmt.Sprintf("kubevip-%s", service.Name)
+	return ServiceNameFor(service.Namespace, service.Name, service.Annotations[kubevip.ServiceLease])
+}
+
+func ServiceNameFor(namespace, serviceName, leaseName string) (string, string) {
+	name := leaseName
+	if name == "" {
+		name = fmt.Sprintf("kubevip-%s", serviceName)
 	}
 
 	serviceLeaseParts := strings.Split(name, "/")
-	namespace := service.Namespace
 
 	if len(serviceLeaseParts) > 1 {
 		namespace = serviceLeaseParts[0]
