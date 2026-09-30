@@ -178,10 +178,15 @@ func (c *Common) runGlobalElectionWithVIPProvider(ctx context.Context, a electio
 	electionCtx, cancelElection := objLease.NewElectionContext(ctx)
 	defer cancelElection()
 
-	for !objLease.BeginElection() {
+	var electionSession *lease.ElectionSession
+	for {
+		session, owner := objLease.AcquireElection()
+		if owner {
+			electionSession = session
+			break
+		}
 		log.Debug("this election was already done, shared lease", "lease", leaseID.Name())
-		leaderGeneration, elected := objLease.WaitForLeaderGeneration(electionCtx)
-		if !elected {
+		if !session.WaitForLeader(electionCtx) {
 			if electionCtx.Err() != nil {
 				return
 			}
@@ -193,7 +198,7 @@ func (c *Common) runGlobalElectionWithVIPProvider(ctx context.Context, a electio
 		wg.Go(func() {
 			a.OnStartedLeading(leaderCtx)
 		})
-		objLease.WaitForElectionEndAfter(electionCtx, leaderGeneration)
+		session.WaitForEnd(electionCtx)
 		cancelLeader()
 		wg.Wait()
 		if electionCtx.Err() != nil {
@@ -206,7 +211,7 @@ func (c *Common) runGlobalElectionWithVIPProvider(ctx context.Context, a electio
 		return
 	}
 	wg := sync.WaitGroup{}
-	defer objLease.ElectionStopped()
+	defer electionSession.Stopped()
 	defer wg.Wait()
 
 	run := &election.RunConfig{
@@ -216,7 +221,9 @@ func (c *Common) runGlobalElectionWithVIPProvider(ctx context.Context, a electio
 		VIPsProvider:     objLease.OwnedVIPs,
 		Mgr:              electionManager,
 		OnStartedLeading: func(ctx context.Context) {
-			objLease.ElectionStarted()
+			if !electionSession.Started() {
+				return
+			}
 			wg.Go(func() {
 				a.OnStartedLeading(ctx)
 				metrics.LeaderTransitionsTotal.WithLabelValues(leaseID.Name()).Inc()
@@ -224,7 +231,9 @@ func (c *Common) runGlobalElectionWithVIPProvider(ctx context.Context, a electio
 			})
 		},
 		OnStoppedLeading: func() {
-			objLease.ElectionStopped()
+			if !electionSession.Stopped() {
+				return
+			}
 			a.OnStoppedLeading()
 			metrics.IsLeader.WithLabelValues(config.NodeName, leaseID.Name()).Set(0)
 		},
