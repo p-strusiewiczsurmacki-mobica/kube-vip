@@ -332,6 +332,145 @@ func TestElectionSessionWaitForEndObservesRapidReplacement(t *testing.T) {
 	}
 }
 
+func TestElectionSessionBroadcastsTransitionsToAllObservers(t *testing.T) {
+	leaseCtx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	serviceLease := newLease(leaseCtx, cancel)
+
+	ownerSession, owner := serviceLease.AcquireElection()
+	if !owner {
+		t.Fatal("first election session did not acquire the runner")
+	}
+
+	const observerCount = 32
+	observers := make([]*ElectionSession, 0, observerCount)
+	for range observerCount {
+		observer, observerOwnsElection := serviceLease.AcquireElection()
+		if observerOwnsElection {
+			t.Fatal("observer acquired an election that was already campaigning")
+		}
+		observers = append(observers, observer)
+	}
+
+	leaderResults := make(chan bool, observerCount)
+	var leaderWaiters sync.WaitGroup
+	for _, observer := range observers {
+		leaderWaiters.Go(func() {
+			leaderResults <- observer.WaitForLeader(context.Background())
+		})
+	}
+	if !ownerSession.Started() {
+		t.Fatal("owner session did not become leader")
+	}
+	waitForElectionBoolResults(t, leaderResults, observerCount, true)
+	leaderWaiters.Wait()
+
+	ended := make(chan struct{}, observerCount)
+	var endWaiters sync.WaitGroup
+	for _, observer := range observers {
+		endWaiters.Go(func() {
+			observer.WaitForEnd(context.Background())
+			ended <- struct{}{}
+		})
+	}
+	if !ownerSession.Stopped() {
+		t.Fatal("owner session did not stop")
+	}
+	for range observerCount {
+		select {
+		case <-ended:
+		case <-time.After(time.Second):
+			t.Fatal("not every observer saw the election end")
+		}
+	}
+	endWaiters.Wait()
+}
+
+func TestElectionSessionBroadcastsCandidateStopToAllObservers(t *testing.T) {
+	leaseCtx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	serviceLease := newLease(leaseCtx, cancel)
+
+	ownerSession, owner := serviceLease.AcquireElection()
+	if !owner {
+		t.Fatal("first election session did not acquire the runner")
+	}
+
+	const observerCount = 32
+	results := make(chan bool, observerCount)
+	var waiters sync.WaitGroup
+	for range observerCount {
+		observer, observerOwnsElection := serviceLease.AcquireElection()
+		if observerOwnsElection {
+			t.Fatal("observer acquired an election that was already campaigning")
+		}
+		waiters.Go(func() {
+			results <- observer.WaitForLeader(context.Background())
+		})
+	}
+	if !ownerSession.Stopped() {
+		t.Fatal("owner session did not stop")
+	}
+	waitForElectionBoolResults(t, results, observerCount, false)
+	waiters.Wait()
+}
+
+func TestElectionSessionPreservesRapidStartStopResult(t *testing.T) {
+	leaseCtx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	serviceLease := newLease(leaseCtx, cancel)
+
+	ownerSession, owner := serviceLease.AcquireElection()
+	if !owner {
+		t.Fatal("first election session did not acquire the runner")
+	}
+	observer, owner := serviceLease.AcquireElection()
+	if owner {
+		t.Fatal("observer acquired an election that was already campaigning")
+	}
+	if !ownerSession.Started() || !ownerSession.Stopped() {
+		t.Fatal("owner session did not complete its leadership transition")
+	}
+	if observer.WaitForLeader(context.Background()) {
+		t.Fatal("observer reported leadership after the generation had already stopped")
+	}
+}
+
+func TestElectionSessionWaitForEndReturnsBeforeLeadership(t *testing.T) {
+	leaseCtx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	serviceLease := newLease(leaseCtx, cancel)
+
+	election, owner := serviceLease.AcquireElection()
+	if !owner {
+		t.Fatal("first election session did not acquire the runner")
+	}
+	done := make(chan struct{})
+	go func() {
+		election.WaitForEnd(context.Background())
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("WaitForEnd blocked before the session became leader")
+	}
+}
+
+func waitForElectionBoolResults(t *testing.T, results <-chan bool, count int, want bool) {
+	t.Helper()
+	for range count {
+		select {
+		case got := <-results:
+			if got != want {
+				t.Fatalf("WaitForLeader() = %t, want %t", got, want)
+			}
+		case <-time.After(time.Second):
+			t.Fatal("not every observer received the election transition")
+		}
+	}
+}
+
 func TestLeaseWaitForLeaderReturnsWhenCandidateStops(t *testing.T) {
 	leaseCtx, cancel := context.WithCancel(context.Background())
 	defer cancel()
