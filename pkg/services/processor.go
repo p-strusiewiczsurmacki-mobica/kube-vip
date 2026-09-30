@@ -71,7 +71,7 @@ type Processor struct {
 	nodeLabelManager node.Labeler
 
 	electionMgr     *election.Manager
-	instanceFactory func(context.Context, *v1.Service, *sync.WaitGroup) (*instance.Instance, error)
+	instanceFactory serviceInstanceFactory
 
 	// TunnelMgr manages multiple WireGuard tunnels (one per service VIP)
 	TunnelMgr *wireguard.TunnelManager
@@ -111,6 +111,7 @@ func NewServicesProcessor(config *kubevip.Config, bgpServer *bgp.Server,
 		electionMgr:      electionMgr,
 		TunnelMgr:        wireguard.NewTunnelManager(),
 		routeMgr:         routeMgr,
+		instanceFactory:  newServiceInstanceFactory(config, intfMgr, arpMgr, routeMgr, nodeLabelManager),
 	}
 	var err error
 	processor.electionCoordinators, err = newElectionCoordinatorManager(processor)
@@ -334,10 +335,7 @@ func (p *Processor) admitServiceInstance(ctx context.Context, svc *v1.Service, w
 }
 
 func (p *Processor) createServiceInstance(ctx context.Context, svc *v1.Service, wg *sync.WaitGroup) (*instance.Instance, error) {
-	if p.instanceFactory != nil {
-		return p.instanceFactory(ctx, svc, wg)
-	}
-	return instance.NewInstance(ctx, svc, p.config, p.intfMgr, p.arpMgr, p.routeMgr, p.nodeLabelManager, wg)
+	return p.instanceFactory.Create(ctx, svc, wg)
 }
 
 func (p *Processor) waitForAddress(ctx context.Context, svc *v1.Service) (*v1.Service, error) {

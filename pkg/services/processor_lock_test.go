@@ -121,13 +121,13 @@ func TestAdmissionDoesNotSerializeUnrelatedInstanceConstruction(t *testing.T) {
 	processor := &Processor{
 		serviceLock: newTestServiceLocks(),
 		config:      &kubevip.Config{},
-		instanceFactory: func(_ context.Context, svc *v1.Service, _ *sync.WaitGroup) (*instance.Instance, error) {
+		instanceFactory: serviceInstanceFactoryFunc(func(_ context.Context, svc *v1.Service, _ *sync.WaitGroup) (*instance.Instance, error) {
 			if svc.Name == "slow" {
 				close(started)
 				<-release
 			}
 			return &instance.Instance{ServiceUID: svc.UID, ServiceSnapshot: svc.DeepCopy()}, nil
-		},
+		}),
 	}
 	initializeTestElectionCoordinators(processor)
 	slow := admissionTestService("slow", "192.0.2.10")
@@ -312,10 +312,10 @@ func TestPrepareServiceInstanceUsesSharedFactory(t *testing.T) {
 	processor := &Processor{
 		serviceLock: newTestServiceLocks(),
 		config:      &kubevip.Config{},
-		instanceFactory: func(_ context.Context, svc *v1.Service, _ *sync.WaitGroup) (*instance.Instance, error) {
+		instanceFactory: serviceInstanceFactoryFunc(func(_ context.Context, svc *v1.Service, _ *sync.WaitGroup) (*instance.Instance, error) {
 			called = true
 			return &instance.Instance{ServiceUID: svc.UID, ServiceSnapshot: svc.DeepCopy()}, nil
-		},
+		}),
 	}
 	initializeTestElectionCoordinators(processor)
 
