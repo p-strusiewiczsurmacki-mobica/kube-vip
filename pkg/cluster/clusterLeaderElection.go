@@ -107,7 +107,7 @@ func (cluster *Cluster) StartCluster(ctx context.Context, c *kubevip.Config,
 			cluster.OnStartedLeading(ctx, c, em, bgpServer, killFunc, false)
 		},
 		OnStoppedLeading: func() {
-			if !electionSession.Stopped() {
+			if !electionSession.IsCurrent() {
 				return
 			}
 			cluster.OnStoppedLeading(c, bgpServer)

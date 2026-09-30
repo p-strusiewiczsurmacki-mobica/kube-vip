@@ -231,7 +231,7 @@ func (c *Common) runGlobalElectionWithVIPProvider(ctx context.Context, a electio
 			})
 		},
 		OnStoppedLeading: func() {
-			if !electionSession.Stopped() {
+			if !electionSession.IsCurrent() {
 				return
 			}
 			a.OnStoppedLeading()
