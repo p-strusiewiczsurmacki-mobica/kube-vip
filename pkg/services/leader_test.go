@@ -20,8 +20,8 @@ import (
 
 func resetServiceReadiness(t *testing.T, svcCtx *servicecontext.Context) {
 	t.Helper()
-	generation, _, _, ready := svcCtx.ReadinessState()
-	if !ready || !svcCtx.ResetReadinessGeneration(generation) {
+	generation, _, _ := svcCtx.ReadinessState()
+	if !svcCtx.ResetReadinessGeneration(generation) {
 		t.Fatal("Service readiness generation was not reset")
 	}
 }

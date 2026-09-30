@@ -132,7 +132,7 @@ func readyMember(t *testing.T, manager *Manager, adapter *testAdapter, service *
 	adapter.current[service.UID] = ctx
 	adapter.mutex.Unlock()
 	ctx.SignalReadiness()
-	generation, _, _, _ := ctx.ReadinessState()
+	generation, _, _ := ctx.ReadinessState()
 	member, joined := manager.join(ctx, service, generation)
 	if !joined {
 		t.Fatal("ready Service did not join its coordinator")
@@ -148,12 +148,12 @@ func TestManagerIssuesNewClaimForEachReadinessGeneration(t *testing.T) {
 	firstContext := first.serviceContext
 	first.coordinator.closeMember(first)
 
-	generation, _, _, ready := firstContext.ReadinessState()
-	if !ready || !firstContext.ResetReadinessGeneration(generation) {
+	generation, _, _ := firstContext.ReadinessState()
+	if !firstContext.ResetReadinessGeneration(generation) {
 		t.Fatal("failed to reset readiness generation")
 	}
 	firstContext.SignalReadiness()
-	secondGeneration, _, _, _ := firstContext.ReadinessState()
+	secondGeneration, _, _ := firstContext.ReadinessState()
 	second, joined := manager.join(firstContext, service, secondGeneration)
 	if !joined {
 		t.Fatal("new readiness generation did not join")
@@ -242,7 +242,7 @@ func TestReplacingUIDGenerationKeepsSiblingClaim(t *testing.T) {
 	adapter.current[service.UID] = replacementContext
 	adapter.mutex.Unlock()
 	replacementContext.SignalReadiness()
-	generation, _, _, _ := replacementContext.ReadinessState()
+	generation, _, _ := replacementContext.ReadinessState()
 	replacement, joined := manager.join(replacementContext, service, generation)
 	if !joined {
 		t.Fatal("replacement generation did not join")
@@ -484,7 +484,7 @@ func TestManagerRejectsStaleReadinessGeneration(t *testing.T) {
 	ctx := servicecontext.New(context.Background())
 	adapter.current[service.UID] = ctx
 	ctx.SignalReadiness()
-	generation, _, _, _ := ctx.ReadinessState()
+	generation, _, _ := ctx.ReadinessState()
 	if !ctx.ResetReadinessGeneration(generation) {
 		t.Fatal("failed to advance readiness generation")
 	}

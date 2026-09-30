@@ -129,7 +129,7 @@ func (p *Processor) Reconcile(svcCtx *servicecontext.Context, event watch.Event,
 					}
 				}
 			} else if svcCtx.IsReady() {
-				readinessLossGeneration, _, _, _ = svcCtx.ReadinessState()
+				readinessLossGeneration, _, _ = svcCtx.ReadinessState()
 				clearNoEndpoints = true
 			}
 		}

@@ -21,7 +21,7 @@ func TestReadinessResetConcurrentWithSignal(t *testing.T) {
 	wg.Go(func() {
 		<-start
 		for range 1000 {
-			_, ready, _, _ := ctx.ReadinessState()
+			_, ready, _ := ctx.ReadinessState()
 			select {
 			case <-ready:
 			default:
