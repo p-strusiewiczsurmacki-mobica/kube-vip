@@ -121,28 +121,19 @@ func (c *coordinator) ensureLeaseLocked() *lease.Lease {
 	if c.lease != nil && c.lease.Ctx.Err() == nil {
 		return c.lease
 	}
-	var first *member
-	for _, member := range c.members {
-		first = member
-		break
-	}
-	if first == nil {
+	if len(c.members) == 0 {
 		return nil
 	}
-	firstRegistration, _ := c.dependencies.Leases.AcquireRegistration(context.Background(), c.id,
-		first.registrationSpec)
-	svcLease := firstRegistration.Lease()
-	first.registration = firstRegistration
+	specs := make([]lease.RegistrationSpec, 0, len(c.members))
 	for _, member := range c.members {
-		if member == first {
-			continue
-		}
-		registration, _ := c.dependencies.Leases.ClaimRegistration(c.id, member.registrationSpec)
-		if registration == nil {
-			svcLease.Cancel()
-			return nil
-		}
-		member.registration = registration
+		specs = append(specs, member.registrationSpec)
+	}
+	svcLease, registrations, err := c.dependencies.Leases.AcquireRegistrations(context.Background(), c.id, specs)
+	if err != nil {
+		return nil
+	}
+	for _, member := range c.members {
+		member.registration = registrations[member.registrationSpec.Name]
 	}
 	c.lease = svcLease
 	return svcLease
