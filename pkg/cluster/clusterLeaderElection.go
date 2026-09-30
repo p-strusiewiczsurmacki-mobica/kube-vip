@@ -27,7 +27,7 @@ func (cluster *Cluster) StartCluster(ctx context.Context, c *kubevip.Config,
 
 	objectName := lease.ObjectName(leaseID, "cp")
 	controlPlaneVIPs := controlPlaneElectionVIPs(c)
-	objLease, _ := leaseMgr.AcquireWithVIPProvider(context.Background(), leaseID, objectName,
+	objLease, _ := leaseMgr.Acquire(context.Background(), leaseID, objectName,
 		lease.StaticVIPProvider(controlPlaneVIPs))
 	defer leaseMgr.Delete(leaseID, objectName, objLease)
 

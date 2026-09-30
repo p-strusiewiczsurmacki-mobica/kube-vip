@@ -82,7 +82,7 @@ func (e *coordinator) join(svcCtx *servicecontext.Context, service *v1.Service,
 		return member, true
 	}
 	if e.lease == nil || e.lease.Ctx.Err() != nil {
-		if e.createLeaseLocked() == nil {
+		if e.newLease() == nil {
 			delete(e.members, service.UID)
 			return nil, false
 		}
@@ -95,14 +95,14 @@ func (e *coordinator) join(svcCtx *servicecontext.Context, service *v1.Service,
 	// An external cleanup retired the manager entry. Rebuild it from the live
 	// coordinator snapshot rather than admitting a member to a dead lease.
 	e.lease = nil
-	if e.createLeaseLocked() == nil {
+	if e.newLease() == nil {
 		delete(e.members, service.UID)
 		return nil, false
 	}
 	return member, true
 }
 
-func (e *coordinator) createLeaseLocked() *lease.Lease {
+func (e *coordinator) newLease() *lease.Lease {
 	if e.lease != nil && e.lease.Ctx.Err() == nil {
 		return e.lease
 	}
@@ -114,7 +114,7 @@ func (e *coordinator) createLeaseLocked() *lease.Lease {
 	if first == nil {
 		return nil
 	}
-	svcLease, _ := e.dependencies.Leases.AcquireWithVIPProvider(context.Background(), e.id, first.claimToken,
+	svcLease, _ := e.dependencies.Leases.Acquire(context.Background(), e.id, first.claimToken,
 		first.vipProvider)
 	for _, member := range e.members {
 		if member == first {
@@ -141,7 +141,7 @@ func (e *coordinator) deactivateMember(member *member) {
 	}
 	member.operationMutex.Lock()
 	defer member.operationMutex.Unlock()
-	e.deactivateMemberOperationHeld(member)
+	e.deactivateMemberAction(member)
 }
 
 func (e *coordinator) withdrawMember(member *member) {
@@ -151,7 +151,7 @@ func (e *coordinator) withdrawMember(member *member) {
 	}
 	e.retire()
 	if campaign != nil && (campaign.external || leaseRetired) {
-		campaign.cancelRunner()
+		campaign.cancel()
 	}
 	// A Service-owned runner remains responsible for the shared election when
 	// a non-Service member still holds the lease. Its lease-scoped context ends
@@ -164,7 +164,7 @@ func (e *coordinator) closeMember(member *member) {
 	}
 	member.operationMutex.Lock()
 	defer member.operationMutex.Unlock()
-	e.deactivateMemberOperationHeld(member)
+	e.deactivateMemberAction(member)
 	e.withdrawMember(member)
 }
 
@@ -227,19 +227,12 @@ func (e *coordinator) prepareCampaign() campaignStart {
 			joinExisting: true,
 		}
 	}
-	svcLease := e.createLeaseLocked()
+	svcLease := e.newLease()
 	if svcLease == nil {
 		return campaignStart{}
 	}
-	external := !svcLease.BeginElection()
-	campaignCtx, campaignCancel := svcLease.NewElectionContext(context.Background())
 	members := e.membersLocked()
-	campaign := &campaign{
-		ctx:      campaignCtx,
-		cancel:   campaignCancel,
-		vips:     memberVIPs(members),
-		external: external,
-	}
+	campaign := newCampaign(context.Background(), svcLease, memberVIPs(members))
 	e.campaign = campaign
 	return campaignStart{lease: svcLease, campaign: campaign, members: members}
 }
@@ -286,7 +279,7 @@ func (e *coordinator) adoptLeaderContext(svcLease *lease.Lease, campaign *campai
 }
 
 func (e *coordinator) followCampaign(svcLease *lease.Lease, campaign *campaign, wg *sync.WaitGroup) {
-	defer campaign.cancelRunner()
+	defer campaign.cancel()
 	leaderGeneration, elected := svcLease.WaitForLeaderGeneration(campaign.ctx)
 	if !elected {
 		e.stopCampaign(svcLease, campaign)
@@ -306,7 +299,7 @@ func (e *coordinator) followCampaign(svcLease *lease.Lease, campaign *campaign, 
 }
 
 func (e *coordinator) runCampaign(svcLease *lease.Lease, campaign *campaign, wg *sync.WaitGroup) {
-	defer campaign.cancelRunner()
+	defer campaign.cancel()
 	run := election.RunConfig{
 		Config:           e.dependencies.Config,
 		LeaseID:          e.id,
@@ -423,7 +416,7 @@ func (e *coordinator) activateMember(ctx context.Context, member *member, svcLea
 	if err := e.dependencies.Datapath.Activate(ctx, member.service, member.serviceContext, wg); err != nil {
 		metrics.ServiceElectionErrorsTotal.WithLabelValues(member.service.Namespace, member.service.Name, "service_sync").Inc()
 		log.Error("start service after election", "service", member.service.Name, "namespace", member.service.Namespace, "error", err)
-		e.deactivateMemberOperationHeld(member)
+		e.deactivateMemberAction(member)
 		if !e.hasOtherReadyMember(member) {
 			e.cancelCampaign(svcLease, campaign)
 		}
@@ -432,7 +425,7 @@ func (e *coordinator) activateMember(ctx context.Context, member *member, svcLea
 	e.resetRestartFailures()
 	if !e.dependencies.State.IsCurrent(member.service, member.serviceContext, member.readinessGeneration) ||
 		!e.memberActivationCurrent(member, svcLease, campaign) {
-		e.deactivateMemberOperationHeld(member)
+		e.deactivateMemberAction(member)
 	}
 }
 
@@ -501,7 +494,7 @@ func (e *coordinator) markMemberInactive(member *member) (*lease.Lease, bool) {
 	return e.lease, true
 }
 
-func (e *coordinator) deactivateMemberOperationHeld(member *member) {
+func (e *coordinator) deactivateMemberAction(member *member) {
 	svcLease, deactivated := e.markMemberInactive(member)
 	if !deactivated {
 		return
@@ -563,7 +556,7 @@ func (e *coordinator) cancelCampaign(svcLease *lease.Lease, campaign *campaign) 
 	if !e.recordCampaignFailure(svcLease, campaign) {
 		return
 	}
-	campaign.cancelRunner()
+	campaign.cancel()
 }
 
 // completeCampaign clears the finished campaign and reports whether a restart

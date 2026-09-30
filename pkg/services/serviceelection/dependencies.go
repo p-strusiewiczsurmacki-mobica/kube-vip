@@ -36,7 +36,7 @@ type RestartScheduler interface {
 
 // LeaseStore is the narrow lease ownership contract used by coordinators.
 type LeaseStore interface {
-	AcquireWithVIPProvider(context.Context, lease.ID, string, lease.VIPProvider) (*lease.Lease, bool)
+	Acquire(context.Context, lease.ID, string, lease.VIPProvider) (*lease.Lease, bool)
 	ClaimWithVIPProvider(lease.ID, string, lease.VIPProvider) (*lease.Lease, bool)
 	Delete(lease.ID, string, *lease.Lease) bool
 }
