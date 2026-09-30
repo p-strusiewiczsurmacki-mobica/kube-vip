@@ -177,13 +177,13 @@ func TestLastMemberRetirementRemovesCoordinatorFromRegistry(t *testing.T) {
 	member := readyMember(t, manager, adapter, service)
 	coordinator := member.coordinator
 
-	if current := manager.registry.current(coordinator.id); current != coordinator {
+	if current := manager.coordinatorMgr.current(coordinator.id); current != coordinator {
 		t.Fatal("joined coordinator is not registered")
 	}
 
 	member.coordinator.closeMember(member)
 
-	if current := manager.registry.current(coordinator.id); current != nil {
+	if current := manager.coordinatorMgr.current(coordinator.id); current != nil {
 		t.Fatal("retired coordinator remained registered")
 	}
 }
@@ -191,13 +191,13 @@ func TestLastMemberRetirementRemovesCoordinatorFromRegistry(t *testing.T) {
 func TestStaleCoordinatorCannotRemoveReplacementFromRegistry(t *testing.T) {
 	manager, _, _ := newTestManager()
 	id := lease.NewID("kubernetes", "default", "shared")
-	stale := manager.registry.coordinatorFor(id)
-	manager.registry.remove(stale)
-	replacement := manager.registry.coordinatorFor(id)
+	stale := manager.coordinatorMgr.newCoordinator(id)
+	manager.coordinatorMgr.remove(stale)
+	replacement := manager.coordinatorMgr.newCoordinator(id)
 
-	manager.registry.remove(stale)
+	manager.coordinatorMgr.remove(stale)
 
-	if current := manager.registry.current(id); current != replacement {
+	if current := manager.coordinatorMgr.current(id); current != replacement {
 		t.Fatal("stale coordinator removed its replacement")
 	}
 }
@@ -263,13 +263,13 @@ func TestActivationFailureCancelsCampaignAndRecordsBackoff(t *testing.T) {
 	member := readyMember(t, manager, adapter, service)
 	coordinator := member.coordinator
 
-	start := coordinator.prepareCampaign()
+	start := coordinator.newCampaignCandidate()
 	start.lease.ElectionStarted()
 	coordinator.activateMember(context.Background(), member, start.lease, start.campaign, &sync.WaitGroup{})
 	if coordinator.restartFailures != 1 {
 		t.Fatalf("restartFailures = %d, want 1", coordinator.restartFailures)
 	}
-	if got, want := coordinator.restartDelayLocked(), 2*restartBaseDelay; got != want {
+	if got, want := coordinator.restartDelay(), 2*restartBaseDelay; got != want {
 		t.Fatalf("restart delay = %v, want %v", got, want)
 	}
 	member.coordinator.closeMember(member)
