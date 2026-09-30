@@ -25,16 +25,16 @@ type campaign struct {
 }
 
 func newCampaign(parent context.Context, svcLease *lease.Lease, vips []string) *campaign {
-	electionSession, runsCampaign := svcLease.AcquireElection()
+	participation := svcLease.JoinElection()
 	ctx, cancel := svcLease.NewElectionContext(parent)
 	role := campaignObserver
-	if runsCampaign {
+	if participation.RunsCampaign() {
 		role = campaignRunner
 	}
 	return &campaign{
 		ctx:      ctx,
 		cancel:   cancel,
-		election: electionSession,
+		election: participation.Session,
 		vips:     append([]string(nil), vips...),
 		role:     role,
 	}

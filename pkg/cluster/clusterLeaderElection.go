@@ -60,10 +60,10 @@ func (cluster *Cluster) StartCluster(ctx context.Context, c *kubevip.Config,
 
 	var electionSession *lease.ElectionSession
 	for {
-		session, owner := objLease.AcquireElection()
-		if !owner {
+		participation := objLease.JoinElection()
+		if !participation.RunsCampaign() {
 			log.Debug("this election was already done, shared lease", "lease", leaseName)
-			if !session.WaitForLeader(electionCtx) {
+			if !participation.Session.WaitForLeader(electionCtx) {
 				if electionCtx.Err() != nil {
 					return nil
 				}
@@ -80,7 +80,7 @@ func (cluster *Cluster) StartCluster(ctx context.Context, c *kubevip.Config,
 			})
 
 			log.Debug("cluster waiting for shared election to finish", "lease", leaseName)
-			session.WaitForEnd(electionCtx)
+			participation.Session.WaitForEnd(electionCtx)
 			cancelLeader()
 			leaderWG.Wait()
 
@@ -88,7 +88,7 @@ func (cluster *Cluster) StartCluster(ctx context.Context, c *kubevip.Config,
 
 			return nil
 		}
-		electionSession = session
+		electionSession = participation.Session
 		break
 	}
 	defer electionSession.Stopped()
