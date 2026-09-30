@@ -70,9 +70,8 @@ type Processor struct {
 	// nodeLabelManager is the manager for the node labels
 	nodeLabelManager node.Labeler
 
-	electionMgr             *election.Manager
-	scheduleElectionRestart func(func())
-	instanceFactory         func(context.Context, *v1.Service, *sync.WaitGroup) (*instance.Instance, error)
+	electionMgr     *election.Manager
+	instanceFactory func(context.Context, *v1.Service, *sync.WaitGroup) (*instance.Instance, error)
 
 	// TunnelMgr manages multiple WireGuard tunnels (one per service VIP)
 	TunnelMgr *wireguard.TunnelManager

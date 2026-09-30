@@ -90,11 +90,6 @@ func (a *electionAdapter) RunCampaign(ctx context.Context, run *election.RunConf
 
 // ScheduleRestart implements serviceelection.RestartScheduler.
 func (a *electionAdapter) ScheduleRestart(ctx context.Context, delay time.Duration, wg *sync.WaitGroup, restart func()) {
-	p := a.processor
-	if p.scheduleElectionRestart != nil {
-		p.scheduleElectionRestart(restart)
-		return
-	}
 	wg.Go(func() {
 		timer := time.NewTimer(delay)
 		defer timer.Stop()
