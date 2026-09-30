@@ -9,21 +9,20 @@ import (
 )
 
 func resetReadiness(ctx *Context) bool {
-	generation, _, _ := ctx.ReadinessState()
-	return ctx.ResetReadinessGeneration(generation)
+	return ctx.ResetReadinessGeneration(ctx.CurrentReadiness())
 }
 
 func TestReadinessResetCreatesNewGeneration(t *testing.T) {
 	svcCtx := New(context.Background())
 	defer svcCtx.Cancel()
 
-	firstGeneration, first, firstLost := svcCtx.ReadinessState()
-	if firstGeneration != 1 || svcCtx.IsReady() {
-		t.Fatalf("initial readiness state = generation %d, ready %t; want generation 1, ready false", firstGeneration, svcCtx.IsReady())
+	firstGeneration := svcCtx.CurrentReadiness()
+	if firstGeneration.ID() != 1 || svcCtx.IsReady() {
+		t.Fatalf("initial readiness state = generation %d, ready %t; want generation 1, ready false", firstGeneration.ID(), svcCtx.IsReady())
 	}
 	svcCtx.SignalReadiness()
 	select {
-	case <-first:
+	case <-firstGeneration.Ready():
 	default:
 		t.Fatal("first readiness generation was not signalled")
 	}
@@ -32,30 +31,30 @@ func TestReadinessResetCreatesNewGeneration(t *testing.T) {
 		t.Fatal("first readiness generation was not reset")
 	}
 	select {
-	case <-firstLost:
+	case <-firstGeneration.Lost():
 	default:
 		t.Fatal("first readiness generation loss was not signalled")
 	}
 
-	secondGeneration, second, secondLost := svcCtx.ReadinessState()
-	if secondGeneration != firstGeneration+1 || svcCtx.IsReady() {
-		t.Fatalf("reset readiness state = generation %d, ready %t; want generation %d, ready false", secondGeneration, svcCtx.IsReady(), firstGeneration+1)
+	secondGeneration := svcCtx.CurrentReadiness()
+	if secondGeneration.ID() != firstGeneration.ID()+1 || svcCtx.IsReady() {
+		t.Fatalf("reset readiness state = generation %d, ready %t; want generation %d, ready false", secondGeneration.ID(), svcCtx.IsReady(), firstGeneration.ID()+1)
 	}
-	if first == second {
+	if firstGeneration.Ready() == secondGeneration.Ready() {
 		t.Fatal("readiness reset reused the previous generation")
 	}
-	if firstLost == secondLost {
+	if firstGeneration.Lost() == secondGeneration.Lost() {
 		t.Fatal("readiness reset reused the previous loss signal")
 	}
 	select {
-	case <-second:
+	case <-secondGeneration.Ready():
 		t.Fatal("new readiness generation was already signalled")
 	default:
 	}
 
 	svcCtx.SignalReadiness()
 	select {
-	case <-second:
+	case <-secondGeneration.Ready():
 	default:
 		t.Fatal("second readiness generation was not signalled")
 	}
@@ -75,8 +74,8 @@ func TestResetReadinessGenerationWaitsForActivation(t *testing.T) {
 	svcCtx := New(context.Background())
 	defer svcCtx.Cancel()
 	svcCtx.SignalReadiness()
-	generation, _, _ := svcCtx.ReadinessState()
-	release, acquired := svcCtx.WaitForReadiness()
+	generation := svcCtx.CurrentReadiness()
+	reservation, acquired := svcCtx.WaitForReadiness()
 	if !acquired {
 		t.Fatal("ready generation was not available for activation")
 	}
@@ -88,7 +87,7 @@ func TestResetReadinessGenerationWaitsForActivation(t *testing.T) {
 
 	deadline := time.Now().Add(time.Second)
 	for {
-		currentGeneration, _, _ := svcCtx.ReadinessState()
+		currentGeneration := svcCtx.CurrentReadiness()
 		if currentGeneration != generation {
 			break
 		}
@@ -103,7 +102,7 @@ func TestResetReadinessGenerationWaitsForActivation(t *testing.T) {
 	default:
 	}
 
-	release()
+	reservation.Release()
 	select {
 	case reset := <-resetComplete:
 		if !reset {
@@ -211,20 +210,20 @@ func TestConcurrentStateTransitions(t *testing.T) {
 		t.Fatal("final readiness generation was not reset")
 	}
 
-	generation, ready, lost := svcCtx.ReadinessState()
+	generation := svcCtx.CurrentReadiness()
 	if svcCtx.IsReady() {
 		t.Fatal("concurrent transitions left the context ready after every signal was reset")
 	}
-	if generation == 1 {
+	if generation.ID() == 1 {
 		t.Fatal("concurrent transitions did not advance the readiness generation")
 	}
 	select {
-	case <-ready:
+	case <-generation.Ready():
 		t.Fatal("current readiness channel was already closed")
 	default:
 	}
 	select {
-	case <-lost:
+	case <-generation.Lost():
 		t.Fatal("current readiness-loss channel was already closed")
 	default:
 	}

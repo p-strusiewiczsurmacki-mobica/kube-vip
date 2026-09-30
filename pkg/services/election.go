@@ -39,7 +39,8 @@ func newElectionCoordinatorManager(p *Processor) (*serviceelection.Manager, erro
 }
 
 // IsCurrent implements serviceelection.ServiceState.
-func (a *electionAdapter) IsCurrent(service *v1.Service, svcCtx *servicecontext.Context, readinessGeneration uint64) bool {
+func (a *electionAdapter) IsCurrent(service *v1.Service, svcCtx *servicecontext.Context,
+	readinessGeneration servicecontext.ReadinessGeneration) bool {
 	p := a.processor
 	p.serviceLock.Lock(service.UID)
 	defer func() {

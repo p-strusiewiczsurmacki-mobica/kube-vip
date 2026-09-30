@@ -12,7 +12,7 @@ type member struct {
 	coordinator         *coordinator
 	service             *v1.Service
 	serviceContext      *servicecontext.Context
-	readinessGeneration uint64
+	readinessGeneration servicecontext.ReadinessGeneration
 	claimToken          string
 	vipProvider         lease.VIPProvider
 	operationMutex      sync.Mutex
@@ -20,7 +20,7 @@ type member struct {
 }
 
 func newMember(coordinator *coordinator, svcCtx *servicecontext.Context, service *v1.Service,
-	readinessGeneration uint64) *member {
+	readinessGeneration servicecontext.ReadinessGeneration) *member {
 	return &member{
 		coordinator: coordinator, service: service.DeepCopy(), serviceContext: svcCtx,
 		readinessGeneration: readinessGeneration,

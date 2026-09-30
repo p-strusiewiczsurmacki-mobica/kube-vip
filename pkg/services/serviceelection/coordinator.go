@@ -69,7 +69,7 @@ func (c *coordinator) contains(member *member) bool {
 }
 
 func (c *coordinator) join(svcCtx *servicecontext.Context, service *v1.Service,
-	readinessGeneration uint64) (*member, bool) {
+	readinessGeneration servicecontext.ReadinessGeneration) (*member, bool) {
 	c.mutex.Lock()
 	defer c.mutex.Unlock()
 	if c.retired {
@@ -428,11 +428,11 @@ func (c *coordinator) activateMembers(ctx context.Context, svcLease *lease.Lease
 
 func (c *coordinator) activateMember(ctx context.Context, member *member, svcLease *lease.Lease,
 	campaign *campaign, wg *sync.WaitGroup) {
-	releaseReadiness, ready := member.serviceContext.AcquireReadinessGeneration(member.readinessGeneration)
+	readinessReservation, ready := member.serviceContext.AcquireReadinessGeneration(member.readinessGeneration)
 	if !ready {
 		return
 	}
-	defer releaseReadiness()
+	defer readinessReservation.Release()
 
 	member.operationMutex.Lock()
 	defer member.operationMutex.Unlock()

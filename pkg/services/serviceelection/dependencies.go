@@ -15,7 +15,7 @@ import (
 
 // ServiceState validates the current Service context and readiness generation.
 type ServiceState interface {
-	IsCurrent(*v1.Service, *servicecontext.Context, uint64) bool
+	IsCurrent(*v1.Service, *servicecontext.Context, servicecontext.ReadinessGeneration) bool
 }
 
 // Datapath activates and cleans up the network state of a Service.
