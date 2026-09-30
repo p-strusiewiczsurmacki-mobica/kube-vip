@@ -9,17 +9,17 @@ import (
 )
 
 func resetReadiness(ctx *Context) bool {
-	generation, _, _, ready := ctx.ReadinessState()
-	return ready && ctx.ResetReadinessGeneration(generation)
+	generation, _, _ := ctx.ReadinessState()
+	return ctx.ResetReadinessGeneration(generation)
 }
 
 func TestReadinessResetCreatesNewGeneration(t *testing.T) {
 	svcCtx := New(context.Background())
 	defer svcCtx.Cancel()
 
-	firstGeneration, first, firstLost, firstReady := svcCtx.ReadinessState()
-	if firstGeneration != 1 || firstReady {
-		t.Fatalf("initial readiness state = generation %d, ready %t; want generation 1, ready false", firstGeneration, firstReady)
+	firstGeneration, first, firstLost := svcCtx.ReadinessState()
+	if firstGeneration != 1 || svcCtx.IsReady() {
+		t.Fatalf("initial readiness state = generation %d, ready %t; want generation 1, ready false", firstGeneration, svcCtx.IsReady())
 	}
 	svcCtx.SignalReadiness()
 	select {
@@ -37,9 +37,9 @@ func TestReadinessResetCreatesNewGeneration(t *testing.T) {
 		t.Fatal("first readiness generation loss was not signalled")
 	}
 
-	secondGeneration, second, secondLost, secondReady := svcCtx.ReadinessState()
-	if secondGeneration != firstGeneration+1 || secondReady {
-		t.Fatalf("reset readiness state = generation %d, ready %t; want generation %d, ready false", secondGeneration, secondReady, firstGeneration+1)
+	secondGeneration, second, secondLost := svcCtx.ReadinessState()
+	if secondGeneration != firstGeneration+1 || svcCtx.IsReady() {
+		t.Fatalf("reset readiness state = generation %d, ready %t; want generation %d, ready false", secondGeneration, svcCtx.IsReady(), firstGeneration+1)
 	}
 	if first == second {
 		t.Fatal("readiness reset reused the previous generation")
@@ -75,7 +75,7 @@ func TestResetReadinessGenerationWaitsForActivation(t *testing.T) {
 	svcCtx := New(context.Background())
 	defer svcCtx.Cancel()
 	svcCtx.SignalReadiness()
-	generation, _, _, _ := svcCtx.ReadinessState()
+	generation, _, _ := svcCtx.ReadinessState()
 	release, acquired := svcCtx.WaitForReadiness()
 	if !acquired {
 		t.Fatal("ready generation was not available for activation")
@@ -88,7 +88,7 @@ func TestResetReadinessGenerationWaitsForActivation(t *testing.T) {
 
 	deadline := time.Now().Add(time.Second)
 	for {
-		currentGeneration, _, _, _ := svcCtx.ReadinessState()
+		currentGeneration, _, _ := svcCtx.ReadinessState()
 		if currentGeneration != generation {
 			break
 		}
@@ -211,8 +211,8 @@ func TestConcurrentStateTransitions(t *testing.T) {
 		t.Fatal("final readiness generation was not reset")
 	}
 
-	generation, ready, lost, isReady := svcCtx.ReadinessState()
-	if isReady {
+	generation, ready, lost := svcCtx.ReadinessState()
+	if svcCtx.IsReady() {
 		t.Fatal("concurrent transitions left the context ready after every signal was reset")
 	}
 	if generation == 1 {

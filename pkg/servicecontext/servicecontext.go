@@ -37,10 +37,10 @@ func New(ctx context.Context) *Context {
 // ReadinessState returns one readiness lifecycle. The ready channel is closed
 // when endpoints become usable and the lost channel is closed when that exact
 // generation is reset.
-func (ctx *Context) ReadinessState() (uint64, <-chan any, <-chan any, bool) {
+func (ctx *Context) ReadinessState() (uint64, <-chan any, <-chan any) {
 	ctx.stateMutex.Lock()
 	defer ctx.stateMutex.Unlock()
-	return ctx.readinessGeneration, ctx.endpointsReady, ctx.endpointsLost, ctx.ready
+	return ctx.readinessGeneration, ctx.endpointsReady, ctx.endpointsLost
 }
 
 func (ctx *Context) IsReady() bool {
@@ -91,13 +91,11 @@ func (ctx *Context) WaitForReadiness() (func(), bool) {
 		if ctx.Ctx.Err() != nil {
 			return nil, false
 		}
-		generation, ready, _, isReady := ctx.ReadinessState()
-		if !isReady {
-			select {
-			case <-ctx.Ctx.Done():
-				return nil, false
-			case <-ready:
-			}
+		generation, ready, _ := ctx.ReadinessState()
+		select {
+		case <-ctx.Ctx.Done():
+			return nil, false
+		case <-ready:
 		}
 		if release, acquired := ctx.AcquireReadinessGeneration(generation); acquired {
 			return release, true

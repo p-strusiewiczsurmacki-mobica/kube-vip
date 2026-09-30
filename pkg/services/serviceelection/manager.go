@@ -87,14 +87,17 @@ func (m *Manager) LeaveForContext(svcCtx *servicecontext.Context, service *v1.Se
 // Watch follows readiness generations for one Service until its context ends.
 func (m *Manager) Watch(svcCtx *servicecontext.Context, service *v1.Service, wg *sync.WaitGroup) {
 	for {
-		generation, ready, lost, isReady := svcCtx.ReadinessState()
-		if !isReady {
-			select {
-			case <-svcCtx.Ctx.Done():
-				return
-			case <-ready:
-				continue
-			}
+		if svcCtx.Ctx.Err() != nil {
+			return
+		}
+		generation, ready, lost := svcCtx.ReadinessState()
+		select {
+		case <-svcCtx.Ctx.Done():
+			return
+		case <-ready:
+		}
+		if !svcCtx.ReadinessGenerationCurrent(generation) {
+			continue
 		}
 
 		member, joined := m.join(svcCtx, service, generation)

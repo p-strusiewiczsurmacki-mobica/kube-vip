@@ -563,9 +563,9 @@ func TestReconcileServicesElectionDoesNotStartElectionLoop(t *testing.T) {
 		}
 	}
 
-	generation, ready, lost, isReady := svcCtx.ReadinessState()
-	if generation != 1 || !isReady {
-		t.Fatalf("readiness state = generation %d, ready %t; want generation 1 ready", generation, isReady)
+	generation, ready, lost := svcCtx.ReadinessState()
+	if generation != 1 || !svcCtx.IsReady() {
+		t.Fatalf("readiness state = generation %d, ready %t; want generation 1 ready", generation, svcCtx.IsReady())
 	}
 	select {
 	case <-ready:
