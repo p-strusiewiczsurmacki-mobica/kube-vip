@@ -482,7 +482,7 @@ func TestDeleteTrackedServiceCleansUpElectedServiceImmediately(t *testing.T) {
 	leaseID := lease.NewID(processor.config.LeaderElectionType, leaseNamespace, serviceLease)
 	svcCtx.SignalReadiness()
 	done := make(chan error, 1)
-	go func() { done <- processor.StartServicesLeaderElection(svcCtx, service, nil, true) }()
+	go func() { done <- processor.StartServicesLeaderElection(svcCtx, service, nil) }()
 	waitForElectionRunner(t, runner.started)
 
 	if err := processor.deleteTrackedService(service); err != nil {
@@ -523,7 +523,7 @@ func TestDeleteTrackedServiceReturnsPersistentCleanupFailure(t *testing.T) {
 	leaseID := lease.NewID(processor.config.LeaderElectionType, leaseNamespace, serviceLease)
 	svcCtx.SignalReadiness()
 	done := make(chan error, 1)
-	go func() { done <- processor.StartServicesLeaderElection(svcCtx, service, nil, true) }()
+	go func() { done <- processor.StartServicesLeaderElection(svcCtx, service, nil) }()
 	waitForElectionRunner(t, runner.started)
 
 	if err := processor.deleteTrackedService(service); err == nil {

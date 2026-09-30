@@ -14,7 +14,7 @@ import (
 
 // The StartServicesWatchForLeaderElection function will start a services watcher, the
 func (p *Processor) StartServicesWatchForLeaderElection(ctx context.Context, forcedOnly bool) error {
-	err := p.ServicesWatcher(ctx, NewCallback(p.StartServicesLeaderElection, true), forcedOnly)
+	err := p.ServicesWatcher(ctx, NewCallback(p.StartServicesLeaderElection), forcedOnly)
 	if err != nil {
 		return err
 	}
@@ -31,7 +31,7 @@ func (p *Processor) StartServicesWatchForLeaderElection(ctx context.Context, for
 // StartServicesLeaderElection watches one Service's endpoint readiness while
 // its per-lease coordinator owns campaign lifetime.
 func (p *Processor) StartServicesLeaderElection(svcCtx *servicecontext.Context, service *v1.Service,
-	wg *sync.WaitGroup, _ bool) error {
+	wg *sync.WaitGroup) error {
 	if service == nil {
 		return fmt.Errorf("no service for leader election")
 	}

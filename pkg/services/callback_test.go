@@ -17,14 +17,11 @@ func TestCallbackRunWithoutFunction(t *testing.T) {
 	}
 }
 
-func TestCallbackRunPropagatesLeaderElectionFlag(t *testing.T) {
+func TestCallbackRunReturnsFunctionError(t *testing.T) {
 	want := errors.New("callback error")
-	callback := NewCallback(func(_ *servicecontext.Context, _ *v1.Service, _ *sync.WaitGroup, usesLeaderElection bool) error {
-		if !usesLeaderElection {
-			t.Fatal("callback did not receive leader election flag")
-		}
+	callback := NewCallback(func(_ *servicecontext.Context, _ *v1.Service, _ *sync.WaitGroup) error {
 		return want
-	}, true)
+	})
 	if err := callback.Run(nil, nil, nil); !errors.Is(err, want) {
 		t.Fatalf("Run error = %v, want %v", err, want)
 	}

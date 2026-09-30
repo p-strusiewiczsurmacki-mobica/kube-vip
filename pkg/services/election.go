@@ -60,7 +60,7 @@ func (a *electionAdapter) IsCurrent(service *v1.Service, svcCtx *servicecontext.
 func (a *electionAdapter) Activate(ctx context.Context, service *v1.Service, svcCtx *servicecontext.Context,
 	wg *sync.WaitGroup) error {
 	p := a.processor
-	return p.syncServicesWithContext(ctx, svcCtx, service, wg, true)
+	return p.activateElectedService(ctx, svcCtx, service, wg)
 }
 
 // Cleanup implements serviceelection.Datapath.
