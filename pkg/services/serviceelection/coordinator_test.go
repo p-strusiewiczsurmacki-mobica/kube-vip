@@ -264,7 +264,7 @@ func TestActivationFailureCancelsCampaignAndRecordsBackoff(t *testing.T) {
 	coordinator := member.coordinator
 
 	start := coordinator.newCampaignCandidate()
-	start.lease.ElectionStarted()
+	start.campaign.election.Started()
 	coordinator.activateMember(context.Background(), member, start.lease, start.campaign, &sync.WaitGroup{})
 	if coordinator.restartFailures != 1 {
 		t.Fatalf("restartFailures = %d, want 1", coordinator.restartFailures)
@@ -286,7 +286,7 @@ func TestCloseActiveMemberCleansUpExactlyOnce(t *testing.T) {
 	coordinator.campaign = newCampaign(context.Background(), serviceLease, memberVIPs(coordinator.membersLocked()))
 	currentCampaign := coordinator.campaign
 	coordinator.mutex.Unlock()
-	serviceLease.ElectionStarted()
+	currentCampaign.election.Started()
 
 	coordinator.activateMember(context.Background(), member, serviceLease, currentCampaign, &sync.WaitGroup{})
 	if !member.active {
@@ -322,7 +322,7 @@ func TestCloseMemberPreventsConcurrentReactivation(t *testing.T) {
 	coordinator.campaign = newCampaign(context.Background(), serviceLease, memberVIPs(coordinator.membersLocked()))
 	currentCampaign := coordinator.campaign
 	coordinator.mutex.Unlock()
-	serviceLease.ElectionStarted()
+	currentCampaign.election.Started()
 	coordinator.activateMember(context.Background(), member, serviceLease, currentCampaign, &sync.WaitGroup{})
 
 	closeDone := make(chan struct{})
@@ -406,7 +406,7 @@ func TestLeaveForContextWithdrawsWithoutDatapathCleanup(t *testing.T) {
 	coordinator.campaign = newCampaign(context.Background(), serviceLease, memberVIPs(coordinator.membersLocked()))
 	currentCampaign := coordinator.campaign
 	coordinator.mutex.Unlock()
-	serviceLease.ElectionStarted()
+	currentCampaign.election.Started()
 	coordinator.activateMember(context.Background(), member, serviceLease, currentCampaign, &sync.WaitGroup{})
 	if !member.active {
 		t.Fatal("member was not activated")
@@ -439,16 +439,17 @@ func TestExternalElectionEndDeactivatesMember(t *testing.T) {
 	if claimed, _ := leaseMgr.Claim(id, controlPlaneToken); claimed != sharedLease {
 		t.Fatal("control plane did not join the Service lease")
 	}
-	if !sharedLease.BeginElection() {
+	externalElection, owner := sharedLease.AcquireElection()
+	if !owner {
 		t.Fatal("external election did not start")
 	}
-	sharedLease.ElectionStarted()
+	externalElection.Started()
 
 	var wg sync.WaitGroup
 	member.coordinator.startCampaign(&wg)
 	waitForAdapterCount(t, adapter, func(a *testAdapter) int { return len(a.activations) }, 1, "activation")
 
-	sharedLease.ElectionStopped()
+	externalElection.Stopped()
 	member.coordinator.closeMember(member)
 	wg.Wait()
 	waitForAdapterCount(t, adapter, func(a *testAdapter) int { return len(a.cleanups) }, 1, "cleanup")

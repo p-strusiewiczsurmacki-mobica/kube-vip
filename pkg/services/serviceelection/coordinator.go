@@ -293,8 +293,7 @@ func (c *coordinator) adoptLeaderContext(svcLease *lease.Lease, campaign *campai
 
 func (c *coordinator) followCampaign(svcLease *lease.Lease, campaign *campaign, wg *sync.WaitGroup) {
 	defer campaign.cancel()
-	leaderGeneration, elected := svcLease.WaitForLeaderGeneration(campaign.ctx)
-	if !elected {
+	if !campaign.election.WaitForLeader(campaign.ctx) {
 		c.stopCampaign(svcLease, campaign)
 		c.finishCampaign(svcLease, campaign, wg)
 		return
@@ -305,7 +304,7 @@ func (c *coordinator) followCampaign(svcLease *lease.Lease, campaign *campaign, 
 		return
 	}
 	c.activateMembers(leaderCtx, svcLease, campaign, wg)
-	svcLease.WaitForElectionEndAfter(campaign.ctx, leaderGeneration)
+	campaign.election.WaitForEnd(campaign.ctx)
 	cancelLeader()
 	c.stopCampaign(svcLease, campaign)
 	c.finishCampaign(svcLease, campaign, wg)
@@ -337,7 +336,7 @@ func (c *coordinator) runCampaign(svcLease *lease.Lease, campaign *campaign, wg 
 		log.Error("services election failed", "lease", c.id.NamespacedName(), "error", err)
 	}
 	c.stopCampaign(svcLease, campaign)
-	svcLease.ElectionStopped()
+	campaign.election.Stopped()
 	c.finishCampaign(svcLease, campaign, wg)
 }
 
@@ -373,8 +372,10 @@ func (c *coordinator) beginLeading(ctx context.Context, svcLease *lease.Lease,
 	if c.retired || c.lease != svcLease || c.campaign != campaign || campaign.stopped || len(c.members) == 0 {
 		return false
 	}
+	if !campaign.election.Started() {
+		return false
+	}
 	campaign.leaderCtx = ctx
-	svcLease.ElectionStarted()
 	return true
 }
 
@@ -395,7 +396,8 @@ func (c *coordinator) activatableMembers(svcLease *lease.Lease,
 	c.mutex.Lock()
 	defer c.mutex.Unlock()
 
-	if c.retired || c.lease != svcLease || c.campaign != campaign || (campaign != nil && campaign.stopped) || !svcLease.Elected.Load() {
+	if c.retired || c.lease != svcLease || c.campaign != campaign || campaign == nil || campaign.stopped ||
+		!campaign.election.IsLeading() {
 		return nil
 	}
 	return c.membersLocked()
@@ -403,7 +405,7 @@ func (c *coordinator) activatableMembers(svcLease *lease.Lease,
 
 func (c *coordinator) activateMembers(ctx context.Context, svcLease *lease.Lease,
 	campaign *campaign, wg *sync.WaitGroup) {
-	if svcLease == nil || !svcLease.Elected.Load() {
+	if svcLease == nil || campaign == nil || !campaign.election.IsLeading() {
 		return
 	}
 	for _, member := range c.activatableMembers(svcLease, campaign) {
@@ -458,7 +460,7 @@ func (c *coordinator) canActivateMember(member *member, svcLease *lease.Lease,
 func (c *coordinator) memberValidForActivation(member *member, svcLease *lease.Lease,
 	campaign *campaign) bool {
 	return !c.retired && c.lease == svcLease && c.campaign == campaign &&
-		(campaign == nil || !campaign.stopped) && svcLease.Elected.Load() &&
+		campaign != nil && !campaign.stopped && campaign.election.IsLeading() &&
 		c.members[member.service.UID] == member
 }
 
@@ -542,7 +544,7 @@ func (c *coordinator) markCampaignStopped(svcLease *lease.Lease,
 		campaign.cancelLeader()
 	}
 	if !campaign.external {
-		svcLease.ElectionStopped()
+		campaign.election.Stopped()
 	}
 	return c.membersLocked()
 }
