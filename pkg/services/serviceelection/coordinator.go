@@ -95,7 +95,7 @@ func (c *coordinator) join(svcCtx *servicecontext.Context, service *v1.Service,
 		return member, true
 	}
 	if c.lease == nil || c.lease.Ctx.Err() != nil {
-		if c.newLease() == nil {
+		if c.ensureLeaseLocked() == nil {
 			delete(c.members, service.UID)
 			return nil, false
 		}
@@ -108,14 +108,14 @@ func (c *coordinator) join(svcCtx *servicecontext.Context, service *v1.Service,
 	// An external cleanup retired the manager entry. Rebuild it from the live
 	// coordinator snapshot rather than admitting a member to a dead lease.
 	c.lease = nil
-	if c.newLease() == nil {
+	if c.ensureLeaseLocked() == nil {
 		delete(c.members, service.UID)
 		return nil, false
 	}
 	return member, true
 }
 
-func (c *coordinator) newLease() *lease.Lease {
+func (c *coordinator) ensureLeaseLocked() *lease.Lease {
 	if c.lease != nil && c.lease.Ctx.Err() == nil {
 		return c.lease
 	}
@@ -154,7 +154,7 @@ func (c *coordinator) deactivateMember(member *member) {
 	}
 	member.operationMutex.Lock()
 	defer member.operationMutex.Unlock()
-	c.deactivateMemberAction(member)
+	c.deactivateMemberWithOperationLockHeld(member)
 }
 
 func (c *coordinator) withdrawMember(member *member) {
@@ -177,7 +177,7 @@ func (c *coordinator) closeMember(member *member) {
 	}
 	member.operationMutex.Lock()
 	defer member.operationMutex.Unlock()
-	c.deactivateMemberAction(member)
+	c.deactivateMemberWithOperationLockHeld(member)
 	c.withdrawMember(member)
 }
 
@@ -240,7 +240,7 @@ func (c *coordinator) newCampaignCandidate() campaignCandidate {
 			joinExisting: true,
 		}
 	}
-	svcLease := c.newLease()
+	svcLease := c.ensureLeaseLocked()
 	if svcLease == nil {
 		return campaignCandidate{}
 	}
@@ -431,7 +431,7 @@ func (c *coordinator) activateMember(ctx context.Context, member *member, svcLea
 	if err := c.dependencies.Datapath.Activate(ctx, member.service, member.serviceContext, wg); err != nil {
 		metrics.ServiceElectionErrorsTotal.WithLabelValues(member.service.Namespace, member.service.Name, "service_sync").Inc()
 		log.Error("start service after election", "service", member.service.Name, "namespace", member.service.Namespace, "error", err)
-		c.deactivateMemberAction(member)
+		c.deactivateMemberWithOperationLockHeld(member)
 		if !c.hasOtherReadyMember(member) {
 			c.cancelCampaign(svcLease, campaign)
 		}
@@ -439,8 +439,8 @@ func (c *coordinator) activateMember(ctx context.Context, member *member, svcLea
 	}
 	c.resetRestartFailures()
 	if !c.dependencies.State.IsCurrent(member.service, member.serviceContext, member.readinessGeneration) ||
-		!c.canActivateMember(member, svcLease, campaign) {
-		c.deactivateMemberAction(member)
+		!c.activationStillValid(member, svcLease, campaign) {
+		c.deactivateMemberWithOperationLockHeld(member)
 	}
 }
 
@@ -450,14 +450,14 @@ func (c *coordinator) resetRestartFailures() {
 	c.restartFailures = 0
 }
 
-func (c *coordinator) canActivateMember(member *member, svcLease *lease.Lease,
+func (c *coordinator) activationStillValid(member *member, svcLease *lease.Lease,
 	campaign *campaign) bool {
 	c.mutex.Lock()
 	defer c.mutex.Unlock()
-	return c.memberValidForActivation(member, svcLease, campaign) && member.active
+	return c.memberValidForActivationLocked(member, svcLease, campaign) && member.active
 }
 
-func (c *coordinator) memberValidForActivation(member *member, svcLease *lease.Lease,
+func (c *coordinator) memberValidForActivationLocked(member *member, svcLease *lease.Lease,
 	campaign *campaign) bool {
 	return !c.retired && c.lease == svcLease && c.campaign == campaign &&
 		campaign != nil && !campaign.stopped && campaign.election.IsLeading() &&
@@ -467,7 +467,7 @@ func (c *coordinator) memberValidForActivation(member *member, svcLease *lease.L
 func (c *coordinator) markMemberActive(member *member, svcLease *lease.Lease, campaign *campaign) bool {
 	c.mutex.Lock()
 	defer c.mutex.Unlock()
-	if !c.memberValidForActivation(member, svcLease, campaign) || member.active {
+	if !c.memberValidForActivationLocked(member, svcLease, campaign) || member.active {
 		return false
 	}
 	member.active = true
@@ -509,7 +509,7 @@ func (c *coordinator) markMemberInactive(member *member) (*lease.Lease, bool) {
 	return c.lease, true
 }
 
-func (c *coordinator) deactivateMemberAction(member *member) {
+func (c *coordinator) deactivateMemberWithOperationLockHeld(member *member) {
 	svcLease, deactivated := c.markMemberInactive(member)
 	if !deactivated {
 		return
@@ -588,7 +588,7 @@ func (c *coordinator) completeCampaign(svcLease *lease.Lease,
 	if svcLease.Ctx.Err() != nil {
 		c.lease = nil
 	}
-	return len(c.members) != 0, c.restartDelay()
+	return len(c.members) != 0, c.restartDelayLocked()
 }
 
 func (c *coordinator) finishCampaign(svcLease *lease.Lease, campaign *campaign, wg *sync.WaitGroup) {
@@ -602,11 +602,11 @@ func (c *coordinator) finishCampaign(svcLease *lease.Lease, campaign *campaign, 
 	})
 }
 
-// restartDelay doubles the restart delay for each consecutive
+// restartDelayLocked doubles the restart delay for each consecutive
 // activation failure, capped at restartMaxDelay, so a
 // persistently broken Service does not spin the Lease and VIP in a tight
-// add/delete loop. The caller must hold e.mutex.
-func (c *coordinator) restartDelay() time.Duration {
+// add/delete loop. The caller must hold c.mutex.
+func (c *coordinator) restartDelayLocked() time.Duration {
 	delay := restartBaseDelay
 	for i := 0; i < c.restartFailures && delay < restartMaxDelay; i++ {
 		delay *= 2

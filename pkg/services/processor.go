@@ -227,7 +227,7 @@ func (p *Processor) Reconcile(ctx context.Context, event watch.Event, serviceFun
 					metrics.ServiceReconcileErrorsTotal.WithLabelValues(svc.Namespace, svc.Name, "delete_service").Inc()
 					log.Error("(svc) unable to remove", "service", svc.UID)
 				}
-				p.electionCoordinators.LeaveForContext(svcCtx, oldService)
+				p.electionCoordinators.DetachForContext(svcCtx, oldService)
 				// Reset the the svcCtx when it was garbage collected
 				// As the next function will create a new context when nil
 				svcCtx = nil
@@ -677,7 +677,7 @@ func (p *Processor) retireServiceContext(svc *v1.Service) (*servicecontext.Conte
 		if currentContext != contextBeforeLock {
 			currentContext.Cancel()
 		}
-		p.electionCoordinators.LeaveForContext(currentContext, svc)
+		p.electionCoordinators.DetachForContext(currentContext, svc)
 		cleanupCtx = context.WithoutCancel(currentContext.Ctx)
 	}
 	return currentContext, cleanupCtx, nil

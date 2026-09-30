@@ -22,7 +22,7 @@ func newCoordinatorManager(dependencies Dependencies) *coordinatorManager {
 	}
 }
 
-func (cm *coordinatorManager) newCoordinator(id lease.ID) *coordinator {
+func (cm *coordinatorManager) getOrCreate(id lease.ID) *coordinator {
 	cm.mutex.Lock()
 	defer cm.mutex.Unlock()
 	if cm.coordinators == nil {

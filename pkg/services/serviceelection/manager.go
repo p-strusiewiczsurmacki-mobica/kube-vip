@@ -44,7 +44,7 @@ func (m *Manager) join(svcCtx *servicecontext.Context, service *v1.Service,
 		if !m.state.IsCurrent(service, svcCtx, readinessGeneration) {
 			return nil, false
 		}
-		coordinator := m.coordinatorMgr.newCoordinator(id)
+		coordinator := m.coordinatorMgr.getOrCreate(id)
 		member, joined := coordinator.join(svcCtx, service, readinessGeneration)
 		if joined {
 			if m.state.IsCurrent(member.service, member.serviceContext, member.readinessGeneration) {
@@ -65,8 +65,9 @@ func (m *Manager) join(svcCtx *servicecontext.Context, service *v1.Service,
 	}
 }
 
-// LeaveForContext withdraws only the member belonging to svcCtx.
-func (m *Manager) LeaveForContext(svcCtx *servicecontext.Context, service *v1.Service) {
+// DetachForContext withdraws only the member belonging to svcCtx. The caller
+// owns datapath cleanup, so this method deliberately does not deactivate it.
+func (m *Manager) DetachForContext(svcCtx *servicecontext.Context, service *v1.Service) {
 	if svcCtx == nil || service == nil {
 		return
 	}

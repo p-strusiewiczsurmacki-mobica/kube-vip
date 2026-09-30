@@ -191,9 +191,9 @@ func TestLastMemberRetirementRemovesCoordinatorFromRegistry(t *testing.T) {
 func TestStaleCoordinatorCannotRemoveReplacementFromRegistry(t *testing.T) {
 	manager, _, _ := newTestManager()
 	id := lease.NewID("kubernetes", "default", "shared")
-	stale := manager.coordinatorMgr.newCoordinator(id)
+	stale := manager.coordinatorMgr.getOrCreate(id)
 	manager.coordinatorMgr.remove(stale)
-	replacement := manager.coordinatorMgr.newCoordinator(id)
+	replacement := manager.coordinatorMgr.getOrCreate(id)
 
 	manager.coordinatorMgr.remove(stale)
 
@@ -269,7 +269,7 @@ func TestActivationFailureCancelsCampaignAndRecordsBackoff(t *testing.T) {
 	if coordinator.restartFailures != 1 {
 		t.Fatalf("restartFailures = %d, want 1", coordinator.restartFailures)
 	}
-	if got, want := coordinator.restartDelay(), 2*restartBaseDelay; got != want {
+	if got, want := coordinator.restartDelayLocked(), 2*restartBaseDelay; got != want {
 		t.Fatalf("restart delay = %v, want %v", got, want)
 	}
 	member.coordinator.closeMember(member)
@@ -395,7 +395,7 @@ func TestLeavingInactiveMemberDoesNotCleanupDatapath(t *testing.T) {
 	}
 }
 
-func TestLeaveForContextWithdrawsWithoutDatapathCleanup(t *testing.T) {
+func TestDetachForContextWithdrawsWithoutDatapathCleanup(t *testing.T) {
 	manager, adapter, _ := newTestManager()
 	service := &v1.Service{ObjectMeta: metav1.ObjectMeta{Name: "service", Namespace: "default", UID: "service"}}
 	member := readyMember(t, manager, adapter, service)
@@ -412,10 +412,10 @@ func TestLeaveForContextWithdrawsWithoutDatapathCleanup(t *testing.T) {
 		t.Fatal("member was not activated")
 	}
 
-	manager.LeaveForContext(member.serviceContext, service)
+	manager.DetachForContext(member.serviceContext, service)
 
 	if current := coordinator.currentMember(service.UID); current != nil {
-		t.Fatal("LeaveForContext() did not withdraw the member")
+		t.Fatal("DetachForContext() did not withdraw the member")
 	}
 	adapter.mutex.Lock()
 	cleanups := len(adapter.cleanups)

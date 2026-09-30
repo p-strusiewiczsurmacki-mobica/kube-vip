@@ -68,6 +68,6 @@ The following ordering rules are invariants:
 
 The readiness watcher owns joining and closing a member. The coordinator owns
 campaign selection and member activation. The local election-session runner
-owns finalizing its session. The caller of `LeaveForContext` already owns
+owns finalizing its session. The caller of `DetachForContext` already owns
 datapath cleanup; that method only removes the matching membership to avoid
 reacquiring the Service lock through cleanup.
