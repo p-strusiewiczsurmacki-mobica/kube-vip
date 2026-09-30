@@ -88,6 +88,9 @@ func (ctx *Context) SignalReadiness() {
 // The caller must release the returned reservation after its datapath operation.
 func (ctx *Context) WaitForReadiness() (func(), bool) {
 	for {
+		if ctx.Ctx.Err() != nil {
+			return nil, false
+		}
 		generation, ready, _, isReady := ctx.ReadinessState()
 		if !isReady {
 			select {

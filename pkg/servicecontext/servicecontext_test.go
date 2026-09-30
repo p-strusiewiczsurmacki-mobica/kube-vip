@@ -114,6 +114,27 @@ func TestResetReadinessGenerationWaitsForActivation(t *testing.T) {
 	}
 }
 
+func TestWaitForReadinessReturnsAfterReadyContextIsCancelled(t *testing.T) {
+	svcCtx := New(context.Background())
+	svcCtx.SignalReadiness()
+	svcCtx.Cancel()
+
+	done := make(chan bool, 1)
+	go func() {
+		_, acquired := svcCtx.WaitForReadiness()
+		done <- acquired
+	}()
+
+	select {
+	case acquired := <-done:
+		if acquired {
+			t.Fatal("cancelled Service context returned a readiness reservation")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("WaitForReadiness spun after a ready Service context was cancelled")
+	}
+}
+
 func TestStartWatchingClaimsOnce(t *testing.T) {
 	svcCtx := New(context.Background())
 	defer svcCtx.Cancel()
