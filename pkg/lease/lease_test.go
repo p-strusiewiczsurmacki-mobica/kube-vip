@@ -232,6 +232,94 @@ func TestLeaseElectionStateCoordinatesCandidates(t *testing.T) {
 	}
 }
 
+func TestElectionSessionStaleStopCannotStopReplacement(t *testing.T) {
+	leaseCtx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	serviceLease := newLease(leaseCtx, cancel)
+
+	first, owner := serviceLease.AcquireElection()
+	if !owner || !first.Started() {
+		t.Fatal("first election session did not become leader")
+	}
+	observer, owner := serviceLease.AcquireElection()
+	if owner {
+		t.Fatal("observer acquired an election that was already leading")
+	}
+	if observer.Started() || observer.Stopped() {
+		t.Fatal("observer was allowed to mutate election state")
+	}
+
+	if !first.Stopped() {
+		t.Fatal("first election session did not stop")
+	}
+	second, owner := serviceLease.AcquireElection()
+	if !owner || !second.Started() {
+		t.Fatal("replacement election session did not become leader")
+	}
+	if first.Stopped() {
+		t.Fatal("stale session stopped the replacement election")
+	}
+	if first.Started() {
+		t.Fatal("stale session restarted after it had been replaced")
+	}
+	if !second.IsLeading() || !serviceLease.IsLeading() {
+		t.Fatal("replacement election lost leadership after stale callbacks")
+	}
+}
+
+func TestElectionSessionWaitForLeaderDoesNotAdoptReplacement(t *testing.T) {
+	leaseCtx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	serviceLease := newLease(leaseCtx, cancel)
+
+	first, owner := serviceLease.AcquireElection()
+	if !owner {
+		t.Fatal("first election session did not acquire the runner")
+	}
+	observer, owner := serviceLease.AcquireElection()
+	if owner {
+		t.Fatal("observer acquired an election that was already campaigning")
+	}
+	if !first.Stopped() {
+		t.Fatal("first election session did not stop")
+	}
+	second, owner := serviceLease.AcquireElection()
+	if !owner || !second.Started() {
+		t.Fatal("replacement election session did not become leader")
+	}
+
+	if observer.WaitForLeader(context.Background()) {
+		t.Fatal("observer of the first generation adopted replacement leadership")
+	}
+}
+
+func TestElectionSessionWaitForEndObservesRapidReplacement(t *testing.T) {
+	leaseCtx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	serviceLease := newLease(leaseCtx, cancel)
+
+	first, owner := serviceLease.AcquireElection()
+	if !owner || !first.Started() {
+		t.Fatal("first election session did not become leader")
+	}
+	done := make(chan struct{})
+	go func() {
+		first.WaitForEnd(context.Background())
+		close(done)
+	}()
+
+	first.Stopped()
+	second, owner := serviceLease.AcquireElection()
+	if !owner || !second.Started() {
+		t.Fatal("replacement election session did not become leader")
+	}
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("waiter missed the end of its generation during rapid replacement")
+	}
+}
+
 func TestLeaseWaitForLeaderReturnsWhenCandidateStops(t *testing.T) {
 	leaseCtx, cancel := context.WithCancel(context.Background())
 	defer cancel()
