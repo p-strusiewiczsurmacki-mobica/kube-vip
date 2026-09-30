@@ -250,8 +250,11 @@ func New(ctx context.Context, configMap string, config *kubevip.Config) (*Manage
 	leaseMgr := lease.NewManager()
 	routeMgr := route.NewManager()
 
-	svcProcessor := services.NewServicesProcessor(config, bgpServer, clientset, rwClientSet,
+	svcProcessor, err := services.NewServicesProcessor(config, bgpServer, clientset, rwClientSet,
 		intfMgr, arpMgr, nodeLabelManager, electionMgr, leaseMgr, routeMgr)
+	if err != nil {
+		return nil, fmt.Errorf("creating services processor: %w", err)
+	}
 
 	return &Manager{
 		clientSet:        clientset,

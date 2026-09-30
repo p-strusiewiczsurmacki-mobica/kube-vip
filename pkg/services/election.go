@@ -2,6 +2,7 @@ package services
 
 import (
 	"context"
+	"fmt"
 	log "log/slog"
 	"sync"
 	"time"
@@ -25,20 +26,19 @@ type electionAdapter struct {
 
 // newElectionCoordinatorManager wires the generic election coordinator to the
 // Service processor. The coordinator itself does not depend on pkg/services.
-func newElectionCoordinatorManager(p *Processor) *serviceelection.Manager {
-	var leaseStore serviceelection.LeaseStore
-	if p.leaseMgr != nil {
-		leaseStore = p.leaseMgr
-	}
+func newElectionCoordinatorManager(p *Processor) (*serviceelection.Manager, error) {
 	adapter := &electionAdapter{processor: p}
-	return serviceelection.NewManager(serviceelection.Dependencies{
-		Config: p.config, Leases: leaseStore, ElectionManager: p.electionMgr,
+	manager, err := serviceelection.NewManager(&serviceelection.Dependencies{
+		Config: p.config, Leases: p.leaseMgr, ElectionManager: p.electionMgr,
 		State: adapter, Datapath: adapter, Runner: adapter, Scheduler: adapter,
 	})
+	if err != nil {
+		return nil, fmt.Errorf("create election coordinator manager: %w", err)
+	}
+	return manager, nil
 }
 
 // IsCurrent implements serviceelection.ServiceState.
-
 func (a *electionAdapter) IsCurrent(service *v1.Service, svcCtx *servicecontext.Context, readinessGeneration uint64) bool {
 	p := a.processor
 	p.serviceLock.Lock(service.UID)
@@ -85,11 +85,7 @@ func (a *electionAdapter) Cleanup(ctx context.Context, service *v1.Service, svcC
 
 // RunCampaign implements serviceelection.CampaignRunner.
 func (a *electionAdapter) RunCampaign(ctx context.Context, run *election.RunConfig) error {
-	p := a.processor
-	if p.electionRun != nil {
-		return p.electionRun(ctx, run, p.config)
-	}
-	return election.RunOrDie(ctx, run, p.config)
+	return election.RunOrDie(ctx, run, a.processor.config)
 }
 
 // ScheduleRestart implements serviceelection.RestartScheduler.

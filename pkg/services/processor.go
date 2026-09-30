@@ -71,7 +71,6 @@ type Processor struct {
 	nodeLabelManager node.Labeler
 
 	electionMgr             *election.Manager
-	electionRun             func(context.Context, *election.RunConfig, *kubevip.Config) error
 	scheduleElectionRestart func(func())
 	instanceFactory         func(context.Context, *v1.Service, *sync.WaitGroup) (*instance.Instance, error)
 
@@ -86,7 +85,13 @@ type Processor struct {
 func NewServicesProcessor(config *kubevip.Config, bgpServer *bgp.Server,
 	clientSet *kubernetes.Clientset, rwClientSet *kubernetes.Clientset,
 	intfMgr *networkinterface.Manager, arpMgr *arp.Manager, nodeLabelManager node.Labeler,
-	electionMgr *election.Manager, leaseMgr *lease.Manager, routeMgr *route.Manager) *Processor {
+	electionMgr *election.Manager, leaseMgr *lease.Manager, routeMgr *route.Manager) (*Processor, error) {
+	if config == nil {
+		return nil, fmt.Errorf("create services processor: config is required")
+	}
+	if leaseMgr == nil {
+		return nil, fmt.Errorf("create services processor: lease manager is required")
+	}
 	lbClassFilterFunc := lbClassFilter
 	if config.LoadBalancerClassLegacyHandling {
 		lbClassFilterFunc = lbClassFilterLegacy
@@ -108,8 +113,12 @@ func NewServicesProcessor(config *kubevip.Config, bgpServer *bgp.Server,
 		TunnelMgr:        wireguard.NewTunnelManager(),
 		routeMgr:         routeMgr,
 	}
-	processor.electionCoordinators = newElectionCoordinatorManager(processor)
-	return processor
+	var err error
+	processor.electionCoordinators, err = newElectionCoordinatorManager(processor)
+	if err != nil {
+		return nil, fmt.Errorf("create services processor: %w", err)
+	}
+	return processor, nil
 }
 
 func (p *Processor) Reconcile(ctx context.Context, event watch.Event, serviceFunc *Callback, forcedOnly bool,

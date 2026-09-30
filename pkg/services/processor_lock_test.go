@@ -474,9 +474,8 @@ func TestDeleteTrackedServiceCleansUpElectedServiceImmediately(t *testing.T) {
 		config:           &kubevip.Config{EnableServicesElection: true},
 		ServiceInstances: []*instance.Instance{{ServiceUID: uid, ServiceSnapshot: service}},
 		leaseMgr:         lease.NewManager(),
-		electionRun:      runner.run,
 	}
-	initializeTestElectionCoordinators(processor)
+	initializeTestElectionCoordinators(processor, withTestCampaignRunner(runner))
 	svcCtx := servicecontext.New(context.Background())
 	processor.svcMap.Store(uid, svcCtx)
 	leaseNamespace, serviceLease := lease.ServiceName(service)
@@ -516,9 +515,8 @@ func TestDeleteTrackedServiceReturnsPersistentCleanupFailure(t *testing.T) {
 		ServiceInstances: []*instance.Instance{{ServiceUID: uid, ServiceSnapshot: service, LabelAdded: true}},
 		nodeLabelManager: labeler,
 		leaseMgr:         lease.NewManager(),
-		electionRun:      runner.run,
 	}
-	initializeTestElectionCoordinators(processor)
+	initializeTestElectionCoordinators(processor, withTestCampaignRunner(runner))
 	svcCtx := servicecontext.New(context.Background())
 	processor.svcMap.Store(uid, svcCtx)
 	leaseNamespace, serviceLease := lease.ServiceName(service)

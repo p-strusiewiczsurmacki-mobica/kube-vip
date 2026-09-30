@@ -2,6 +2,7 @@ package serviceelection
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"time"
 
@@ -49,4 +50,26 @@ type Dependencies struct {
 	Datapath        Datapath
 	Runner          CampaignRunner
 	Scheduler       RestartScheduler
+}
+
+func (d *Dependencies) validate() error {
+	if d.Config == nil {
+		return errors.New("config is required")
+	}
+	if d.Leases == nil {
+		return errors.New("lease store is required")
+	}
+	if d.State == nil {
+		return errors.New("service state is required")
+	}
+	if d.Datapath == nil {
+		return errors.New("datapath is required")
+	}
+	if d.Runner == nil {
+		return errors.New("campaign runner is required")
+	}
+	if d.Scheduler == nil {
+		return errors.New("restart scheduler is required")
+	}
+	return nil
 }

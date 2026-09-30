@@ -13,7 +13,7 @@ import (
 // coordinator retirement retries against its replacement.
 func (m *Manager) join(svcCtx *servicecontext.Context, service *v1.Service,
 	readinessGeneration uint64) (*member, bool) {
-	if svcCtx == nil || service == nil || m.registry.dependencies.Leases == nil {
+	if svcCtx == nil || service == nil {
 		return nil, false
 	}
 
