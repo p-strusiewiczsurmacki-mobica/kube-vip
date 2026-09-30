@@ -163,7 +163,7 @@ func (c *coordinator) withdrawMember(member *member) {
 		return
 	}
 	c.retire()
-	if campaign != nil && (campaign.external || leaseRetired) {
+	if campaign != nil && (!campaign.runsElection() || leaseRetired) {
 		campaign.cancel()
 	}
 	// A Service-owned runner remains responsible for the shared election when
@@ -218,12 +218,21 @@ func (c *coordinator) retire() {
 // campaignCandidate carries the decision taken under the election mutex so the
 // caller can act on it without holding the lock.
 type campaignCandidate struct {
-	lease        *lease.Lease
-	campaign     *campaign
-	leaderCtx    context.Context
-	members      []*member
-	joinExisting bool
+	action    campaignAction
+	lease     *lease.Lease
+	campaign  *campaign
+	leaderCtx context.Context
+	members   []*member
 }
+
+type campaignAction uint8
+
+const (
+	campaignNoop campaignAction = iota
+	campaignJoin
+	campaignObserve
+	campaignRun
+)
 
 func (c *coordinator) newCampaignCandidate() campaignCandidate {
 	c.mutex.Lock()
@@ -234,10 +243,10 @@ func (c *coordinator) newCampaignCandidate() campaignCandidate {
 	}
 	if c.campaign != nil {
 		return campaignCandidate{
-			lease:        c.lease,
-			campaign:     c.campaign,
-			leaderCtx:    c.campaign.leaderCtx,
-			joinExisting: true,
+			action:    campaignJoin,
+			lease:     c.lease,
+			campaign:  c.campaign,
+			leaderCtx: c.campaign.leaderCtx,
 		}
 	}
 	svcLease := c.ensureLeaseLocked()
@@ -247,33 +256,37 @@ func (c *coordinator) newCampaignCandidate() campaignCandidate {
 	members := c.membersLocked()
 	campaign := newCampaign(context.Background(), svcLease, memberVIPs(members))
 	c.campaign = campaign
-	return campaignCandidate{lease: svcLease, campaign: campaign, members: members}
+	action := campaignObserve
+	if campaign.runsElection() {
+		action = campaignRun
+	}
+	return campaignCandidate{action: action, lease: svcLease, campaign: campaign, members: members}
 }
 
 func (c *coordinator) startCampaign(wg *sync.WaitGroup) {
 	candidate := c.newCampaignCandidate()
-	if candidate.campaign == nil {
+	switch candidate.action {
+	case campaignNoop:
 		return
-	}
-	if candidate.joinExisting {
+	case campaignJoin:
 		if candidate.leaderCtx != nil {
 			c.activateMembers(candidate.leaderCtx, candidate.lease, candidate.campaign, wg)
 		}
 		return
-	}
-	if candidate.campaign.external {
+	case campaignObserve:
 		wg.Go(func() {
 			c.followCampaign(candidate.lease, candidate.campaign, wg)
 		})
 		return
-	}
-	for _, member := range candidate.members {
-		metrics.ServiceElectionAttemptsTotal.WithLabelValues(member.service.Namespace, member.service.Name).Inc()
-	}
+	case campaignRun:
+		for _, member := range candidate.members {
+			metrics.ServiceElectionAttemptsTotal.WithLabelValues(member.service.Namespace, member.service.Name).Inc()
+		}
 
-	wg.Go(func() {
-		c.runCampaign(candidate.lease, candidate.campaign, wg)
-	})
+		wg.Go(func() {
+			c.runCampaign(candidate.lease, candidate.campaign, wg)
+		})
+	}
 }
 
 // adoptLeaderContext publishes the leader context for a campaign that just won
@@ -543,7 +556,7 @@ func (c *coordinator) markCampaignStopped(svcLease *lease.Lease,
 	if campaign.cancelLeader != nil {
 		campaign.cancelLeader()
 	}
-	if !campaign.external {
+	if campaign.runsElection() {
 		campaign.election.Stopped()
 	}
 	return c.membersLocked()
