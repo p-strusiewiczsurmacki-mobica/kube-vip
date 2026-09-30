@@ -63,11 +63,57 @@ func (a *testAdapter) ScheduleRestart(_ context.Context, _ time.Duration, _ *syn
 func newTestManager() (*Manager, *testAdapter, *lease.Manager) {
 	adapter := &testAdapter{current: make(map[types.UID]*servicecontext.Context)}
 	leaseMgr := lease.NewManager()
-	manager := NewManager(Dependencies{
+	manager, err := NewManager(&Dependencies{
 		Config: &kubevip.Config{}, Leases: leaseMgr,
 		State: adapter, Datapath: adapter, Runner: adapter, Scheduler: adapter,
 	})
+	if err != nil {
+		panic(err)
+	}
 	return manager, adapter, leaseMgr
+}
+
+func TestNewManagerRejectsMissingDependencies(t *testing.T) {
+	manager, err := NewManager(nil)
+	if err == nil {
+		t.Fatal("NewManager() accepted nil dependencies")
+	}
+	if manager != nil {
+		t.Fatal("NewManager() returned a manager after rejecting nil dependencies")
+	}
+
+	adapter := &testAdapter{current: make(map[types.UID]*servicecontext.Context)}
+	valid := func() Dependencies {
+		return Dependencies{
+			Config: &kubevip.Config{}, Leases: lease.NewManager(),
+			State: adapter, Datapath: adapter, Runner: adapter, Scheduler: adapter,
+		}
+	}
+
+	tests := []struct {
+		name   string
+		modify func(*Dependencies)
+	}{
+		{name: "config", modify: func(dependencies *Dependencies) { dependencies.Config = nil }},
+		{name: "lease store", modify: func(dependencies *Dependencies) { dependencies.Leases = nil }},
+		{name: "service state", modify: func(dependencies *Dependencies) { dependencies.State = nil }},
+		{name: "datapath", modify: func(dependencies *Dependencies) { dependencies.Datapath = nil }},
+		{name: "campaign runner", modify: func(dependencies *Dependencies) { dependencies.Runner = nil }},
+		{name: "restart scheduler", modify: func(dependencies *Dependencies) { dependencies.Scheduler = nil }},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			dependencies := valid()
+			test.modify(&dependencies)
+			manager, err := NewManager(&dependencies)
+			if err == nil {
+				t.Fatal("NewManager() accepted missing dependency")
+			}
+			if manager != nil {
+				t.Fatal("NewManager() returned a manager after rejecting its dependencies")
+			}
+		})
+	}
 }
 
 func readyMember(t *testing.T, manager *Manager, adapter *testAdapter, service *v1.Service) *member {

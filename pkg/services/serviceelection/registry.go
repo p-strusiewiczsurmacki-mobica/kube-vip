@@ -2,6 +2,7 @@ package serviceelection
 
 import (
 	"context"
+	"fmt"
 	"strconv"
 	"sync"
 	"sync/atomic"
@@ -26,12 +27,18 @@ type registry struct {
 }
 
 // NewManager creates a Service election manager.
-func NewManager(dependencies Dependencies) *Manager {
+func NewManager(dependencies *Dependencies) (*Manager, error) {
+	if dependencies == nil {
+		return nil, fmt.Errorf("create service election manager: dependencies are required")
+	}
+	if err := dependencies.validate(); err != nil {
+		return nil, fmt.Errorf("create service election manager: %w", err)
+	}
 	registry := &registry{
 		coordinators: make(map[string]*coordinator),
-		dependencies: dependencies,
+		dependencies: *dependencies,
 	}
-	return &Manager{config: dependencies.Config, state: dependencies.State, registry: registry}
+	return &Manager{config: dependencies.Config, state: dependencies.State, registry: registry}, nil
 }
 
 func (r *registry) coordinatorFor(id lease.ID) *coordinator {

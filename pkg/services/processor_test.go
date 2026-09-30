@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/kube-vip/kube-vip/pkg/kubevip"
+	"github.com/kube-vip/kube-vip/pkg/lease"
 	"github.com/kube-vip/kube-vip/pkg/servicecontext"
 	"github.com/kube-vip/kube-vip/pkg/services/serviceelection"
 	v1 "k8s.io/api/core/v1"
@@ -20,6 +21,27 @@ func newTestServiceLocks() *ServiceLock {
 type testElectionDatapath struct {
 	production *electionAdapter
 	activate   func(context.Context, *v1.Service, *servicecontext.Context, *sync.WaitGroup) error
+}
+
+type testElectionCoordinatorConfig struct {
+	activate func(context.Context, *v1.Service, *servicecontext.Context, *sync.WaitGroup) error
+	runner   serviceelection.CampaignRunner
+}
+
+type testElectionCoordinatorOption func(*testElectionCoordinatorConfig)
+
+func withTestElectionActivation(
+	activate func(context.Context, *v1.Service, *servicecontext.Context, *sync.WaitGroup) error,
+) testElectionCoordinatorOption {
+	return func(config *testElectionCoordinatorConfig) {
+		config.activate = activate
+	}
+}
+
+func withTestCampaignRunner(runner serviceelection.CampaignRunner) testElectionCoordinatorOption {
+	return func(config *testElectionCoordinatorConfig) {
+		config.runner = runner
+	}
 }
 
 func (d *testElectionDatapath) Activate(ctx context.Context, service *v1.Service,
@@ -39,25 +61,45 @@ func (d *testElectionDatapath) Cleanup(ctx context.Context, service *v1.Service,
 // established by NewServicesProcessor after a partial test Processor is built.
 // Tests replace only datapath activation; cleanup retains production behavior.
 func initializeTestElectionCoordinators(processor *Processor,
-	activate ...func(context.Context, *v1.Service, *servicecontext.Context, *sync.WaitGroup) error) {
+	options ...testElectionCoordinatorOption) {
+	if processor.config == nil {
+		processor.config = &kubevip.Config{}
+	}
+	if processor.leaseMgr == nil {
+		processor.leaseMgr = lease.NewManager()
+	}
 	adapter := &electionAdapter{processor: processor}
-	datapath := &testElectionDatapath{production: adapter}
-	if len(activate) != 0 {
-		datapath.activate = activate[0]
+	config := testElectionCoordinatorConfig{runner: adapter}
+	for _, option := range options {
+		option(&config)
 	}
-	var leaseStore serviceelection.LeaseStore
-	if processor.leaseMgr != nil {
-		leaseStore = processor.leaseMgr
-	}
-	processor.electionCoordinators = serviceelection.NewManager(serviceelection.Dependencies{
-		Config: processor.config, Leases: leaseStore, ElectionManager: processor.electionMgr,
-		State: adapter, Datapath: datapath, Runner: adapter, Scheduler: adapter,
+	datapath := &testElectionDatapath{production: adapter, activate: config.activate}
+	manager, err := serviceelection.NewManager(&serviceelection.Dependencies{
+		Config: processor.config, Leases: processor.leaseMgr, ElectionManager: processor.electionMgr,
+		State: adapter, Datapath: datapath, Runner: config.runner, Scheduler: adapter,
 	})
+	if err != nil {
+		panic(err)
+	}
+	processor.electionCoordinators = manager
 }
 
 func TestNewServicesProcessorInitializesElectionCoordinators(t *testing.T) {
-	processor := NewServicesProcessor(&kubevip.Config{}, nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	processor, err := NewServicesProcessor(&kubevip.Config{}, nil, nil, nil, nil, nil, nil, nil, lease.NewManager(), nil)
+	if err != nil {
+		t.Fatalf("NewServicesProcessor() error = %v", err)
+	}
 	if processor.electionCoordinators == nil {
 		t.Fatal("NewServicesProcessor() did not initialize election coordinators")
+	}
+}
+
+func TestNewServicesProcessorRejectsNilLeaseManager(t *testing.T) {
+	processor, err := NewServicesProcessor(&kubevip.Config{}, nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	if err == nil {
+		t.Fatal("NewServicesProcessor() accepted a nil lease manager")
+	}
+	if processor != nil {
+		t.Fatal("NewServicesProcessor() returned a processor after rejecting its lease manager")
 	}
 }
