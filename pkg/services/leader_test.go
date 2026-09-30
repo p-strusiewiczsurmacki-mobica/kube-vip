@@ -50,7 +50,10 @@ func TestStartServicesLeaderElectionTracksSharedMembersAcrossReadinessLoss(t *te
 	namespace, name := lease.ServiceName(firstService)
 	id := lease.NewID(p.config.LeaderElectionType, namespace, name)
 	sharedLease := p.leaseMgr.Add(context.Background(), id)
-	sharedLease.ElectionStarted()
+	externalElection, owner := sharedLease.AcquireElection()
+	if !owner || !externalElection.Started() {
+		t.Fatal("external election did not become leader")
+	}
 
 	firstCtx := servicecontext.New(context.Background())
 	secondCtx := servicecontext.New(context.Background())
@@ -69,7 +72,7 @@ func TestStartServicesLeaderElectionTracksSharedMembersAcrossReadinessLoss(t *te
 
 	resetServiceReadiness(t, firstCtx)
 	waitForLeaseVIPCount(t, p.leaseMgr, id, 1)
-	if !sharedLease.Elected.Load() || p.leaseMgr.Get(id) != sharedLease {
+	if !sharedLease.IsLeading() || p.leaseMgr.Get(id) != sharedLease {
 		t.Fatal("one shared member losing readiness ended the healthy sibling campaign")
 	}
 
@@ -78,7 +81,7 @@ func TestStartServicesLeaderElectionTracksSharedMembersAcrossReadinessLoss(t *te
 
 	secondCtx.Cancel()
 	waitForLeaseVIPCount(t, p.leaseMgr, id, 1)
-	if firstCtx.Ctx.Err() != nil || !sharedLease.Elected.Load() || p.leaseMgr.Get(id) != sharedLease {
+	if firstCtx.Ctx.Err() != nil || !sharedLease.IsLeading() || p.leaseMgr.Get(id) != sharedLease {
 		t.Fatal("deleting one shared member ended the healthy sibling campaign")
 	}
 
@@ -108,10 +111,13 @@ func TestServiceMemberLeavingDoesNotCancelControlPlaneLease(t *testing.T) {
 	id := lease.NewID(p.config.LeaderElectionType, namespace, name)
 	controlPlaneToken := lease.ObjectName(id, "cp")
 	sharedLease, _ := p.leaseMgr.Acquire(context.Background(), id, controlPlaneToken, nil)
-	if !sharedLease.BeginElection() {
+	controlPlaneElection, owner := sharedLease.AcquireElection()
+	if !owner {
 		t.Fatal("control-plane election did not start")
 	}
-	sharedLease.ElectionStarted()
+	if !controlPlaneElection.Started() {
+		t.Fatal("control-plane election did not become leader")
+	}
 
 	svcCtx := servicecontext.New(context.Background())
 	p.svcMap.Store(service.UID, svcCtx)
@@ -124,7 +130,7 @@ func TestServiceMemberLeavingDoesNotCancelControlPlaneLease(t *testing.T) {
 		t.Fatalf("service election returned error: %v", err)
 	}
 
-	if sharedLease.Ctx.Err() != nil || !sharedLease.Elected.Load() || p.leaseMgr.Get(id) != sharedLease {
+	if sharedLease.Ctx.Err() != nil || !sharedLease.IsLeading() || p.leaseMgr.Get(id) != sharedLease {
 		t.Fatal("leaving Service member cancelled the control-plane lease")
 	}
 	p.leaseMgr.Delete(id, controlPlaneToken, sharedLease)
@@ -564,7 +570,7 @@ func TestServiceOwnedCampaignSurvivesFinalServiceWhileControlPlaneRemains(t *tes
 		t.Fatal("final Service departure stopped a campaign still used by the control plane")
 	case <-time.After(20 * time.Millisecond):
 	}
-	if sharedLease.Ctx.Err() != nil || !sharedLease.Elected.Load() || p.leaseMgr.Get(id) != sharedLease {
+	if sharedLease.Ctx.Err() != nil || !sharedLease.IsLeading() || p.leaseMgr.Get(id) != sharedLease {
 		t.Fatal("Service departure retired the control-plane campaign")
 	}
 

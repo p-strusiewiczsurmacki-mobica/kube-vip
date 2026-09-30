@@ -63,12 +63,16 @@ func TestServiceNameForMatchesServiceName(t *testing.T) {
 	}
 }
 
-func electLease(t *testing.T, lease *Lease) {
+func electLease(t *testing.T, lease *Lease) *ElectionSession {
 	t.Helper()
-	if !lease.BeginElection() {
+	election, owner := lease.AcquireElection()
+	if !owner {
 		t.Fatal("expected lease to admit an election candidate")
 	}
-	lease.ElectionStarted()
+	if !election.Started() {
+		t.Fatal("expected election candidate to become leader")
+	}
+	return election
 }
 
 func TestManagerAcquireRegistersMembership(t *testing.T) {
@@ -165,25 +169,31 @@ func TestWaitForElectionEndObservesRapidRestart(t *testing.T) {
 	manager := NewManager()
 	service := createTestService("service", "default", nil)
 	serviceLease := manager.Add(context.Background(), getSvcID(service))
-	if !serviceLease.BeginElection() {
+	first, owner := serviceLease.AcquireElection()
+	if !owner {
 		t.Fatal("first election did not start")
 	}
-	serviceLease.ElectionStarted()
+	if !first.Started() {
+		t.Fatal("first election did not become leader")
+	}
 
-	initialEnded, elected := serviceLease.WaitForLeaderGeneration(context.Background())
-	if !elected {
+	observer, owner := serviceLease.AcquireElection()
+	if owner || !observer.WaitForLeader(context.Background()) {
 		t.Fatal("waiter did not observe the elected lease")
 	}
 	done := make(chan struct{})
 	go func() {
-		serviceLease.WaitForElectionEndAfter(context.Background(), initialEnded)
+		observer.WaitForEnd(context.Background())
 		close(done)
 	}()
-	serviceLease.ElectionStopped()
-	if !serviceLease.BeginElection() {
+	first.Stopped()
+	replacement, owner := serviceLease.AcquireElection()
+	if !owner {
 		t.Fatal("replacement election did not start")
 	}
-	serviceLease.ElectionStarted()
+	if !replacement.Started() {
+		t.Fatal("replacement election did not become leader")
+	}
 
 	select {
 	case <-done:
@@ -205,18 +215,20 @@ func TestLeaseElectionStateCoordinatesCandidates(t *testing.T) {
 	defer cancel()
 	lease := newLease(leaseCtx, cancel)
 
-	if !lease.BeginElection() {
+	election, owner := lease.AcquireElection()
+	if !owner {
 		t.Fatal("first election candidate was not admitted")
 	}
-	if lease.BeginElection() {
+	observer, owner := lease.AcquireElection()
+	if owner {
 		t.Fatal("second election candidate was admitted while election was running")
 	}
 
 	joined := make(chan bool, 1)
 	go func() {
-		joined <- lease.WaitForLeader(context.Background())
+		joined <- observer.WaitForLeader(context.Background())
 	}()
-	lease.ElectionStarted()
+	election.Started()
 	select {
 	case elected := <-joined:
 		if !elected {
@@ -226,8 +238,8 @@ func TestLeaseElectionStateCoordinatesCandidates(t *testing.T) {
 		t.Fatal("follower remained blocked after election succeeded")
 	}
 
-	lease.ElectionStopped()
-	if !lease.BeginElection() {
+	election.Stopped()
+	if _, owner := lease.AcquireElection(); !owner {
 		t.Fatal("lease did not admit a new candidate after election stopped")
 	}
 }
@@ -324,15 +336,20 @@ func TestLeaseWaitForLeaderReturnsWhenCandidateStops(t *testing.T) {
 	leaseCtx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	lease := newLease(leaseCtx, cancel)
-	if !lease.BeginElection() {
+	election, owner := lease.AcquireElection()
+	if !owner {
 		t.Fatal("candidate was not admitted")
+	}
+	observer, owner := lease.AcquireElection()
+	if owner {
+		t.Fatal("observer acquired an election that was already campaigning")
 	}
 
 	joined := make(chan bool, 1)
 	go func() {
-		joined <- lease.WaitForLeader(context.Background())
+		joined <- observer.WaitForLeader(context.Background())
 	}()
-	lease.ElectionStopped()
+	election.Stopped()
 	select {
 	case elected := <-joined:
 		if elected {
@@ -352,19 +369,25 @@ func TestLeaseSupportsRetakingElectionAfterCandidateStops(t *testing.T) {
 	leaseCtx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	lease := newLease(leaseCtx, cancel)
-	if !lease.BeginElection() {
+	election, owner := lease.AcquireElection()
+	if !owner {
 		t.Fatal("candidate was not admitted")
+	}
+	observer, owner := lease.AcquireElection()
+	if owner {
+		t.Fatal("observer acquired an election that was already campaigning")
 	}
 
 	retried := make(chan bool, 1)
 	go func() {
-		if lease.WaitForLeader(context.Background()) {
+		if observer.WaitForLeader(context.Background()) {
 			retried <- false
 			return
 		}
-		retried <- lease.BeginElection()
+		_, owner := lease.AcquireElection()
+		retried <- owner
 	}()
-	lease.ElectionStopped()
+	election.Stopped()
 
 	select {
 	case tookOver := <-retried:
@@ -380,17 +403,18 @@ func TestLeaseWaitForElectionEndReleasesFollowers(t *testing.T) {
 	leaseCtx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	lease := newLease(leaseCtx, cancel)
-	if !lease.BeginElection() {
+	election, owner := lease.AcquireElection()
+	if !owner {
 		t.Fatal("candidate was not admitted")
 	}
-	lease.ElectionStarted()
+	election.Started()
 
 	finished := make(chan struct{})
 	go func() {
-		lease.WaitForElectionEnd(context.Background())
+		election.WaitForEnd(context.Background())
 		close(finished)
 	}()
-	lease.ElectionStopped()
+	election.Stopped()
 	select {
 	case <-finished:
 	case <-time.After(time.Second):
@@ -410,7 +434,8 @@ func TestLeaseWaitForLeaderReturnsWhenContextCancelled(t *testing.T) {
 			leaseCtx, cancelLease := context.WithCancel(context.Background())
 			defer cancelLease()
 			lease := newLease(leaseCtx, cancelLease)
-			if !lease.BeginElection() {
+			election, owner := lease.AcquireElection()
+			if !owner {
 				t.Fatal("candidate was not admitted")
 			}
 
@@ -418,7 +443,7 @@ func TestLeaseWaitForLeaderReturnsWhenContextCancelled(t *testing.T) {
 			defer cancelCaller()
 			result := make(chan bool, 1)
 			go func() {
-				result <- lease.WaitForLeader(callerCtx)
+				result <- election.WaitForLeader(callerCtx)
 			}()
 
 			cancelWait.cancel(cancelCaller, cancelLease)
@@ -446,13 +471,13 @@ func TestLeaseWaitForElectionEndReturnsWhenContextCancelled(t *testing.T) {
 			leaseCtx, cancelLease := context.WithCancel(context.Background())
 			defer cancelLease()
 			lease := newLease(leaseCtx, cancelLease)
-			electLease(t, lease)
+			election := electLease(t, lease)
 
 			callerCtx, cancelCaller := context.WithCancel(context.Background())
 			defer cancelCaller()
 			finished := make(chan struct{})
 			go func() {
-				lease.WaitForElectionEnd(callerCtx)
+				election.WaitForEnd(callerCtx)
 				close(finished)
 			}()
 
@@ -926,7 +951,7 @@ func TestManager_LeaderElectionRestartScenario_etcd(t *testing.T) {
 	if lease1 == lease2 {
 		t.Error("expected new lease to be different from old lease")
 	}
-	if lease2.Elected.Load() {
+	if lease2.IsLeading() {
 		t.Error("expected new lease to have no elected leader")
 	}
 }
@@ -954,10 +979,13 @@ func TestManager_CommonLeaseScenario(t *testing.T) {
 	}
 
 	// Simulate first service starting leadership.
-	if !lease1.BeginElection() {
+	election, owner := lease1.AcquireElection()
+	if !owner {
 		t.Fatal("expected first service to become election candidate")
 	}
-	lease1.ElectionStarted()
+	if !election.Started() {
+		t.Fatal("expected first service to become leader")
+	}
 
 	objectName2 := ServiceNamespacedName(svc2)
 
@@ -972,7 +1000,8 @@ func TestManager_CommonLeaseScenario(t *testing.T) {
 	if lease1 != lease2 {
 		t.Error("expected same lease for services with same lease annotation")
 	}
-	if !lease2.WaitForLeader(context.Background()) {
+	observer, owner := lease2.AcquireElection()
+	if owner || !observer.WaitForLeader(context.Background()) {
 		t.Fatal("shared-lease follower did not observe the elected lease")
 	}
 
@@ -1022,7 +1051,7 @@ func TestManager_RaceCondition_LeaseExistsBeforeDelete(t *testing.T) {
 		t.Error("expected same lease to be returned")
 	}
 
-	if !lease2.Elected.Load() {
+	if !lease2.IsLeading() {
 		t.Error("expected lease to remain elected")
 	}
 
@@ -1125,7 +1154,7 @@ func TestManager_LeaseContextCancelledBeforeStarted(t *testing.T) {
 		t.Error("expected second add to return isNew=false")
 	}
 
-	if lease2.Elected.Load() {
+	if lease2.IsLeading() {
 		t.Error("expected lease to have no elected leader")
 	}
 
@@ -1190,7 +1219,7 @@ func TestManager_RestartAfterLeaseContextCancelled(t *testing.T) {
 		// Expected
 	}
 
-	if lease2.Elected.Load() {
+	if lease2.IsLeading() {
 		t.Error("expected new lease to have no elected leader")
 	}
 }
@@ -1231,7 +1260,7 @@ func TestManager_NonCommonLease_WaitForLeaseContextDone(t *testing.T) {
 		t.Error("expected same lease to be returned")
 	}
 
-	if !lease2.Elected.Load() {
+	if !lease2.IsLeading() {
 		t.Error("expected lease to remain elected")
 	}
 

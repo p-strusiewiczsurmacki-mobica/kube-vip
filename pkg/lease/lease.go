@@ -139,13 +139,10 @@ func (m *Manager) Get(id ID) *Lease {
 
 // Lease holds lease data.
 type Lease struct {
-	Ctx      context.Context
-	Cancel   context.CancelFunc
-	services sync.Map
-	cnt      atomic.Int64
-	// Elected is kept temporarily for compatibility with callers being migrated
-	// to IsLeading and generation-scoped ElectionSession values.
-	Elected    atomic.Bool
+	Ctx        context.Context
+	Cancel     context.CancelFunc
+	services   sync.Map
+	cnt        atomic.Int64
 	stateMu    sync.Mutex
 	phase      electionPhase
 	generation uint64
@@ -286,7 +283,6 @@ func (s *ElectionSession) Started() bool {
 		return false
 	}
 	l.phase = electionLeading
-	l.Elected.Store(true)
 	l.signalStateLocked()
 	return true
 }
@@ -304,7 +300,6 @@ func (s *ElectionSession) Stopped() bool {
 		return false
 	}
 	l.phase = electionIdle
-	l.Elected.Store(false)
 	l.signalStateLocked()
 	return true
 }
@@ -373,74 +368,6 @@ func (s *ElectionSession) WaitForEnd(ctx context.Context) {
 func (l *Lease) IsLeading() bool {
 	phase, _, _ := l.electionState()
 	return phase == electionLeading
-}
-
-// BeginElection is the compatibility API for callers not yet migrated to
-// AcquireElection.
-func (l *Lease) BeginElection() bool {
-	_, owner := l.AcquireElection()
-	return owner
-}
-
-// ElectionStarted is the compatibility API for callers not yet migrated to an
-// ElectionSession. It intentionally preserves the old idle-to-leading behavior
-// while the remaining callers are migrated.
-func (l *Lease) ElectionStarted() {
-	l.stateMu.Lock()
-	defer l.stateMu.Unlock()
-	if l.phase == electionLeading {
-		return
-	}
-	if l.phase == electionIdle {
-		l.generation++
-	}
-	l.phase = electionLeading
-	l.Elected.Store(true)
-	l.signalStateLocked()
-}
-
-// ElectionStopped is the compatibility API for callers not yet migrated to an
-// ElectionSession.
-func (l *Lease) ElectionStopped() {
-	l.stateMu.Lock()
-	defer l.stateMu.Unlock()
-	if l.phase == electionIdle {
-		return
-	}
-	l.phase = electionIdle
-	l.Elected.Store(false)
-	l.signalStateLocked()
-}
-
-// WaitForLeader waits for an in-flight lease election to either elect a leader
-// or finish without one. It never holds the lease state mutex while waiting.
-func (l *Lease) WaitForLeader(ctx context.Context) bool {
-	_, elected := l.WaitForLeaderGeneration(ctx)
-	return elected
-}
-
-// WaitForLeaderGeneration waits for leadership and returns the election-end
-// generation observed atomically with the elected state.
-func (l *Lease) WaitForLeaderGeneration(ctx context.Context) (uint64, bool) {
-	phase, generation, _ := l.electionState()
-	if phase == electionIdle {
-		return 0, false
-	}
-	session := &ElectionSession{lease: l, generation: generation}
-	return generation, session.WaitForLeader(ctx)
-}
-
-// WaitForElectionEnd waits until an elected lease loses its leader. It never
-// holds the lease state mutex while waiting.
-func (l *Lease) WaitForElectionEnd(ctx context.Context) {
-	_, generation, _ := l.electionState()
-	l.WaitForElectionEndAfter(ctx, generation)
-}
-
-// WaitForElectionEndAfter waits until the leadership generation returned by
-// WaitForLeaderGeneration ends, even if a replacement election starts first.
-func (l *Lease) WaitForElectionEndAfter(ctx context.Context, generation uint64) {
-	(&ElectionSession{lease: l, generation: generation}).WaitForEnd(ctx)
 }
 
 func (l *Lease) electionState() (electionPhase, uint64, <-chan struct{}) {

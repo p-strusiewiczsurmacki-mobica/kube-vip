@@ -32,10 +32,13 @@ func TestGlobalElectionFollowsSharedLeaseLeadership(t *testing.T) {
 	leaseID := lease.NewID(config.LeaderElectionType, "default", "shared")
 	leaseMgr := lease.NewManager()
 	sharedLease, _ := leaseMgr.Acquire(context.Background(), leaseID, "service", nil)
-	if !sharedLease.BeginElection() {
+	serviceElection, owner := sharedLease.AcquireElection()
+	if !owner {
 		t.Fatal("Service election did not start")
 	}
-	sharedLease.ElectionStarted()
+	if !serviceElection.Started() {
+		t.Fatal("Service election did not become leader")
+	}
 
 	actions := &sharedElectionActions{started: make(chan struct{}), stopped: make(chan struct{})}
 	var killed atomic.Bool
@@ -51,7 +54,7 @@ func TestGlobalElectionFollowsSharedLeaseLeadership(t *testing.T) {
 		t.Fatal("global election follower did not activate")
 	}
 
-	sharedLease.ElectionStopped()
+	serviceElection.Stopped()
 	select {
 	case <-done:
 	case <-time.After(time.Second):
@@ -76,10 +79,13 @@ func TestGlobalElectionFollowerShutdownIsNotLeadershipLoss(t *testing.T) {
 	leaseID := lease.NewID(config.LeaderElectionType, "default", "shared")
 	leaseMgr := lease.NewManager()
 	sharedLease, _ := leaseMgr.Acquire(context.Background(), leaseID, "service", nil)
-	if !sharedLease.BeginElection() {
+	serviceElection, owner := sharedLease.AcquireElection()
+	if !owner {
 		t.Fatal("Service election did not start")
 	}
-	sharedLease.ElectionStarted()
+	if !serviceElection.Started() {
+		t.Fatal("Service election did not become leader")
+	}
 
 	actions := &sharedElectionActions{started: make(chan struct{}), stopped: make(chan struct{})}
 	var killed atomic.Bool
@@ -121,10 +127,13 @@ func TestGlobalElectionContributesDynamicVIPsToSharedLease(t *testing.T) {
 	leaseMgr := lease.NewManager()
 	sharedLease, _ := leaseMgr.Acquire(context.Background(), leaseID, "control-plane",
 		lease.StaticVIPProvider([]string{"192.0.2.10"}))
-	if !sharedLease.BeginElection() {
+	controlPlaneElection, owner := sharedLease.AcquireElection()
+	if !owner {
 		t.Fatal("control-plane election did not start")
 	}
-	sharedLease.ElectionStarted()
+	if !controlPlaneElection.Started() {
+		t.Fatal("control-plane election did not become leader")
+	}
 
 	serviceVIPs := []string{"192.0.2.20"}
 	serviceProvider := func() []string { return append([]string(nil), serviceVIPs...) }
@@ -149,7 +158,7 @@ func TestGlobalElectionContributesDynamicVIPsToSharedLease(t *testing.T) {
 		t.Fatalf("shared Lease VIPs after Service update = %v, want %v", got, want)
 	}
 
-	sharedLease.ElectionStopped()
+	controlPlaneElection.Stopped()
 	select {
 	case <-done:
 	case <-time.After(time.Second):

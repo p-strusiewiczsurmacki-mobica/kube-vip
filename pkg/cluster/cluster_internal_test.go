@@ -119,10 +119,13 @@ func TestControlPlaneFollowsSharedServiceElection(t *testing.T) {
 	leaseID := lease.NewID(config.LeaderElectionType, "default", "shared")
 	leaseMgr := lease.NewManager()
 	sharedLease, _ := leaseMgr.Acquire(context.Background(), leaseID, "service", nil)
-	if !sharedLease.BeginElection() {
+	serviceElection, owner := sharedLease.AcquireElection()
+	if !owner {
 		t.Fatal("Service election did not start")
 	}
-	sharedLease.ElectionStarted()
+	if !serviceElection.Started() {
+		t.Fatal("Service election did not become leader")
+	}
 
 	labels := &recordingLabeler{added: make(chan struct{}, 1), removed: make(chan struct{}, 1)}
 	cluster := &Cluster{stop: make(chan struct{}), nodeLabelMgr: labels}
@@ -136,7 +139,7 @@ func TestControlPlaneFollowsSharedServiceElection(t *testing.T) {
 		t.Fatal("control plane did not activate under the shared Service election")
 	}
 
-	sharedLease.ElectionStopped()
+	serviceElection.Stopped()
 	select {
 	case err := <-done:
 		if err != nil {
