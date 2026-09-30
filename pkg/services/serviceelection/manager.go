@@ -1,13 +1,34 @@
 package serviceelection
 
 import (
+	"fmt"
 	"sync"
 	"time"
 
+	"github.com/kube-vip/kube-vip/pkg/kubevip"
 	"github.com/kube-vip/kube-vip/pkg/lease"
 	"github.com/kube-vip/kube-vip/pkg/servicecontext"
 	v1 "k8s.io/api/core/v1"
 )
+
+// Manager coordinates Service readiness with per-lease election state.
+type Manager struct {
+	config         *kubevip.Config
+	state          ServiceState
+	coordinatorMgr *coordinatorManager
+}
+
+// NewManager creates a Service election manager.
+func NewManager(dependencies *Dependencies) (*Manager, error) {
+	if dependencies == nil {
+		return nil, fmt.Errorf("create service election manager: dependencies are required")
+	}
+	if err := dependencies.validate(); err != nil {
+		return nil, fmt.Errorf("create service election manager: %w", err)
+	}
+
+	return &Manager{config: dependencies.Config, state: dependencies.State, coordinatorMgr: newCoordinatorManager(*dependencies)}, nil
+}
 
 // join registers the current ready generation of a Service. A caller racing
 // coordinator retirement retries against its replacement.
@@ -23,7 +44,7 @@ func (m *Manager) join(svcCtx *servicecontext.Context, service *v1.Service,
 		if !m.state.IsCurrent(service, svcCtx, readinessGeneration) {
 			return nil, false
 		}
-		coordinator := m.registry.coordinatorFor(id)
+		coordinator := m.coordinatorMgr.newCoordinator(id)
 		member, joined := coordinator.join(svcCtx, service, readinessGeneration)
 		if joined {
 			if m.state.IsCurrent(member.service, member.serviceContext, member.readinessGeneration) {
@@ -51,7 +72,7 @@ func (m *Manager) LeaveForContext(svcCtx *servicecontext.Context, service *v1.Se
 	}
 	namespace, name := lease.ServiceName(service)
 	id := lease.NewID(m.config.LeaderElectionType, namespace, name)
-	coordinator := m.registry.current(id)
+	coordinator := m.coordinatorMgr.current(id)
 	if coordinator == nil {
 		return
 	}
