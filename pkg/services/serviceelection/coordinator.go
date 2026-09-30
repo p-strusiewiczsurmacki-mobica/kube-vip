@@ -81,11 +81,12 @@ func (c *coordinator) join(svcCtx *servicecontext.Context, service *v1.Service,
 	}
 
 	if previous := c.members[service.UID]; previous != nil {
-		c.dependencies.Leases.Delete(c.id, previous.claimToken, c.lease)
+		previous.registration.Release()
 	}
 	member := newMember(c, svcCtx, service, readinessGeneration)
-	member.claimToken = c.registry.nextToken()
-	member.vipProvider = serviceVIPProvider(member.service)
+	member.registrationSpec = lease.RegistrationSpec{
+		Name: c.registry.nextToken(), VIPProvider: serviceVIPProvider(member.service),
+	}
 	c.members[service.UID] = member
 
 	// A member can become ready again while the old campaign is still stopping.
@@ -101,7 +102,8 @@ func (c *coordinator) join(svcCtx *servicecontext.Context, service *v1.Service,
 		}
 		return member, true
 	}
-	if claimed, _ := c.dependencies.Leases.ClaimWithVIPProvider(c.id, member.claimToken, member.vipProvider); claimed != nil {
+	if registration, _ := c.dependencies.Leases.ClaimRegistration(c.id, member.registrationSpec); registration != nil {
+		member.registration = registration
 		return member, true
 	}
 
@@ -127,16 +129,20 @@ func (c *coordinator) ensureLeaseLocked() *lease.Lease {
 	if first == nil {
 		return nil
 	}
-	svcLease, _ := c.dependencies.Leases.Acquire(context.Background(), c.id, first.claimToken,
-		first.vipProvider)
+	firstRegistration, _ := c.dependencies.Leases.AcquireRegistration(context.Background(), c.id,
+		first.registrationSpec)
+	svcLease := firstRegistration.Lease()
+	first.registration = firstRegistration
 	for _, member := range c.members {
 		if member == first {
 			continue
 		}
-		if claimed, _ := c.dependencies.Leases.ClaimWithVIPProvider(c.id, member.claimToken, member.vipProvider); claimed == nil {
+		registration, _ := c.dependencies.Leases.ClaimRegistration(c.id, member.registrationSpec)
+		if registration == nil {
 			svcLease.Cancel()
 			return nil
 		}
+		member.registration = registration
 	}
 	c.lease = svcLease
 	return svcLease
@@ -191,7 +197,7 @@ func (c *coordinator) removeMember(member *member) (campaign *campaign, leaseRet
 		return nil, false, false
 	}
 	delete(c.members, member.service.UID)
-	leaseRetired = c.dependencies.Leases.Delete(c.id, member.claimToken, c.lease)
+	leaseRetired = member.registration.Release()
 	if len(c.members) != 0 {
 		return nil, leaseRetired, false
 	}
