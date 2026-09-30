@@ -13,8 +13,8 @@ type Context struct {
 	ready               bool
 	isWatched           bool
 	watchingStopped     chan struct{}
-	endpointsReady      chan any
-	endpointsLost       chan any
+	endpointsReady      chan struct{}
+	endpointsLost       chan struct{}
 	readinessGeneration uint64
 	readinessOperations int
 	readinessChanged    *sync.Cond
@@ -26,8 +26,8 @@ func New(ctx context.Context) *Context {
 	serviceContext := &Context{
 		Ctx:                 svcCtx,
 		Cancel:              svcCancel,
-		endpointsReady:      make(chan any),
-		endpointsLost:       make(chan any),
+		endpointsReady:      make(chan struct{}),
+		endpointsLost:       make(chan struct{}),
 		readinessGeneration: 1,
 	}
 	serviceContext.readinessChanged = sync.NewCond(&serviceContext.stateMutex)
@@ -37,7 +37,7 @@ func New(ctx context.Context) *Context {
 // ReadinessState returns one readiness lifecycle. The ready channel is closed
 // when endpoints become usable and the lost channel is closed when that exact
 // generation is reset.
-func (ctx *Context) ReadinessState() (uint64, <-chan any, <-chan any) {
+func (ctx *Context) ReadinessState() (uint64, <-chan struct{}, <-chan struct{}) {
 	ctx.stateMutex.Lock()
 	defer ctx.stateMutex.Unlock()
 	return ctx.readinessGeneration, ctx.endpointsReady, ctx.endpointsLost
@@ -65,8 +65,8 @@ func (ctx *Context) ResetReadinessGeneration(generation uint64) bool {
 	}
 	close(ctx.endpointsLost)
 	ctx.readinessGeneration++
-	ctx.endpointsReady = make(chan any)
-	ctx.endpointsLost = make(chan any)
+	ctx.endpointsReady = make(chan struct{})
+	ctx.endpointsLost = make(chan struct{})
 	ctx.ready = false
 	for ctx.readinessOperations > 0 {
 		ctx.readinessChanged.Wait()
