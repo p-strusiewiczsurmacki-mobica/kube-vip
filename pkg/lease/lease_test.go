@@ -118,6 +118,44 @@ func TestRegistrationReleaseCannotRetireReplacementLease(t *testing.T) {
 	replacement.Release()
 }
 
+func TestAcquireRegistrationsRejectsWholeInvalidGroup(t *testing.T) {
+	manager := NewManager()
+	id := NewID("kubernetes", "default", "shared")
+	specs := []RegistrationSpec{
+		{Name: "duplicate", VIPProvider: StaticVIPProvider([]string{"192.0.2.1"})},
+		{Name: "duplicate", VIPProvider: StaticVIPProvider([]string{"192.0.2.2"})},
+	}
+	if registeredLease, registrations, err := manager.AcquireRegistrations(context.Background(), id, specs); err == nil ||
+		registeredLease != nil || registrations != nil {
+		t.Fatalf("AcquireRegistrations() = (%v, %v, %v), want an atomic rejection", registeredLease, registrations, err)
+	}
+	if manager.Get(id) != nil {
+		t.Fatal("invalid registration group left a partially populated Lease")
+	}
+}
+
+func TestAcquireRegistrationsPublishesWholeGroup(t *testing.T) {
+	manager := NewManager()
+	id := NewID("kubernetes", "default", "shared")
+	specs := []RegistrationSpec{
+		{Name: "first", VIPProvider: StaticVIPProvider([]string{"192.0.2.1"})},
+		{Name: "second", VIPProvider: StaticVIPProvider([]string{"192.0.2.2"})},
+	}
+	registeredLease, registrations, err := manager.AcquireRegistrations(context.Background(), id, specs)
+	if err != nil {
+		t.Fatalf("AcquireRegistrations() error = %v", err)
+	}
+	if len(registrations) != len(specs) {
+		t.Fatalf("registration count = %d, want %d", len(registrations), len(specs))
+	}
+	if got, want := registeredLease.OwnedVIPs(), []string{"192.0.2.1", "192.0.2.2"}; !slices.Equal(got, want) {
+		t.Fatalf("OwnedVIPs() = %v, want %v", got, want)
+	}
+	for _, registration := range registrations {
+		registration.Release()
+	}
+}
+
 func TestLeaseOwnedVIPsAggregatesDynamicMemberProviders(t *testing.T) {
 	manager := NewManager()
 	id := NewID("kubernetes", "default", "shared")

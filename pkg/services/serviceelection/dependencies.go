@@ -36,7 +36,7 @@ type RestartScheduler interface {
 
 // LeaseStore is the narrow lease ownership contract used by coordinators.
 type LeaseStore interface {
-	AcquireRegistration(context.Context, lease.ID, lease.RegistrationSpec) (*lease.Registration, bool)
+	AcquireRegistrations(context.Context, lease.ID, []lease.RegistrationSpec) (*lease.Lease, map[string]*lease.Registration, error)
 	ClaimRegistration(lease.ID, lease.RegistrationSpec) (*lease.Registration, bool)
 }
 

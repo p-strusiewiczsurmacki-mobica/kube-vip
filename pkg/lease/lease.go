@@ -8,7 +8,6 @@ import (
 	"slices"
 	"strings"
 	"sync"
-	"sync/atomic"
 
 	"github.com/kube-vip/kube-vip/pkg/kubevip"
 	v1 "k8s.io/api/core/v1"
@@ -100,6 +99,30 @@ func (m *Manager) AcquireRegistration(ctx context.Context, id ID,
 	return &Registration{manager: m, id: id, spec: spec, lease: registeredLease, owned: added}, added
 }
 
+// AcquireRegistrations atomically registers all supplied participants against
+// one Lease. Either every registration is visible to OwnedVIPs or none of the
+// registrations from this call is retained.
+func (m *Manager) AcquireRegistrations(ctx context.Context, id ID,
+	specs []RegistrationSpec) (*Lease, map[string]*Registration, error) {
+	m.lock.Lock()
+	defer m.lock.Unlock()
+
+	registeredLease := m.addLocked(ctx, id)
+	if err := registeredLease.addAll(specs); err != nil {
+		if registeredLease.count() == 0 {
+			m.retire(id, registeredLease)
+		}
+		return nil, nil, err
+	}
+	registrations := make(map[string]*Registration, len(specs))
+	for _, spec := range specs {
+		registrations[spec.Name] = &Registration{
+			manager: m, id: id, spec: spec, lease: registeredLease, owned: true,
+		}
+	}
+	return registeredLease, registrations, nil
+}
+
 // Claim atomically registers objectName against an existing lease. It returns
 // nil when the lease was retired before the caller could join it.
 func (m *Manager) Claim(id ID, objectName string) (*Lease, bool) {
@@ -165,7 +188,7 @@ func (m *Manager) Delete(id ID, objectName string, l *Lease) bool {
 	}
 
 	current.delete(objectName)
-	if current.cnt.Load() < 1 {
+	if current.count() < 1 {
 		m.retire(id, current)
 		return true
 	}
@@ -203,12 +226,12 @@ func (m *Manager) Get(id ID) *Lease {
 
 // Lease holds lease data.
 type Lease struct {
-	Ctx      context.Context
-	Cancel   context.CancelFunc
-	services sync.Map
-	cnt      atomic.Int64
-	stateMu  sync.Mutex
-	election *electionGeneration
+	Ctx       context.Context
+	Cancel    context.CancelFunc
+	membersMu sync.RWMutex
+	services  map[string]member
+	stateMu   sync.Mutex
+	election  *electionGeneration
 }
 
 type electionPhase uint8
@@ -256,8 +279,9 @@ type member struct {
 
 func newLease(ctx context.Context, cancel context.CancelFunc) *Lease {
 	return &Lease{
-		Ctx:    ctx,
-		Cancel: cancel,
+		Ctx:      ctx,
+		Cancel:   cancel,
+		services: make(map[string]member),
 	}
 }
 
@@ -282,24 +306,49 @@ func (l *Lease) Add(name string) bool {
 // AddWithVIPProvider adds an object and its VIP ownership provider to the
 // lease. Re-adding the same object leaves the original registration intact.
 func (l *Lease) AddWithVIPProvider(name string, vipProvider VIPProvider) bool {
-	if _, exists := l.services.LoadOrStore(name, member{vipProvider: vipProvider}); !exists {
-		l.cnt.Add(1)
-		return true
+	l.membersMu.Lock()
+	defer l.membersMu.Unlock()
+	if _, exists := l.services[name]; exists {
+		return false
 	}
-	return false
+	l.services[name] = member{vipProvider: vipProvider}
+	return true
+}
+
+func (l *Lease) addAll(specs []RegistrationSpec) error {
+	l.membersMu.Lock()
+	defer l.membersMu.Unlock()
+
+	seen := make(map[string]struct{}, len(specs))
+	for _, spec := range specs {
+		if spec.Name == "" {
+			return fmt.Errorf("register Lease participants: empty registration name")
+		}
+		if _, duplicate := seen[spec.Name]; duplicate {
+			return fmt.Errorf("register Lease participants: duplicate registration %q", spec.Name)
+		}
+		if _, exists := l.services[spec.Name]; exists {
+			return fmt.Errorf("register Lease participants: registration %q already exists", spec.Name)
+		}
+		seen[spec.Name] = struct{}{}
+	}
+	for _, spec := range specs {
+		l.services[spec.Name] = member{vipProvider: spec.VIPProvider}
+	}
+	return nil
 }
 
 // OwnedVIPs returns a stable, deduplicated snapshot of VIPs contributed by all
 // local members sharing this Lease.
 func (l *Lease) OwnedVIPs() []string {
-	providers := make([]VIPProvider, 0, l.cnt.Load())
-	l.services.Range(func(_, value any) bool {
-		registered, ok := value.(member)
-		if ok && registered.vipProvider != nil {
+	l.membersMu.RLock()
+	providers := make([]VIPProvider, 0, len(l.services))
+	for _, registered := range l.services {
+		if registered.vipProvider != nil {
 			providers = append(providers, registered.vipProvider)
 		}
-		return true
-	})
+	}
+	l.membersMu.RUnlock()
 
 	unique := make(map[string]struct{})
 	for _, provider := range providers {
@@ -319,9 +368,15 @@ func (l *Lease) OwnedVIPs() []string {
 
 // delete removes the service from the lease and decrements the counter.
 func (l *Lease) delete(service string) {
-	if _, exists := l.services.LoadAndDelete(service); exists {
-		l.cnt.Add(-1)
-	}
+	l.membersMu.Lock()
+	defer l.membersMu.Unlock()
+	delete(l.services, service)
+}
+
+func (l *Lease) count() int {
+	l.membersMu.RLock()
+	defer l.membersMu.RUnlock()
+	return len(l.services)
 }
 
 // AcquireElection starts a new election generation when the Lease is idle, or
