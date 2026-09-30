@@ -552,9 +552,6 @@ func (c *coordinator) markCampaignStopped(svcLease *lease.Lease,
 	if campaign.cancelLeader != nil {
 		campaign.cancelLeader()
 	}
-	if campaign.runsElection() {
-		campaign.election.Stopped()
-	}
 	return c.membersLocked()
 }
 

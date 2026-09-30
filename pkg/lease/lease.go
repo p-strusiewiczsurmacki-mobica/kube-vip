@@ -478,6 +478,17 @@ func (s *ElectionSession) IsLeading() bool {
 	return current && phase == electionLeading
 }
 
+// IsCurrent reports whether this session still represents the Lease's current
+// election generation. It can be used by delayed callbacks without ending the
+// session; finalization remains the runner's responsibility.
+func (s *ElectionSession) IsCurrent() bool {
+	if s == nil || s.lease == nil || s.generation == nil {
+		return false
+	}
+	phase, current := s.lease.electionState(s.generation)
+	return current && phase != electionIdle
+}
+
 // WaitForLeader waits for this election generation to either become leader or
 // end. A replacement generation is not silently adopted.
 func (s *ElectionSession) WaitForLeader(ctx context.Context) bool {
