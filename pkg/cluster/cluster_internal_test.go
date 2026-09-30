@@ -118,7 +118,7 @@ func TestControlPlaneFollowsSharedServiceElection(t *testing.T) {
 	config := &kubevip.Config{KubernetesLeaderElection: kubevip.KubernetesLeaderElection{LeaseName: "default/shared"}}
 	leaseID := lease.NewID(config.LeaderElectionType, "default", "shared")
 	leaseMgr := lease.NewManager()
-	sharedLease, _ := leaseMgr.Acquire(context.Background(), leaseID, "service")
+	sharedLease, _ := leaseMgr.Acquire(context.Background(), leaseID, "service", nil)
 	if !sharedLease.BeginElection() {
 		t.Fatal("Service election did not start")
 	}

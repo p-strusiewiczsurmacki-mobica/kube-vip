@@ -31,7 +31,7 @@ func TestGlobalElectionFollowsSharedLeaseLeadership(t *testing.T) {
 	config := &kubevip.Config{KubernetesLeaderElection: kubevip.KubernetesLeaderElection{LeaseName: "default/shared"}}
 	leaseID := lease.NewID(config.LeaderElectionType, "default", "shared")
 	leaseMgr := lease.NewManager()
-	sharedLease, _ := leaseMgr.Acquire(context.Background(), leaseID, "service")
+	sharedLease, _ := leaseMgr.Acquire(context.Background(), leaseID, "service", nil)
 	if !sharedLease.BeginElection() {
 		t.Fatal("Service election did not start")
 	}
@@ -75,7 +75,7 @@ func TestGlobalElectionFollowerShutdownIsNotLeadershipLoss(t *testing.T) {
 	config := &kubevip.Config{KubernetesLeaderElection: kubevip.KubernetesLeaderElection{LeaseName: "default/shared"}}
 	leaseID := lease.NewID(config.LeaderElectionType, "default", "shared")
 	leaseMgr := lease.NewManager()
-	sharedLease, _ := leaseMgr.Acquire(context.Background(), leaseID, "service")
+	sharedLease, _ := leaseMgr.Acquire(context.Background(), leaseID, "service", nil)
 	if !sharedLease.BeginElection() {
 		t.Fatal("Service election did not start")
 	}
@@ -119,7 +119,7 @@ func TestGlobalElectionContributesDynamicVIPsToSharedLease(t *testing.T) {
 	config := &kubevip.Config{KubernetesLeaderElection: kubevip.KubernetesLeaderElection{LeaseName: "default/shared"}}
 	leaseID := lease.NewID(config.LeaderElectionType, "default", "shared")
 	leaseMgr := lease.NewManager()
-	sharedLease, _ := leaseMgr.AcquireWithVIPProvider(context.Background(), leaseID, "control-plane",
+	sharedLease, _ := leaseMgr.Acquire(context.Background(), leaseID, "control-plane",
 		lease.StaticVIPProvider([]string{"192.0.2.10"}))
 	if !sharedLease.BeginElection() {
 		t.Fatal("control-plane election did not start")

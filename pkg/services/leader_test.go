@@ -107,7 +107,7 @@ func TestServiceMemberLeavingDoesNotCancelControlPlaneLease(t *testing.T) {
 	namespace, name := lease.ServiceName(service)
 	id := lease.NewID(p.config.LeaderElectionType, namespace, name)
 	controlPlaneToken := lease.ObjectName(id, "cp")
-	sharedLease, _ := p.leaseMgr.Acquire(context.Background(), id, controlPlaneToken)
+	sharedLease, _ := p.leaseMgr.Acquire(context.Background(), id, controlPlaneToken, nil)
 	if !sharedLease.BeginElection() {
 		t.Fatal("control-plane election did not start")
 	}

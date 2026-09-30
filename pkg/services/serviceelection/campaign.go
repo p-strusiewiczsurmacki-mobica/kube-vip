@@ -1,6 +1,10 @@
 package serviceelection
 
-import "context"
+import (
+	"context"
+
+	"github.com/kube-vip/kube-vip/pkg/lease"
+)
 
 type campaign struct {
 	ctx          context.Context
@@ -12,8 +16,13 @@ type campaign struct {
 	stopped      bool
 }
 
-func (campaign *campaign) cancelRunner() {
-	if campaign != nil && campaign.cancel != nil {
-		campaign.cancel()
+func newCampaign(parent context.Context, svcLease *lease.Lease, vips []string) *campaign {
+	external := !svcLease.BeginElection()
+	ctx, cancel := svcLease.NewElectionContext(parent)
+	return &campaign{
+		ctx:      ctx,
+		cancel:   cancel,
+		vips:     append([]string(nil), vips...),
+		external: external,
 	}
 }

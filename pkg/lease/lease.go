@@ -34,15 +34,10 @@ func (m *Manager) Add(ctx context.Context, id ID) *Lease {
 	return m.addLocked(ctx, id)
 }
 
-// Acquire creates or retrieves a lease and atomically registers objectName as a
-// member. The returned bool reports whether this object was newly registered.
-func (m *Manager) Acquire(ctx context.Context, id ID, objectName string) (*Lease, bool) {
-	return m.AcquireWithVIPProvider(ctx, id, objectName, nil)
-}
-
-// AcquireWithVIPProvider creates or retrieves a lease and atomically registers
-// objectName together with its current VIP ownership provider.
-func (m *Manager) AcquireWithVIPProvider(ctx context.Context, id ID, objectName string,
+// Acquire creates or retrieves a lease and atomically registers objectName
+// together with its current VIP ownership provider. The returned bool reports
+// whether this object was newly registered.
+func (m *Manager) Acquire(ctx context.Context, id ID, objectName string,
 	vipProvider VIPProvider) (*Lease, bool) {
 	m.lock.Lock()
 	defer m.lock.Unlock()

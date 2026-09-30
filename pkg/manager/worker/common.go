@@ -173,7 +173,7 @@ func (c *Common) runGlobalElectionWithVIPProvider(ctx context.Context, a electio
 	leaseID := lease.NewID(config.LeaderElectionType, ns, leaseName)
 	objectName := lease.ObjectName(leaseID, "svcs0")
 
-	objLease, _ := c.leaseMgr.AcquireWithVIPProvider(context.Background(), leaseID, objectName, vipProvider)
+	objLease, _ := c.leaseMgr.Acquire(context.Background(), leaseID, objectName, vipProvider)
 	defer c.leaseMgr.Delete(leaseID, objectName, objLease)
 	electionCtx, cancelElection := objLease.NewElectionContext(ctx)
 	defer cancelElection()

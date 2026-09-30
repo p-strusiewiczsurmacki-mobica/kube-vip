@@ -283,8 +283,7 @@ func TestCloseActiveMemberCleansUpExactlyOnce(t *testing.T) {
 	serviceLease := coordinator.lease
 
 	coordinator.mutex.Lock()
-	campaignCtx, cancelCampaign := context.WithCancel(context.Background())
-	coordinator.campaign = &campaign{ctx: campaignCtx, cancel: cancelCampaign}
+	coordinator.campaign = newCampaign(context.Background(), serviceLease, memberVIPs(coordinator.membersLocked()))
 	currentCampaign := coordinator.campaign
 	coordinator.mutex.Unlock()
 	serviceLease.ElectionStarted()
@@ -320,8 +319,7 @@ func TestCloseMemberPreventsConcurrentReactivation(t *testing.T) {
 	serviceLease := coordinator.lease
 
 	coordinator.mutex.Lock()
-	campaignCtx, cancelCampaign := context.WithCancel(context.Background())
-	coordinator.campaign = &campaign{ctx: campaignCtx, cancel: cancelCampaign}
+	coordinator.campaign = newCampaign(context.Background(), serviceLease, memberVIPs(coordinator.membersLocked()))
 	currentCampaign := coordinator.campaign
 	coordinator.mutex.Unlock()
 	serviceLease.ElectionStarted()
@@ -405,8 +403,7 @@ func TestLeaveForContextWithdrawsWithoutDatapathCleanup(t *testing.T) {
 	serviceLease := coordinator.lease
 
 	coordinator.mutex.Lock()
-	campaignCtx, cancelCampaign := context.WithCancel(context.Background())
-	coordinator.campaign = &campaign{ctx: campaignCtx, cancel: cancelCampaign}
+	coordinator.campaign = newCampaign(context.Background(), serviceLease, memberVIPs(coordinator.membersLocked()))
 	currentCampaign := coordinator.campaign
 	coordinator.mutex.Unlock()
 	serviceLease.ElectionStarted()

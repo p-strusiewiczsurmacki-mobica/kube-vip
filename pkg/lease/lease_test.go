@@ -77,11 +77,11 @@ func TestManagerAcquireRegistersMembership(t *testing.T) {
 	id := getSvcID(service)
 	objectName := ServiceNamespacedName(service)
 
-	lease, first := manager.Acquire(context.Background(), id, objectName)
+	lease, first := manager.Acquire(context.Background(), id, objectName, nil)
 	if !first {
 		t.Fatal("first acquire did not register the service")
 	}
-	if _, second := manager.Acquire(context.Background(), id, objectName); second {
+	if _, second := manager.Acquire(context.Background(), id, objectName, nil); second {
 		t.Fatal("second acquire registered the same service twice")
 	}
 
@@ -97,7 +97,7 @@ func TestLeaseOwnedVIPsAggregatesDynamicMemberProviders(t *testing.T) {
 	controlPlaneVIPs := []string{"192.0.2.10"}
 	serviceVIPs := []string{"192.0.2.20", "192.0.2.10"}
 
-	sharedLease, added := manager.AcquireWithVIPProvider(context.Background(), id, "control-plane", func() []string {
+	sharedLease, added := manager.Acquire(context.Background(), id, "control-plane", func() []string {
 		return append([]string(nil), controlPlaneVIPs...)
 	})
 	if !added {
@@ -130,7 +130,7 @@ func TestLeaseOwnedVIPsAggregatesDynamicMemberProviders(t *testing.T) {
 func TestElectionContextCancellationDoesNotCancelSharedLease(t *testing.T) {
 	manager := NewManager()
 	id := NewID("kubernetes", "default", "shared")
-	sharedLease, _ := manager.Acquire(context.Background(), id, "control-plane")
+	sharedLease, _ := manager.Acquire(context.Background(), id, "control-plane", nil)
 	if claimed, _ := manager.Claim(id, "service"); claimed != sharedLease {
 		t.Fatal("second member did not join the shared lease")
 	}
@@ -392,7 +392,7 @@ func TestManagerAcquireRegistersConcurrentMemberOnce(t *testing.T) {
 	var wg sync.WaitGroup
 	for range cap(results) {
 		wg.Go(func() {
-			lease, isNew := manager.Acquire(context.Background(), id, objectName)
+			lease, isNew := manager.Acquire(context.Background(), id, objectName, nil)
 			results <- result{lease, isNew}
 		})
 	}
@@ -1361,13 +1361,13 @@ func TestManagerDeleteDoesNotCancelReplacementAfterDirectLeaseCancellation(t *te
 	id := getSvcID(service)
 	objectName := ServiceNamespacedName(service)
 
-	old, isNew := manager.Acquire(context.Background(), id, objectName)
+	old, isNew := manager.Acquire(context.Background(), id, objectName, nil)
 	if !isNew {
 		t.Fatal("initial acquire did not register the service")
 	}
 	old.Cancel()
 
-	fresh, isNew := manager.Acquire(context.Background(), id, objectName)
+	fresh, isNew := manager.Acquire(context.Background(), id, objectName, nil)
 	if !isNew {
 		t.Fatal("replacement acquire did not register the service")
 	}
