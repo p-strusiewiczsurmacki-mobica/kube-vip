@@ -260,6 +260,24 @@ type ElectionSession struct {
 	owner      bool
 }
 
+// ElectionRole describes whether a local participant runs the shared election
+// backend or observes a runner already started by another local subsystem.
+type ElectionRole uint8
+
+const (
+	ElectionRunner ElectionRole = iota
+	ElectionObserver
+)
+
+// ElectionParticipation is the common entry point for users sharing an
+// election. Runner ownership is local and does not imply cluster leadership.
+type ElectionParticipation struct {
+	Session *ElectionSession
+	Role    ElectionRole
+}
+
+func (p ElectionParticipation) RunsCampaign() bool { return p.Role == ElectionRunner }
+
 // VIPProvider returns the VIPs currently owned by one local Lease member.
 // Implementations must be safe for concurrent use and must not return mutable
 // state that can change while the caller is reading it.
@@ -382,19 +400,35 @@ func (l *Lease) count() int {
 // AcquireElection starts a new election generation when the Lease is idle, or
 // returns a session observing the current generation. The returned bool is true
 // only for the caller responsible for running that election.
+//
+// Deprecated: use JoinElection, whose named role cannot be confused with
+// cluster leadership.
 func (l *Lease) AcquireElection() (*ElectionSession, bool) {
+	participation := l.JoinElection()
+	return participation.Session, participation.RunsCampaign()
+}
+
+// JoinElection starts a local election generation or observes the current one.
+func (l *Lease) JoinElection() ElectionParticipation {
 	l.stateMu.Lock()
 	defer l.stateMu.Unlock()
 
-	owner := l.election == nil
-	if owner {
+	runsCampaign := l.election == nil
+	if runsCampaign {
 		l.election = &electionGeneration{
 			phase:   electionCampaigning,
 			decided: make(chan struct{}),
 			done:    make(chan struct{}),
 		}
 	}
-	return &ElectionSession{lease: l, generation: l.election, owner: owner}, owner
+	role := ElectionObserver
+	if runsCampaign {
+		role = ElectionRunner
+	}
+	return ElectionParticipation{
+		Session: &ElectionSession{lease: l, generation: l.election, owner: runsCampaign},
+		Role:    role,
+	}
 }
 
 // Started marks this session as leading. It returns false for observers,

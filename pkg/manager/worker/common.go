@@ -180,13 +180,13 @@ func (c *Common) runGlobalElectionWithVIPProvider(ctx context.Context, a electio
 
 	var electionSession *lease.ElectionSession
 	for {
-		session, owner := objLease.AcquireElection()
-		if owner {
-			electionSession = session
+		participation := objLease.JoinElection()
+		if participation.RunsCampaign() {
+			electionSession = participation.Session
 			break
 		}
 		log.Debug("this election was already done, shared lease", "lease", leaseID.Name())
-		if !session.WaitForLeader(electionCtx) {
+		if !participation.Session.WaitForLeader(electionCtx) {
 			if electionCtx.Err() != nil {
 				return
 			}
@@ -198,7 +198,7 @@ func (c *Common) runGlobalElectionWithVIPProvider(ctx context.Context, a electio
 		wg.Go(func() {
 			a.OnStartedLeading(leaderCtx)
 		})
-		session.WaitForEnd(electionCtx)
+		participation.Session.WaitForEnd(electionCtx)
 		cancelLeader()
 		wg.Wait()
 		if electionCtx.Err() != nil {
