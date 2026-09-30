@@ -63,8 +63,8 @@ func TestStartServicesLeaderElectionTracksSharedMembersAcrossReadinessLoss(t *te
 	firstDone := make(chan error, 1)
 	secondDone := make(chan error, 1)
 	var wg sync.WaitGroup
-	go func() { firstDone <- p.StartServicesLeaderElection(firstCtx, firstService, &wg, true) }()
-	go func() { secondDone <- p.StartServicesLeaderElection(secondCtx, secondService, &wg, true) }()
+	go func() { firstDone <- p.StartServicesLeaderElection(firstCtx, firstService, &wg) }()
+	go func() { secondDone <- p.StartServicesLeaderElection(secondCtx, secondService, &wg) }()
 
 	firstCtx.SignalReadiness()
 	secondCtx.SignalReadiness()
@@ -122,7 +122,7 @@ func TestServiceMemberLeavingDoesNotCancelControlPlaneLease(t *testing.T) {
 	svcCtx := servicecontext.New(context.Background())
 	p.svcMap.Store(service.UID, svcCtx)
 	done := make(chan error, 1)
-	go func() { done <- p.StartServicesLeaderElection(svcCtx, service, nil, true) }()
+	go func() { done <- p.StartServicesLeaderElection(svcCtx, service, nil) }()
 	svcCtx.SignalReadiness()
 	waitForLeaseVIPCount(t, p.leaseMgr, id, 1)
 	svcCtx.Cancel()
@@ -140,7 +140,7 @@ func TestStartServicesLeaderElectionRejectsNilContext(t *testing.T) {
 	p := &Processor{serviceLock: newTestServiceLocks()}
 	initializeTestElectionCoordinators(p)
 	service := &v1.Service{ObjectMeta: metav1.ObjectMeta{Name: "service", UID: types.UID("service")}}
-	if err := p.StartServicesLeaderElection(nil, service, nil, true); err == nil {
+	if err := p.StartServicesLeaderElection(nil, service, nil); err == nil {
 		t.Fatal("nil service context started leader election")
 	}
 }
@@ -153,7 +153,7 @@ func TestStartServicesLeaderElectionStaleContextReturnsPromptly(t *testing.T) {
 	p.svcMap.Store(service.UID, servicecontext.New(context.Background()))
 
 	done := make(chan error, 1)
-	go func() { done <- p.StartServicesLeaderElection(staleContext, service, nil, true) }()
+	go func() { done <- p.StartServicesLeaderElection(staleContext, service, nil) }()
 	select {
 	case err := <-done:
 		if err == nil {
@@ -168,7 +168,7 @@ func TestStartServicesLeaderElectionRejectsTypedNilService(t *testing.T) {
 	p := &Processor{serviceLock: newTestServiceLocks()}
 	initializeTestElectionCoordinators(p)
 	var service *v1.Service
-	if err := p.StartServicesLeaderElection(servicecontext.New(context.Background()), service, nil, true); err == nil {
+	if err := p.StartServicesLeaderElection(servicecontext.New(context.Background()), service, nil); err == nil {
 		t.Fatal("typed-nil service started leader election")
 	}
 }
@@ -181,7 +181,7 @@ func TestStartServicesLeaderElectionDoesNotRegisterCancelledContext(t *testing.T
 	p.svcMap.Store(service.UID, svcCtx)
 	svcCtx.Cancel()
 
-	if err := p.StartServicesLeaderElection(svcCtx, service, nil, true); err == nil {
+	if err := p.StartServicesLeaderElection(svcCtx, service, nil); err == nil {
 		t.Fatal("cancelled service context started leader election")
 	}
 	namespace, name := lease.ServiceName(service)
@@ -205,7 +205,7 @@ func TestStartServicesLeaderElectionRegistersOneMemberForConcurrentCalls(t *test
 	for range callers {
 		go func() {
 			<-start
-			errors <- p.StartServicesLeaderElection(svcCtx, service, nil, true)
+			errors <- p.StartServicesLeaderElection(svcCtx, service, nil)
 		}()
 	}
 	close(start)
@@ -239,7 +239,7 @@ func TestStartServicesLeaderElectionRecreatesCancelledLease(t *testing.T) {
 	svcCtx.SignalReadiness()
 
 	done := make(chan error, 1)
-	go func() { done <- p.StartServicesLeaderElection(svcCtx, service, nil, true) }()
+	go func() { done <- p.StartServicesLeaderElection(svcCtx, service, nil) }()
 	waitForElectionRunner(t, runner.started)
 	if currentLease := p.leaseMgr.Get(id); currentLease == nil || currentLease == oldLease || currentLease.Ctx.Err() != nil {
 		t.Fatal("cancelled lease was not replaced for the live service")
@@ -264,7 +264,7 @@ func TestStartServicesLeaderElectionRestartsAfterLeaseLoss(t *testing.T) {
 	svcCtx.SignalReadiness()
 
 	done := make(chan error, 1)
-	go func() { done <- p.StartServicesLeaderElection(svcCtx, service, nil, true) }()
+	go func() { done <- p.StartServicesLeaderElection(svcCtx, service, nil) }()
 	waitForElectionRunner(t, runner.started)
 	p.leaseMgr.Get(id).Cancel()
 	waitForCondition(t, func() bool { return runner.starts.Load() == 2 }, "replacement campaign after lease loss")
@@ -295,7 +295,7 @@ func TestServiceElectionWaitGroupDrainsCampaignOnShutdown(t *testing.T) {
 	var wg sync.WaitGroup
 	startDone := make(chan error, 1)
 	go func() {
-		startDone <- p.StartServicesLeaderElection(svcCtx, service, &wg, true)
+		startDone <- p.StartServicesLeaderElection(svcCtx, service, &wg)
 	}()
 	waitForElectionRunner(t, runner.started)
 	svcCtx.Cancel()
@@ -342,7 +342,7 @@ func TestServiceElectionAttemptWaitsForReadiness(t *testing.T) {
 	p.svcMap.Store(service.UID, svcCtx)
 
 	done := make(chan error, 1)
-	go func() { done <- p.StartServicesLeaderElection(svcCtx, service, nil, true) }()
+	go func() { done <- p.StartServicesLeaderElection(svcCtx, service, nil) }()
 	select {
 	case <-runner.started:
 		t.Fatal("campaign started before endpoint readiness")
@@ -388,8 +388,8 @@ func TestSharedElectionDrainsBeforeRestartAfterAllMembersLoseReadiness(t *testin
 
 	firstDone := make(chan error, 1)
 	secondDone := make(chan error, 1)
-	go func() { firstDone <- p.StartServicesLeaderElection(firstCtx, firstService, nil, true) }()
-	go func() { secondDone <- p.StartServicesLeaderElection(secondCtx, secondService, nil, true) }()
+	go func() { firstDone <- p.StartServicesLeaderElection(firstCtx, firstService, nil) }()
+	go func() { secondDone <- p.StartServicesLeaderElection(secondCtx, secondService, nil) }()
 	waitForElectionRunner(t, runner.started)
 	namespace, name := lease.ServiceName(firstService)
 	waitForLeaseVIPCount(t, p.leaseMgr, lease.NewID(p.config.LeaderElectionType, namespace, name), 2)
@@ -447,8 +447,8 @@ func TestSharedElectionDeletedCandidateNeverActivates(t *testing.T) {
 
 	candidateDone := make(chan error, 1)
 	siblingDone := make(chan error, 1)
-	go func() { candidateDone <- p.StartServicesLeaderElection(candidateCtx, candidateService, nil, true) }()
-	go func() { siblingDone <- p.StartServicesLeaderElection(siblingCtx, siblingService, nil, true) }()
+	go func() { candidateDone <- p.StartServicesLeaderElection(candidateCtx, candidateService, nil) }()
+	go func() { siblingDone <- p.StartServicesLeaderElection(siblingCtx, siblingService, nil) }()
 	waitForElectionRunner(t, runner.started)
 	namespace, name := lease.ServiceName(candidateService)
 	waitForLeaseVIPCount(t, p.leaseMgr, lease.NewID(p.config.LeaderElectionType, namespace, name), 2)
@@ -503,8 +503,8 @@ func TestSharedElectionReadinessIsMemberLocal(t *testing.T) {
 
 	firstDone := make(chan error, 1)
 	secondDone := make(chan error, 1)
-	go func() { firstDone <- p.StartServicesLeaderElection(firstCtx, firstService, nil, true) }()
-	go func() { secondDone <- p.StartServicesLeaderElection(secondCtx, secondService, nil, true) }()
+	go func() { firstDone <- p.StartServicesLeaderElection(firstCtx, firstService, nil) }()
+	go func() { secondDone <- p.StartServicesLeaderElection(secondCtx, secondService, nil) }()
 	waitForElectionRunner(t, runner.started)
 	namespace, name := lease.ServiceName(firstService)
 	id := lease.NewID(p.config.LeaderElectionType, namespace, name)
@@ -552,7 +552,7 @@ func TestServiceOwnedCampaignSurvivesFinalServiceWhileControlPlaneRemains(t *tes
 	var wg sync.WaitGroup
 	done := make(chan error, 1)
 	go func() {
-		done <- p.StartServicesLeaderElection(svcCtx, service, &wg, true)
+		done <- p.StartServicesLeaderElection(svcCtx, service, &wg)
 	}()
 	waitForElectionRunner(t, runner.started)
 	sharedLease := p.leaseMgr.Get(id)
