@@ -139,14 +139,12 @@ func (m *Manager) Get(id ID) *Lease {
 
 // Lease holds lease data.
 type Lease struct {
-	Ctx        context.Context
-	Cancel     context.CancelFunc
-	services   sync.Map
-	cnt        atomic.Int64
-	stateMu    sync.Mutex
-	phase      electionPhase
-	generation uint64
-	changed    chan struct{}
+	Ctx      context.Context
+	Cancel   context.CancelFunc
+	services sync.Map
+	cnt      atomic.Int64
+	stateMu  sync.Mutex
+	election *electionGeneration
 }
 
 type electionPhase uint8
@@ -157,12 +155,21 @@ const (
 	electionLeading
 )
 
+// electionGeneration owns the one-shot notifications for one local election.
+// decided closes when the campaign either becomes leader or stops before doing
+// so. done closes whenever the generation stops.
+type electionGeneration struct {
+	phase   electionPhase
+	decided chan struct{}
+	done    chan struct{}
+}
+
 // ElectionSession identifies one generation of the local runner coordinating
 // a shared Lease. Only the session that started a generation may change its
 // state; delayed callbacks from older generations are ignored.
 type ElectionSession struct {
 	lease      *Lease
-	generation uint64
+	generation *electionGeneration
 	owner      bool
 }
 
@@ -185,9 +192,8 @@ type member struct {
 
 func newLease(ctx context.Context, cancel context.CancelFunc) *Lease {
 	return &Lease{
-		Ctx:     ctx,
-		Cancel:  cancel,
-		changed: make(chan struct{}),
+		Ctx:    ctx,
+		Cancel: cancel,
 	}
 }
 
@@ -261,67 +267,73 @@ func (l *Lease) AcquireElection() (*ElectionSession, bool) {
 	l.stateMu.Lock()
 	defer l.stateMu.Unlock()
 
-	owner := l.phase == electionIdle
+	owner := l.election == nil
 	if owner {
-		l.generation++
-		l.phase = electionCampaigning
-		l.signalStateLocked()
+		l.election = &electionGeneration{
+			phase:   electionCampaigning,
+			decided: make(chan struct{}),
+			done:    make(chan struct{}),
+		}
 	}
-	return &ElectionSession{lease: l, generation: l.generation, owner: owner}, owner
+	return &ElectionSession{lease: l, generation: l.election, owner: owner}, owner
 }
 
 // Started marks this session as leading. It returns false for observers,
 // already-stopped sessions, and sessions superseded by a newer generation.
 func (s *ElectionSession) Started() bool {
-	if s == nil || s.lease == nil || !s.owner {
+	if s == nil || s.lease == nil || s.generation == nil || !s.owner {
 		return false
 	}
 	l := s.lease
 	l.stateMu.Lock()
 	defer l.stateMu.Unlock()
-	if l.generation != s.generation || l.phase != electionCampaigning {
+	if l.election != s.generation || s.generation.phase != electionCampaigning {
 		return false
 	}
-	l.phase = electionLeading
-	l.signalStateLocked()
+	s.generation.phase = electionLeading
+	close(s.generation.decided)
 	return true
 }
 
 // Stopped ends this session. It is safe to call repeatedly: once another
 // generation starts, a delayed call from this session cannot stop it.
 func (s *ElectionSession) Stopped() bool {
-	if s == nil || s.lease == nil || !s.owner {
+	if s == nil || s.lease == nil || s.generation == nil || !s.owner {
 		return false
 	}
 	l := s.lease
 	l.stateMu.Lock()
 	defer l.stateMu.Unlock()
-	if l.generation != s.generation || l.phase == electionIdle {
+	if l.election != s.generation || s.generation.phase == electionIdle {
 		return false
 	}
-	l.phase = electionIdle
-	l.signalStateLocked()
+	if s.generation.phase == electionCampaigning {
+		close(s.generation.decided)
+	}
+	s.generation.phase = electionIdle
+	l.election = nil
+	close(s.generation.done)
 	return true
 }
 
 // IsLeading reports whether this exact election generation is still leading.
 func (s *ElectionSession) IsLeading() bool {
-	if s == nil || s.lease == nil {
+	if s == nil || s.lease == nil || s.generation == nil {
 		return false
 	}
-	phase, generation, _ := s.lease.electionState()
-	return generation == s.generation && phase == electionLeading
+	phase, current := s.lease.electionState(s.generation)
+	return current && phase == electionLeading
 }
 
 // WaitForLeader waits for this election generation to either become leader or
 // end. A replacement generation is not silently adopted.
 func (s *ElectionSession) WaitForLeader(ctx context.Context) bool {
-	if s == nil || s.lease == nil {
+	if s == nil || s.lease == nil || s.generation == nil {
 		return false
 	}
 	for {
-		phase, generation, changed := s.lease.electionState()
-		if generation != s.generation {
+		phase, current := s.lease.electionState(s.generation)
+		if !current {
 			return false
 		}
 		switch phase {
@@ -336,29 +348,25 @@ func (s *ElectionSession) WaitForLeader(ctx context.Context) bool {
 			return false
 		case <-s.lease.Ctx.Done():
 			return false
-		case <-changed:
+		case <-s.generation.decided:
 		}
 	}
 }
 
 // WaitForEnd waits until this election generation is no longer leading.
 func (s *ElectionSession) WaitForEnd(ctx context.Context) {
-	if s == nil || s.lease == nil {
+	if s == nil || s.lease == nil || s.generation == nil {
 		return
 	}
-	for {
-		phase, generation, changed := s.lease.electionState()
-		if generation != s.generation || phase != electionLeading {
-			return
-		}
+	phase, current := s.lease.electionState(s.generation)
+	if !current || phase != electionLeading {
+		return
+	}
 
-		select {
-		case <-ctx.Done():
-			return
-		case <-s.lease.Ctx.Done():
-			return
-		case <-changed:
-		}
+	select {
+	case <-ctx.Done():
+	case <-s.lease.Ctx.Done():
+	case <-s.generation.done:
 	}
 }
 
@@ -366,19 +374,18 @@ func (s *ElectionSession) WaitForEnd(ctx context.Context) {
 // leading. Callers that participate in an election should prefer the
 // generation-scoped ElectionSession.IsLeading method.
 func (l *Lease) IsLeading() bool {
-	phase, _, _ := l.electionState()
-	return phase == electionLeading
-}
-
-func (l *Lease) electionState() (electionPhase, uint64, <-chan struct{}) {
 	l.stateMu.Lock()
 	defer l.stateMu.Unlock()
-	return l.phase, l.generation, l.changed
+	return l.election != nil && l.election.phase == electionLeading
 }
 
-func (l *Lease) signalStateLocked() {
-	close(l.changed)
-	l.changed = make(chan struct{})
+func (l *Lease) electionState(generation *electionGeneration) (electionPhase, bool) {
+	l.stateMu.Lock()
+	defer l.stateMu.Unlock()
+	if generation == nil || l.election != generation {
+		return electionIdle, false
+	}
+	return generation.phase, true
 }
 
 // ServiceName gets lease name and id for the service.
