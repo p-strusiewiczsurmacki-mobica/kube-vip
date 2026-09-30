@@ -26,6 +26,13 @@ func resetServiceReadiness(t *testing.T, svcCtx *servicecontext.Context) {
 	}
 }
 
+type immediateRestartScheduler struct{}
+
+func (immediateRestartScheduler) ScheduleRestart(_ context.Context, _ time.Duration,
+	_ *sync.WaitGroup, restart func()) {
+	restart()
+}
+
 func TestStartServicesLeaderElectionTracksSharedMembersAcrossReadinessLoss(t *testing.T) {
 	p := &Processor{
 		serviceLock: newTestServiceLocks(),
@@ -356,9 +363,9 @@ func TestSharedElectionDrainsBeforeRestartAfterAllMembersLoseReadiness(t *testin
 	p := &Processor{
 		serviceLock: newTestServiceLocks(),
 		config:      &kubevip.Config{}, leaseMgr: lease.NewManager(),
-		scheduleElectionRestart: func(restart func()) { restart() },
 	}
-	initializeTestElectionCoordinators(p, withTestCampaignRunner(runner))
+	initializeTestElectionCoordinators(p, withTestCampaignRunner(runner),
+		withTestRestartScheduler(immediateRestartScheduler{}))
 	annotations := map[string]string{kubevip.ServiceLease: "shared"}
 	firstService := &v1.Service{ObjectMeta: metav1.ObjectMeta{
 		Name: "first", Namespace: "default", UID: types.UID("first"), Annotations: annotations,

@@ -24,8 +24,9 @@ type testElectionDatapath struct {
 }
 
 type testElectionCoordinatorConfig struct {
-	activate func(context.Context, *v1.Service, *servicecontext.Context, *sync.WaitGroup) error
-	runner   serviceelection.CampaignRunner
+	activate  func(context.Context, *v1.Service, *servicecontext.Context, *sync.WaitGroup) error
+	runner    serviceelection.CampaignRunner
+	scheduler serviceelection.RestartScheduler
 }
 
 type testElectionCoordinatorOption func(*testElectionCoordinatorConfig)
@@ -41,6 +42,12 @@ func withTestElectionActivation(
 func withTestCampaignRunner(runner serviceelection.CampaignRunner) testElectionCoordinatorOption {
 	return func(config *testElectionCoordinatorConfig) {
 		config.runner = runner
+	}
+}
+
+func withTestRestartScheduler(scheduler serviceelection.RestartScheduler) testElectionCoordinatorOption {
+	return func(config *testElectionCoordinatorConfig) {
+		config.scheduler = scheduler
 	}
 }
 
@@ -69,14 +76,14 @@ func initializeTestElectionCoordinators(processor *Processor,
 		processor.leaseMgr = lease.NewManager()
 	}
 	adapter := &electionAdapter{processor: processor}
-	config := testElectionCoordinatorConfig{runner: adapter}
+	config := testElectionCoordinatorConfig{runner: adapter, scheduler: adapter}
 	for _, option := range options {
 		option(&config)
 	}
 	datapath := &testElectionDatapath{production: adapter, activate: config.activate}
 	manager, err := serviceelection.NewManager(&serviceelection.Dependencies{
 		Config: processor.config, Leases: processor.leaseMgr, ElectionManager: processor.electionMgr,
-		State: adapter, Datapath: datapath, Runner: config.runner, Scheduler: adapter,
+		State: adapter, Datapath: datapath, Runner: config.runner, Scheduler: config.scheduler,
 	})
 	if err != nil {
 		panic(err)
