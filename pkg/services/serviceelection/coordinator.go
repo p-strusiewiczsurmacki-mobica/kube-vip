@@ -55,14 +55,6 @@ func (e *coordinator) contains(member *member) bool {
 	return !e.retired && e.members[member.service.UID] == member
 }
 
-func newMember(coordinator *coordinator, svcCtx *servicecontext.Context, service *v1.Service,
-	readinessGeneration uint64) *member {
-	return &member{
-		coordinator: coordinator, service: service.DeepCopy(), serviceContext: svcCtx,
-		readinessGeneration: readinessGeneration,
-	}
-}
-
 func (e *coordinator) join(svcCtx *servicecontext.Context, service *v1.Service,
 	readinessGeneration uint64) (*member, bool) {
 	e.mutex.Lock()
@@ -143,7 +135,16 @@ func (e *coordinator) currentMember(uid types.UID) *member {
 	return e.members[uid]
 }
 
-func (e *coordinator) leave(member *member) {
+func (e *coordinator) deactivateMember(member *member) {
+	if member == nil {
+		return
+	}
+	member.operationMutex.Lock()
+	defer member.operationMutex.Unlock()
+	e.deactivateMemberOperationHeld(member)
+}
+
+func (e *coordinator) withdrawMember(member *member) {
 	campaign, leaseRetired, retired := e.removeMember(member)
 	if !retired {
 		return
@@ -155,6 +156,16 @@ func (e *coordinator) leave(member *member) {
 	// A Service-owned runner remains responsible for the shared election when
 	// a non-Service member still holds the lease. Its lease-scoped context ends
 	// when that final member leaves or the election itself stops.
+}
+
+func (e *coordinator) closeMember(member *member) {
+	if member == nil {
+		return
+	}
+	member.operationMutex.Lock()
+	defer member.operationMutex.Unlock()
+	e.deactivateMemberOperationHeld(member)
+	e.withdrawMember(member)
 }
 
 // removeMember deletes member if it is still current and, once no members
@@ -532,7 +543,7 @@ func (e *coordinator) markCampaignStopped(svcLease *lease.Lease,
 
 func (e *coordinator) stopCampaign(svcLease *lease.Lease, campaign *campaign) {
 	for _, member := range e.markCampaignStopped(svcLease, campaign) {
-		member.deactivate()
+		e.deactivateMember(member)
 	}
 }
 

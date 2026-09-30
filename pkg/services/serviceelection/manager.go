@@ -29,7 +29,7 @@ func (m *Manager) join(svcCtx *servicecontext.Context, service *v1.Service,
 			if m.state.IsCurrent(member.service, member.serviceContext, member.readinessGeneration) {
 				return member, true
 			}
-			member.withdraw()
+			coordinator.withdrawMember(member)
 			return nil, false
 		}
 		if retiredDone, retired := coordinator.retirement(); retired {
@@ -59,7 +59,7 @@ func (m *Manager) LeaveForContext(svcCtx *servicecontext.Context, service *v1.Se
 	if member != nil && member.serviceContext == svcCtx {
 		// The caller already owns Service cleanup. Withdrawing here must not
 		// reacquire the Service lock through datapath cleanup.
-		member.withdraw()
+		coordinator.withdrawMember(member)
 	}
 }
 
@@ -92,10 +92,10 @@ func (m *Manager) Watch(svcCtx *servicecontext.Context, service *v1.Service, wg 
 
 		select {
 		case <-svcCtx.Ctx.Done():
-			member.close()
+			member.coordinator.closeMember(member)
 			return
 		case <-lost:
-			member.close()
+			member.coordinator.closeMember(member)
 		}
 	}
 }
