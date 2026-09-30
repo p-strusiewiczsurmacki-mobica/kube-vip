@@ -5,6 +5,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/kube-vip/kube-vip/pkg/instance"
 	"github.com/kube-vip/kube-vip/pkg/kubevip"
 	"github.com/kube-vip/kube-vip/pkg/lease"
 	"github.com/kube-vip/kube-vip/pkg/servicecontext"
@@ -16,6 +17,13 @@ import (
 // NewServicesProcessor to tests that need a partially configured Processor.
 func newTestServiceLocks() *ServiceLock {
 	return NewServiceLock()
+}
+
+type serviceInstanceFactoryFunc func(context.Context, *v1.Service, *sync.WaitGroup) (*instance.Instance, error)
+
+func (f serviceInstanceFactoryFunc) Create(ctx context.Context, service *v1.Service,
+	wg *sync.WaitGroup) (*instance.Instance, error) {
+	return f(ctx, service, wg)
 }
 
 type testElectionDatapath struct {
@@ -74,6 +82,10 @@ func initializeTestElectionCoordinators(processor *Processor,
 	}
 	if processor.leaseMgr == nil {
 		processor.leaseMgr = lease.NewManager()
+	}
+	if processor.instanceFactory == nil {
+		processor.instanceFactory = newServiceInstanceFactory(processor.config, processor.intfMgr,
+			processor.arpMgr, processor.routeMgr, processor.nodeLabelManager)
 	}
 	adapter := &electionAdapter{processor: processor}
 	config := testElectionCoordinatorConfig{runner: adapter, scheduler: adapter}
