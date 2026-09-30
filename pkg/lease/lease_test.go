@@ -95,6 +95,29 @@ func TestManagerAcquireRegistersMembership(t *testing.T) {
 	}
 }
 
+func TestRegistrationReleaseCannotRetireReplacementLease(t *testing.T) {
+	manager := NewManager()
+	id := NewID("kubernetes", "default", "shared")
+	registration, added := manager.AcquireRegistration(context.Background(), id, RegistrationSpec{Name: "first"})
+	if !added || registration == nil {
+		t.Fatal("first participant was not registered")
+	}
+	firstLease := registration.Lease()
+	if !registration.Release() {
+		t.Fatal("last registration did not retire its Lease")
+	}
+
+	replacement, added := manager.AcquireRegistration(context.Background(), id, RegistrationSpec{Name: "replacement"})
+	if !added || replacement == nil || replacement.Lease() == firstLease {
+		t.Fatal("replacement registration did not receive a new Lease")
+	}
+	registration.Release()
+	if manager.Get(id) != replacement.Lease() {
+		t.Fatal("stale release removed the replacement Lease")
+	}
+	replacement.Release()
+}
+
 func TestLeaseOwnedVIPsAggregatesDynamicMemberProviders(t *testing.T) {
 	manager := NewManager()
 	id := NewID("kubernetes", "default", "shared")

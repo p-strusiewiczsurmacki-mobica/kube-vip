@@ -20,6 +20,51 @@ type Manager struct {
 	lock   sync.Mutex
 }
 
+// RegistrationSpec describes one local participant in a shared Lease.
+type RegistrationSpec struct {
+	Name        string
+	VIPProvider VIPProvider
+}
+
+// Registration is a generation-safe handle to one local Lease participant.
+// Release only affects the exact Lease instance against which the participant
+// was registered, so delayed cleanup cannot retire a replacement Lease.
+type Registration struct {
+	manager *Manager
+	id      ID
+	spec    RegistrationSpec
+	lease   *Lease
+	owned   bool
+	once    sync.Once
+	retired bool
+}
+
+func (r *Registration) Lease() *Lease {
+	if r == nil {
+		return nil
+	}
+	return r.lease
+}
+
+func (r *Registration) Name() string {
+	if r == nil {
+		return ""
+	}
+	return r.spec.Name
+}
+
+// Release removes this registration once and reports whether it retired the
+// shared Lease.
+func (r *Registration) Release() bool {
+	if r == nil || r.manager == nil || !r.owned {
+		return false
+	}
+	r.once.Do(func() {
+		r.retired = r.manager.Delete(r.id, r.spec.Name, r.lease)
+	})
+	return r.retired
+}
+
 // NewManager creates new lease manager.
 func NewManager() *Manager {
 	return &Manager{
@@ -46,6 +91,15 @@ func (m *Manager) Acquire(ctx context.Context, id ID, objectName string,
 	return lease, lease.AddWithVIPProvider(objectName, vipProvider)
 }
 
+// AcquireRegistration creates or retrieves a Lease and returns a handle for
+// releasing the participant without reconstructing its identity at the call
+// site.
+func (m *Manager) AcquireRegistration(ctx context.Context, id ID,
+	spec RegistrationSpec) (*Registration, bool) {
+	registeredLease, added := m.Acquire(ctx, id, spec.Name, spec.VIPProvider)
+	return &Registration{manager: m, id: id, spec: spec, lease: registeredLease, owned: added}, added
+}
+
 // Claim atomically registers objectName against an existing lease. It returns
 // nil when the lease was retired before the caller could join it.
 func (m *Manager) Claim(id ID, objectName string) (*Lease, bool) {
@@ -63,6 +117,16 @@ func (m *Manager) ClaimWithVIPProvider(id ID, objectName string, vipProvider VIP
 		return nil, false
 	}
 	return lease, lease.AddWithVIPProvider(objectName, vipProvider)
+}
+
+// ClaimRegistration registers a participant against an existing Lease and
+// returns a generation-safe release handle. It returns nil after retirement.
+func (m *Manager) ClaimRegistration(id ID, spec RegistrationSpec) (*Registration, bool) {
+	registeredLease, added := m.ClaimWithVIPProvider(id, spec.Name, spec.VIPProvider)
+	if registeredLease == nil {
+		return nil, false
+	}
+	return &Registration{manager: m, id: id, spec: spec, lease: registeredLease, owned: added}, added
 }
 
 func (m *Manager) addLocked(ctx context.Context, id ID) *Lease {

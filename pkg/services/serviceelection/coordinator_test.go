@@ -145,7 +145,7 @@ func TestManagerIssuesNewClaimForEachReadinessGeneration(t *testing.T) {
 	manager, adapter, leaseMgr := newTestManager()
 	service := &v1.Service{ObjectMeta: metav1.ObjectMeta{Name: "service", Namespace: "default", UID: "service"}}
 	first := readyMember(t, manager, adapter, service)
-	firstToken := first.claimToken
+	firstToken := first.registration.Name()
 	firstContext := first.serviceContext
 	first.coordinator.closeMember(first)
 
@@ -159,7 +159,7 @@ func TestManagerIssuesNewClaimForEachReadinessGeneration(t *testing.T) {
 	if !joined {
 		t.Fatal("new readiness generation did not join")
 	}
-	if second.claimToken == firstToken {
+	if second.registration.Name() == firstToken {
 		t.Fatal("new readiness generation reused a claim token")
 	}
 

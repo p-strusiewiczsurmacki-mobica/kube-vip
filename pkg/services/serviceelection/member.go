@@ -13,8 +13,8 @@ type member struct {
 	service             *v1.Service
 	serviceContext      *servicecontext.Context
 	readinessGeneration servicecontext.ReadinessGeneration
-	claimToken          string
-	vipProvider         lease.VIPProvider
+	registrationSpec    lease.RegistrationSpec
+	registration        *lease.Registration
 	operationMutex      sync.Mutex
 	active              bool
 }
