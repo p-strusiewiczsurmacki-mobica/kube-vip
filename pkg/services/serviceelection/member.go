@@ -19,25 +19,10 @@ type member struct {
 	active              bool
 }
 
-// close deactivates the member datapath and withdraws its lease claim. It is
-// safe to call more than once and stale members cannot remove replacements.
-func (m *member) close() {
-	if m == nil || m.coordinator == nil {
-		return
+func newMember(coordinator *coordinator, svcCtx *servicecontext.Context, service *v1.Service,
+	readinessGeneration uint64) *member {
+	return &member{
+		coordinator: coordinator, service: service.DeepCopy(), serviceContext: svcCtx,
+		readinessGeneration: readinessGeneration,
 	}
-	m.deactivate()
-	m.withdraw()
-}
-
-func (m *member) deactivate() {
-	m.operationMutex.Lock()
-	defer m.operationMutex.Unlock()
-	m.coordinator.deactivateMemberOperationHeld(m)
-}
-
-func (m *member) withdraw() {
-	if m == nil || m.coordinator == nil {
-		return
-	}
-	m.coordinator.leave(m)
 }

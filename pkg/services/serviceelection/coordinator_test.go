@@ -18,11 +18,14 @@ import (
 )
 
 type testAdapter struct {
-	mutex       sync.Mutex
-	current     map[types.UID]*servicecontext.Context
-	activations []*v1.Service
-	cleanups    []*v1.Service
-	activateErr error
+	mutex              sync.Mutex
+	current            map[types.UID]*servicecontext.Context
+	activations        []*v1.Service
+	cleanups           []*v1.Service
+	activateErr        error
+	cleanupStarted     chan struct{}
+	cleanupStartedOnce sync.Once
+	releaseCleanup     <-chan struct{}
 }
 
 func (a *testAdapter) IsCurrent(service *v1.Service, ctx *servicecontext.Context, generation uint64) bool {
@@ -42,6 +45,12 @@ func (a *testAdapter) Activate(_ context.Context, service *v1.Service, _ *servic
 func (a *testAdapter) Cleanup(_ context.Context, service *v1.Service, _ *servicecontext.Context, current func() bool) error {
 	if !current() {
 		return nil
+	}
+	if a.cleanupStarted != nil {
+		a.cleanupStartedOnce.Do(func() { close(a.cleanupStarted) })
+	}
+	if a.releaseCleanup != nil {
+		<-a.releaseCleanup
 	}
 	a.mutex.Lock()
 	defer a.mutex.Unlock()
@@ -137,7 +146,7 @@ func TestManagerIssuesNewClaimForEachReadinessGeneration(t *testing.T) {
 	first := readyMember(t, manager, adapter, service)
 	firstToken := first.claimToken
 	firstContext := first.serviceContext
-	first.close()
+	first.coordinator.closeMember(first)
 
 	generation, _, _, ready := firstContext.ReadinessState()
 	if !ready || !firstContext.ResetReadinessGeneration(generation) {
@@ -153,11 +162,11 @@ func TestManagerIssuesNewClaimForEachReadinessGeneration(t *testing.T) {
 		t.Fatal("new readiness generation reused a claim token")
 	}
 
-	first.close()
+	first.coordinator.closeMember(first)
 	if leaseMgr.Get(second.coordinator.id) == nil {
 		t.Fatal("stale member retired the replacement lease")
 	}
-	second.close()
+	second.coordinator.closeMember(second)
 }
 
 func TestLastMemberRetirementRemovesCoordinatorFromRegistry(t *testing.T) {
@@ -172,7 +181,7 @@ func TestLastMemberRetirementRemovesCoordinatorFromRegistry(t *testing.T) {
 		t.Fatal("joined coordinator is not registered")
 	}
 
-	member.close()
+	member.coordinator.closeMember(member)
 
 	if current := manager.registry.current(coordinator.id); current != nil {
 		t.Fatal("retired coordinator remained registered")
@@ -213,11 +222,11 @@ func TestSharedCoordinatorAggregatesCurrentMemberVIPs(t *testing.T) {
 	if got, want := first.coordinator.lease.OwnedVIPs(), []string{"192.0.2.10", "192.0.2.20"}; !slices.Equal(got, want) {
 		t.Fatalf("OwnedVIPs() = %v, want %v", got, want)
 	}
-	first.close()
+	first.coordinator.closeMember(first)
 	if got, want := second.coordinator.lease.OwnedVIPs(), []string{"192.0.2.20"}; !slices.Equal(got, want) {
 		t.Fatalf("OwnedVIPs() after leave = %v, want %v", got, want)
 	}
-	second.close()
+	second.coordinator.closeMember(second)
 }
 
 func TestReplacingUIDGenerationKeepsSiblingClaim(t *testing.T) {
@@ -238,13 +247,13 @@ func TestReplacingUIDGenerationKeepsSiblingClaim(t *testing.T) {
 	if !joined {
 		t.Fatal("replacement generation did not join")
 	}
-	old.close()
+	old.coordinator.closeMember(old)
 	if replacement.coordinator.currentMember(service.UID) != replacement ||
 		replacement.coordinator.currentMember(siblingService.UID) != sibling {
 		t.Fatal("stale generation removed a current shared-lease member")
 	}
-	replacement.close()
-	sibling.close()
+	replacement.coordinator.closeMember(replacement)
+	sibling.coordinator.closeMember(sibling)
 }
 
 func TestActivationFailureCancelsCampaignAndRecordsBackoff(t *testing.T) {
@@ -263,7 +272,7 @@ func TestActivationFailureCancelsCampaignAndRecordsBackoff(t *testing.T) {
 	if got, want := coordinator.restartDelayLocked(), 2*restartBaseDelay; got != want {
 		t.Fatalf("restart delay = %v, want %v", got, want)
 	}
-	member.close()
+	member.coordinator.closeMember(member)
 }
 
 func TestCloseActiveMemberCleansUpExactlyOnce(t *testing.T) {
@@ -285,8 +294,8 @@ func TestCloseActiveMemberCleansUpExactlyOnce(t *testing.T) {
 		t.Fatal("member was not activated")
 	}
 
-	member.close()
-	member.close()
+	member.coordinator.closeMember(member)
+	member.coordinator.closeMember(member)
 
 	adapter.mutex.Lock()
 	cleanups := len(adapter.cleanups)
@@ -299,13 +308,118 @@ func TestCloseActiveMemberCleansUpExactlyOnce(t *testing.T) {
 	}
 }
 
+func TestCloseMemberPreventsConcurrentReactivation(t *testing.T) {
+	manager, adapter, _ := newTestManager()
+	cleanupStarted := make(chan struct{})
+	releaseCleanup := make(chan struct{})
+	adapter.cleanupStarted = cleanupStarted
+	adapter.releaseCleanup = releaseCleanup
+	service := &v1.Service{ObjectMeta: metav1.ObjectMeta{Name: "service", Namespace: "default", UID: "service"}}
+	member := readyMember(t, manager, adapter, service)
+	coordinator := member.coordinator
+	serviceLease := coordinator.lease
+
+	coordinator.mutex.Lock()
+	campaignCtx, cancelCampaign := context.WithCancel(context.Background())
+	coordinator.campaign = &campaign{ctx: campaignCtx, cancel: cancelCampaign}
+	currentCampaign := coordinator.campaign
+	coordinator.mutex.Unlock()
+	serviceLease.ElectionStarted()
+	coordinator.activateMember(context.Background(), member, serviceLease, currentCampaign, &sync.WaitGroup{})
+
+	closeDone := make(chan struct{})
+	go func() {
+		coordinator.closeMember(member)
+		close(closeDone)
+	}()
+	select {
+	case <-cleanupStarted:
+	case <-time.After(time.Second):
+		t.Fatal("closeMember() did not start datapath cleanup")
+	}
+
+	activateDone := make(chan struct{})
+	go func() {
+		coordinator.activateMember(context.Background(), member, serviceLease, currentCampaign, &sync.WaitGroup{})
+		close(activateDone)
+	}()
+	select {
+	case <-activateDone:
+		t.Fatal("activation completed while closeMember held the member operation lock")
+	case <-time.After(25 * time.Millisecond):
+	}
+
+	close(releaseCleanup)
+	select {
+	case <-closeDone:
+	case <-time.After(time.Second):
+		t.Fatal("closeMember() did not finish after cleanup was released")
+	}
+	select {
+	case <-activateDone:
+	case <-time.After(time.Second):
+		t.Fatal("activation did not finish after closeMember released the operation lock")
+	}
+
+	if current := coordinator.currentMember(service.UID); current != nil {
+		t.Fatal("closed member remained registered")
+	}
+	coordinator.mutex.Lock()
+	active := member.active
+	coordinator.mutex.Unlock()
+	if active {
+		t.Fatal("closed member was reactivated")
+	}
+	adapter.mutex.Lock()
+	activations := len(adapter.activations)
+	cleanups := len(adapter.cleanups)
+	adapter.mutex.Unlock()
+	if activations != 1 {
+		t.Fatalf("activation calls = %d, want 1", activations)
+	}
+	if cleanups != 1 {
+		t.Fatalf("cleanup calls = %d, want 1", cleanups)
+	}
+}
+
 func TestLeavingInactiveMemberDoesNotCleanupDatapath(t *testing.T) {
 	manager, adapter, _ := newTestManager()
 	service := &v1.Service{ObjectMeta: metav1.ObjectMeta{Name: "service", Namespace: "default", UID: "service"}}
 	member := readyMember(t, manager, adapter, service)
 
-	member.close()
+	member.coordinator.closeMember(member)
 
+	adapter.mutex.Lock()
+	cleanups := len(adapter.cleanups)
+	adapter.mutex.Unlock()
+	if cleanups != 0 {
+		t.Fatalf("cleanup calls = %d, want 0", cleanups)
+	}
+}
+
+func TestLeaveForContextWithdrawsWithoutDatapathCleanup(t *testing.T) {
+	manager, adapter, _ := newTestManager()
+	service := &v1.Service{ObjectMeta: metav1.ObjectMeta{Name: "service", Namespace: "default", UID: "service"}}
+	member := readyMember(t, manager, adapter, service)
+	coordinator := member.coordinator
+	serviceLease := coordinator.lease
+
+	coordinator.mutex.Lock()
+	campaignCtx, cancelCampaign := context.WithCancel(context.Background())
+	coordinator.campaign = &campaign{ctx: campaignCtx, cancel: cancelCampaign}
+	currentCampaign := coordinator.campaign
+	coordinator.mutex.Unlock()
+	serviceLease.ElectionStarted()
+	coordinator.activateMember(context.Background(), member, serviceLease, currentCampaign, &sync.WaitGroup{})
+	if !member.active {
+		t.Fatal("member was not activated")
+	}
+
+	manager.LeaveForContext(member.serviceContext, service)
+
+	if current := coordinator.currentMember(service.UID); current != nil {
+		t.Fatal("LeaveForContext() did not withdraw the member")
+	}
 	adapter.mutex.Lock()
 	cleanups := len(adapter.cleanups)
 	adapter.mutex.Unlock()
@@ -338,7 +452,7 @@ func TestExternalElectionEndDeactivatesMember(t *testing.T) {
 	waitForAdapterCount(t, adapter, func(a *testAdapter) int { return len(a.activations) }, 1, "activation")
 
 	sharedLease.ElectionStopped()
-	member.close()
+	member.coordinator.closeMember(member)
 	wg.Wait()
 	waitForAdapterCount(t, adapter, func(a *testAdapter) int { return len(a.cleanups) }, 1, "cleanup")
 	member.coordinator.mutex.Lock()
