@@ -111,7 +111,7 @@ func NewServicesProcessor(config *kubevip.Config, bgpServer *bgp.Server,
 		electionMgr:      electionMgr,
 		TunnelMgr:        wireguard.NewTunnelManager(),
 		routeMgr:         routeMgr,
-		instanceFactory:  newServiceInstanceFactory(config, intfMgr, arpMgr, routeMgr, nodeLabelManager),
+		instanceFactory:  instance.NewFactory(config, intfMgr, arpMgr, routeMgr, nodeLabelManager),
 	}
 	var err error
 	processor.electionCoordinators, err = newElectionCoordinatorManager(processor)
