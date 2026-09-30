@@ -220,11 +220,11 @@ func TestSharedCoordinatorAggregatesCurrentMemberVIPs(t *testing.T) {
 	if first.coordinator != second.coordinator {
 		t.Fatal("members with a shared lease got different coordinators")
 	}
-	if got, want := first.coordinator.lease.OwnedVIPs(), []string{"192.0.2.10", "192.0.2.20"}; !slices.Equal(got, want) {
+	if got, want := first.coordinator.membership.lease.OwnedVIPs(), []string{"192.0.2.10", "192.0.2.20"}; !slices.Equal(got, want) {
 		t.Fatalf("OwnedVIPs() = %v, want %v", got, want)
 	}
 	first.coordinator.closeMember(first)
-	if got, want := second.coordinator.lease.OwnedVIPs(), []string{"192.0.2.20"}; !slices.Equal(got, want) {
+	if got, want := second.coordinator.membership.lease.OwnedVIPs(), []string{"192.0.2.20"}; !slices.Equal(got, want) {
 		t.Fatalf("OwnedVIPs() after leave = %v, want %v", got, want)
 	}
 	second.coordinator.closeMember(second)
@@ -267,8 +267,8 @@ func TestActivationFailureCancelsCampaignAndRecordsBackoff(t *testing.T) {
 	start := coordinator.newCampaignCandidate()
 	start.campaign.election.Started()
 	coordinator.activateMember(context.Background(), member, start.lease, start.campaign, &sync.WaitGroup{})
-	if coordinator.restartFailures != 1 {
-		t.Fatalf("restartFailures = %d, want 1", coordinator.restartFailures)
+	if coordinator.campaigns.restartFailures != 1 {
+		t.Fatalf("restartFailures = %d, want 1", coordinator.campaigns.restartFailures)
 	}
 	if got, want := coordinator.restartDelayLocked(), 2*restartBaseDelay; got != want {
 		t.Fatalf("restart delay = %v, want %v", got, want)
@@ -281,11 +281,11 @@ func TestCloseActiveMemberCleansUpExactlyOnce(t *testing.T) {
 	service := &v1.Service{ObjectMeta: metav1.ObjectMeta{Name: "service", Namespace: "default", UID: "service"}}
 	member := readyMember(t, manager, adapter, service)
 	coordinator := member.coordinator
-	serviceLease := coordinator.lease
+	serviceLease := coordinator.membership.lease
 
 	coordinator.mutex.Lock()
-	coordinator.campaign = newCampaign(context.Background(), serviceLease, memberVIPs(coordinator.membersLocked()))
-	currentCampaign := coordinator.campaign
+	coordinator.campaigns.current = newCampaign(context.Background(), serviceLease, memberVIPs(coordinator.membersLocked()))
+	currentCampaign := coordinator.campaigns.current
 	coordinator.mutex.Unlock()
 	currentCampaign.election.Started()
 
@@ -317,11 +317,11 @@ func TestCloseMemberPreventsConcurrentReactivation(t *testing.T) {
 	service := &v1.Service{ObjectMeta: metav1.ObjectMeta{Name: "service", Namespace: "default", UID: "service"}}
 	member := readyMember(t, manager, adapter, service)
 	coordinator := member.coordinator
-	serviceLease := coordinator.lease
+	serviceLease := coordinator.membership.lease
 
 	coordinator.mutex.Lock()
-	coordinator.campaign = newCampaign(context.Background(), serviceLease, memberVIPs(coordinator.membersLocked()))
-	currentCampaign := coordinator.campaign
+	coordinator.campaigns.current = newCampaign(context.Background(), serviceLease, memberVIPs(coordinator.membersLocked()))
+	currentCampaign := coordinator.campaigns.current
 	coordinator.mutex.Unlock()
 	currentCampaign.election.Started()
 	coordinator.activateMember(context.Background(), member, serviceLease, currentCampaign, &sync.WaitGroup{})
@@ -401,11 +401,11 @@ func TestDetachForContextWithdrawsWithoutDatapathCleanup(t *testing.T) {
 	service := &v1.Service{ObjectMeta: metav1.ObjectMeta{Name: "service", Namespace: "default", UID: "service"}}
 	member := readyMember(t, manager, adapter, service)
 	coordinator := member.coordinator
-	serviceLease := coordinator.lease
+	serviceLease := coordinator.membership.lease
 
 	coordinator.mutex.Lock()
-	coordinator.campaign = newCampaign(context.Background(), serviceLease, memberVIPs(coordinator.membersLocked()))
-	currentCampaign := coordinator.campaign
+	coordinator.campaigns.current = newCampaign(context.Background(), serviceLease, memberVIPs(coordinator.membersLocked()))
+	currentCampaign := coordinator.campaigns.current
 	coordinator.mutex.Unlock()
 	currentCampaign.election.Started()
 	coordinator.activateMember(context.Background(), member, serviceLease, currentCampaign, &sync.WaitGroup{})
@@ -436,7 +436,7 @@ func TestExternalElectionEndDeactivatesMember(t *testing.T) {
 	id := lease.NewID(manager.config.LeaderElectionType, namespace, name)
 	controlPlaneToken := lease.ObjectName(id, "control-plane")
 	member := readyMember(t, manager, adapter, service)
-	sharedLease := member.coordinator.lease
+	sharedLease := member.coordinator.membership.lease
 	if claimed, _ := leaseMgr.Claim(id, controlPlaneToken); claimed != sharedLease {
 		t.Fatal("control plane did not join the Service lease")
 	}
