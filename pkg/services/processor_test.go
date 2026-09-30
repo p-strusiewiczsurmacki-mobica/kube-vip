@@ -84,7 +84,7 @@ func initializeTestElectionCoordinators(processor *Processor,
 		processor.leaseMgr = lease.NewManager()
 	}
 	if processor.instanceFactory == nil {
-		processor.instanceFactory = newServiceInstanceFactory(processor.config, processor.intfMgr,
+		processor.instanceFactory = instance.NewFactory(processor.config, processor.intfMgr,
 			processor.arpMgr, processor.routeMgr, processor.nodeLabelManager)
 	}
 	adapter := &electionAdapter{processor: processor}
