@@ -104,7 +104,8 @@ func TestAddServiceDoesNotOverwriteActiveEndpoint(t *testing.T) {
 	initializeTestElectionCoordinators(processor)
 	serviceInstance := &instance.Instance{ServiceUID: staleService.UID, ServiceSnapshot: staleService}
 	processor.ServiceInstances = []*instance.Instance{serviceInstance}
-	if err := processor.addService(context.Background(), staleService, &sync.WaitGroup{}); err != nil {
+	svcCtx := publishTestServiceContext(processor, staleService)
+	if err := processor.addService(context.Background(), svcCtx, staleService, &sync.WaitGroup{}); err != nil {
 		t.Fatalf("addService returned error: %v", err)
 	}
 
@@ -129,10 +130,11 @@ func TestConfigureServiceRejectsCancelledContext(t *testing.T) {
 		ServiceInstances: []*instance.Instance{serviceInstance},
 	}
 	initializeTestElectionCoordinators(processor)
+	svcCtx := publishTestServiceContext(processor, service)
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	if err := processor.configureService(ctx, serviceInstance, service, &sync.WaitGroup{}); !errors.Is(err, context.Canceled) {
+	if err := processor.configureService(ctx, svcCtx, serviceInstance, service, &sync.WaitGroup{}); !errors.Is(err, context.Canceled) {
 		t.Fatalf("configureService() error = %v, want context cancellation", err)
 	}
 }
@@ -216,12 +218,13 @@ func TestConfigureServiceWatchesBothDHCPFamilies(t *testing.T) {
 		nodeLabelManager: noop.NewManager(),
 	}
 	initializeTestElectionCoordinators(processor)
+	svcCtx := publishTestServiceContext(processor, service)
 	wg := &sync.WaitGroup{}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	if err := processor.configureService(ctx, serviceInstance, service, wg); err != nil {
+	if err := processor.configureService(ctx, svcCtx, serviceInstance, service, wg); err != nil {
 		t.Fatalf("configureService() error = %v", err)
 	}
 	dhcpv4.ips <- "192.0.2.10"

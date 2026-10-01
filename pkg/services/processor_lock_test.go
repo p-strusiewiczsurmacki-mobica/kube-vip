@@ -317,14 +317,15 @@ func TestAddServiceMarksPreTrackedInstanceAdded(t *testing.T) {
 		nodeLabelManager: &testLabeler{},
 	}
 	initializeTestElectionCoordinators(processor)
+	svcCtx := publishTestServiceContext(processor, service)
 
-	if err := processor.addService(context.Background(), service, &sync.WaitGroup{}); err != nil {
+	if err := processor.addService(context.Background(), svcCtx, service, &sync.WaitGroup{}); err != nil {
 		t.Fatalf("addService() error = %v", err)
 	}
 	if !serviceInstance.AddCalled {
 		t.Fatal("pre-tracked Service instance was not marked added")
 	}
-	if err := processor.addService(context.Background(), service, &sync.WaitGroup{}); err != nil {
+	if err := processor.addService(context.Background(), svcCtx, service, &sync.WaitGroup{}); err != nil {
 		t.Fatalf("second addService() error = %v", err)
 	}
 }
@@ -337,8 +338,9 @@ func TestPrepareServiceInstanceRejectsCancelledContext(t *testing.T) {
 	cancel()
 	processor := &Processor{serviceLock: newTestServiceLocks(), config: &kubevip.Config{}}
 	initializeTestElectionCoordinators(processor)
+	svcCtx := publishTestServiceContext(processor, service)
 
-	created, err := processor.prepareServiceInstance(ctx, service, &sync.WaitGroup{})
+	created, err := processor.prepareServiceInstance(ctx, svcCtx, service, &sync.WaitGroup{})
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("prepareServiceInstance() error = %v, want context cancellation", err)
 	}
@@ -362,8 +364,9 @@ func TestPrepareServiceInstanceUsesSharedFactory(t *testing.T) {
 		}),
 	}
 	initializeTestElectionCoordinators(processor)
+	svcCtx := publishTestServiceContext(processor, service)
 
-	created, err := processor.prepareServiceInstance(context.Background(), service, &sync.WaitGroup{})
+	created, err := processor.prepareServiceInstance(context.Background(), svcCtx, service, &sync.WaitGroup{})
 	if err != nil {
 		t.Fatalf("prepareServiceInstance() error = %v", err)
 	}
@@ -413,6 +416,7 @@ func TestAddServiceAfterDeleteTracksOneFreshInstance(t *testing.T) {
 		nodeLabelManager: &testLabeler{},
 	}
 	initializeTestElectionCoordinators(processor)
+	svcCtx := publishTestServiceContext(processor, service)
 
 	action := processor.getServiceInstanceAction(service)
 	if action != ActionAdd {
@@ -421,7 +425,7 @@ func TestAddServiceAfterDeleteTracksOneFreshInstance(t *testing.T) {
 	if err := processor.deleteService(context.Background(), uid); err != nil {
 		t.Fatalf("deleteService() error = %v", err)
 	}
-	if err := processor.addService(context.Background(), service, &sync.WaitGroup{}); err != nil {
+	if err := processor.addService(context.Background(), svcCtx, service, &sync.WaitGroup{}); err != nil {
 		t.Fatalf("addService() error = %v", err)
 	}
 	current := processor.findServiceInstance(service)
@@ -450,8 +454,9 @@ func TestAddServiceCleansUpAfterConfigurationFailure(t *testing.T) {
 		nodeLabelManager: labeler,
 	}
 	initializeTestElectionCoordinators(processor)
+	svcCtx := publishTestServiceContext(processor, service)
 
-	if err := processor.addService(context.Background(), service, &sync.WaitGroup{}); err == nil {
+	if err := processor.addService(context.Background(), svcCtx, service, &sync.WaitGroup{}); err == nil {
 		t.Fatal("addService() error = nil, want configuration failure")
 	}
 	if labeler.addCalls != 1 {

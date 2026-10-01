@@ -85,7 +85,7 @@ func (p *Processor) syncServicesWithContext(operationCtx context.Context, svcCtx
 			defer readinessReservation.Release()
 		}
 
-		if err := p.addService(operationCtx, svc, wg); err != nil {
+		if err := p.addService(operationCtx, svcCtx, svc, wg); err != nil {
 			return fmt.Errorf("error adding service %s/%s: %w", svc.Namespace, svc.Name, err)
 		}
 
@@ -185,10 +185,11 @@ func comparePortsAndPortStatuses(svc *v1.Service) bool {
 	return true
 }
 
-func (p *Processor) addService(ctx context.Context, svc *v1.Service, wg *sync.WaitGroup) error {
+func (p *Processor) addService(ctx context.Context, svcCtx *servicecontext.Context, svc *v1.Service,
+	wg *sync.WaitGroup) error {
 	startTime := time.Now()
 
-	inst, err := p.prepareServiceInstance(ctx, svc, wg)
+	inst, err := p.prepareServiceInstance(ctx, svcCtx, svc, wg)
 	if err != nil {
 		return err
 	}
@@ -196,7 +197,7 @@ func (p *Processor) addService(ctx context.Context, svc *v1.Service, wg *sync.Wa
 		return nil
 	}
 
-	if err := p.configureService(ctx, inst, svc, wg); err != nil {
+	if err := p.configureService(ctx, svcCtx, inst, svc, wg); err != nil {
 		cleanupErr := p.deleteServiceInstance(context.WithoutCancel(ctx), inst)
 		if cleanupErr != nil {
 			return fmt.Errorf("configure service %s/%s: %w; cleanup: %w", svc.Namespace, svc.Name, err, cleanupErr)
@@ -212,7 +213,8 @@ func (p *Processor) addService(ctx context.Context, svc *v1.Service, wg *sync.Wa
 
 // prepareServiceInstance finds or constructs the instance and marks it added. It
 // acquires the Service lock for svc.UID; callers must not already hold it.
-func (p *Processor) prepareServiceInstance(ctx context.Context, svc *v1.Service, wg *sync.WaitGroup) (*instance.Instance, error) {
+func (p *Processor) prepareServiceInstance(ctx context.Context, _ *servicecontext.Context, svc *v1.Service,
+	wg *sync.WaitGroup) (*instance.Instance, error) {
 	p.serviceLock.Lock(svc.UID)
 	defer func() {
 		if err := p.serviceLock.Unlock(svc.UID); err != nil {
@@ -244,7 +246,8 @@ func (p *Processor) prepareServiceInstance(ctx context.Context, svc *v1.Service,
 
 // configureService configures a tracked instance. It acquires the Service lock
 // for svc.UID and verifies inst is still current; callers must not hold the lock.
-func (p *Processor) configureService(ctx context.Context, inst *instance.Instance, svc *v1.Service, wg *sync.WaitGroup) error {
+func (p *Processor) configureService(ctx context.Context, _ *servicecontext.Context, inst *instance.Instance,
+	svc *v1.Service, wg *sync.WaitGroup) error {
 	p.serviceLock.Lock(svc.UID)
 	defer func() {
 		if err := p.serviceLock.Unlock(svc.UID); err != nil {
