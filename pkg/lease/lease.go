@@ -397,17 +397,6 @@ func (l *Lease) count() int {
 	return len(l.services)
 }
 
-// AcquireElection starts a new election generation when the Lease is idle, or
-// returns a session observing the current generation. The returned bool is true
-// only for the caller responsible for running that election.
-//
-// Deprecated: use JoinElection, whose named role cannot be confused with
-// cluster leadership.
-func (l *Lease) AcquireElection() (*ElectionSession, bool) {
-	participation := l.JoinElection()
-	return participation.Session, participation.RunsCampaign()
-}
-
 // JoinElection starts a local election generation or observes the current one.
 func (l *Lease) JoinElection() ElectionParticipation {
 	l.stateMu.Lock()

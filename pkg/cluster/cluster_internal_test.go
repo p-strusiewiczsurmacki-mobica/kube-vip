@@ -119,8 +119,9 @@ func TestControlPlaneFollowsSharedServiceElection(t *testing.T) {
 	leaseID := lease.NewID(config.LeaderElectionType, "default", "shared")
 	leaseMgr := lease.NewManager()
 	sharedLease, _ := leaseMgr.Acquire(context.Background(), leaseID, "service", nil)
-	serviceElection, owner := sharedLease.AcquireElection()
-	if !owner {
+	serviceParticipation := sharedLease.JoinElection()
+	serviceElection := serviceParticipation.Session
+	if !serviceParticipation.RunsCampaign() {
 		t.Fatal("Service election did not start")
 	}
 	if !serviceElection.Started() {

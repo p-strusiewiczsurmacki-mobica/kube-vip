@@ -65,10 +65,11 @@ func TestServiceNameForMatchesServiceName(t *testing.T) {
 
 func electLease(t *testing.T, lease *Lease) *ElectionSession {
 	t.Helper()
-	election, owner := lease.AcquireElection()
-	if !owner {
+	participation := lease.JoinElection()
+	if !participation.RunsCampaign() {
 		t.Fatal("expected lease to admit an election candidate")
 	}
+	election := participation.Session
 	if !election.Started() {
 		t.Fatal("expected election candidate to become leader")
 	}
@@ -230,16 +231,18 @@ func TestWaitForElectionEndObservesRapidRestart(t *testing.T) {
 	manager := NewManager()
 	service := createTestService("service", "default", nil)
 	serviceLease := manager.Add(context.Background(), getSvcID(service))
-	first, owner := serviceLease.AcquireElection()
-	if !owner {
+	firstParticipation := serviceLease.JoinElection()
+	if !firstParticipation.RunsCampaign() {
 		t.Fatal("first election did not start")
 	}
+	first := firstParticipation.Session
 	if !first.Started() {
 		t.Fatal("first election did not become leader")
 	}
 
-	observer, owner := serviceLease.AcquireElection()
-	if owner || !observer.WaitForLeader(context.Background()) {
+	observerParticipation := serviceLease.JoinElection()
+	observer := observerParticipation.Session
+	if observerParticipation.RunsCampaign() || !observer.WaitForLeader(context.Background()) {
 		t.Fatal("waiter did not observe the elected lease")
 	}
 	done := make(chan struct{})
@@ -248,10 +251,11 @@ func TestWaitForElectionEndObservesRapidRestart(t *testing.T) {
 		close(done)
 	}()
 	first.Stopped()
-	replacement, owner := serviceLease.AcquireElection()
-	if !owner {
+	replacementParticipation := serviceLease.JoinElection()
+	if !replacementParticipation.RunsCampaign() {
 		t.Fatal("replacement election did not start")
 	}
+	replacement := replacementParticipation.Session
 	if !replacement.Started() {
 		t.Fatal("replacement election did not become leader")
 	}
@@ -276,14 +280,16 @@ func TestLeaseElectionStateCoordinatesCandidates(t *testing.T) {
 	defer cancel()
 	lease := newLease(leaseCtx, cancel)
 
-	election, owner := lease.AcquireElection()
-	if !owner {
+	participation := lease.JoinElection()
+	if !participation.RunsCampaign() {
 		t.Fatal("first election candidate was not admitted")
 	}
-	observer, owner := lease.AcquireElection()
-	if owner {
+	election := participation.Session
+	observerParticipation := lease.JoinElection()
+	if observerParticipation.RunsCampaign() {
 		t.Fatal("second election candidate was admitted while election was running")
 	}
+	observer := observerParticipation.Session
 
 	joined := make(chan bool, 1)
 	go func() {
@@ -300,7 +306,7 @@ func TestLeaseElectionStateCoordinatesCandidates(t *testing.T) {
 	}
 
 	election.Stopped()
-	if _, owner := lease.AcquireElection(); !owner {
+	if !lease.JoinElection().RunsCampaign() {
 		t.Fatal("lease did not admit a new candidate after election stopped")
 	}
 }
@@ -310,14 +316,16 @@ func TestElectionSessionStaleStopCannotStopReplacement(t *testing.T) {
 	defer cancel()
 	serviceLease := newLease(leaseCtx, cancel)
 
-	first, owner := serviceLease.AcquireElection()
-	if !owner || !first.Started() {
+	firstParticipation := serviceLease.JoinElection()
+	first := firstParticipation.Session
+	if !firstParticipation.RunsCampaign() || !first.Started() {
 		t.Fatal("first election session did not become leader")
 	}
-	observer, owner := serviceLease.AcquireElection()
-	if owner {
+	observerParticipation := serviceLease.JoinElection()
+	if observerParticipation.RunsCampaign() {
 		t.Fatal("observer acquired an election that was already leading")
 	}
+	observer := observerParticipation.Session
 	if observer.Started() || observer.Stopped() {
 		t.Fatal("observer was allowed to mutate election state")
 	}
@@ -325,8 +333,9 @@ func TestElectionSessionStaleStopCannotStopReplacement(t *testing.T) {
 	if !first.Stopped() {
 		t.Fatal("first election session did not stop")
 	}
-	second, owner := serviceLease.AcquireElection()
-	if !owner || !second.Started() {
+	secondParticipation := serviceLease.JoinElection()
+	second := secondParticipation.Session
+	if !secondParticipation.RunsCampaign() || !second.Started() {
 		t.Fatal("replacement election session did not become leader")
 	}
 	if first.Stopped() {
@@ -345,19 +354,22 @@ func TestElectionSessionWaitForLeaderDoesNotAdoptReplacement(t *testing.T) {
 	defer cancel()
 	serviceLease := newLease(leaseCtx, cancel)
 
-	first, owner := serviceLease.AcquireElection()
-	if !owner {
+	firstParticipation := serviceLease.JoinElection()
+	if !firstParticipation.RunsCampaign() {
 		t.Fatal("first election session did not acquire the runner")
 	}
-	observer, owner := serviceLease.AcquireElection()
-	if owner {
+	first := firstParticipation.Session
+	observerParticipation := serviceLease.JoinElection()
+	if observerParticipation.RunsCampaign() {
 		t.Fatal("observer acquired an election that was already campaigning")
 	}
+	observer := observerParticipation.Session
 	if !first.Stopped() {
 		t.Fatal("first election session did not stop")
 	}
-	second, owner := serviceLease.AcquireElection()
-	if !owner || !second.Started() {
+	secondParticipation := serviceLease.JoinElection()
+	second := secondParticipation.Session
+	if !secondParticipation.RunsCampaign() || !second.Started() {
 		t.Fatal("replacement election session did not become leader")
 	}
 
@@ -371,8 +383,9 @@ func TestElectionSessionWaitForEndObservesRapidReplacement(t *testing.T) {
 	defer cancel()
 	serviceLease := newLease(leaseCtx, cancel)
 
-	first, owner := serviceLease.AcquireElection()
-	if !owner || !first.Started() {
+	firstParticipation := serviceLease.JoinElection()
+	first := firstParticipation.Session
+	if !firstParticipation.RunsCampaign() || !first.Started() {
 		t.Fatal("first election session did not become leader")
 	}
 	done := make(chan struct{})
@@ -382,8 +395,9 @@ func TestElectionSessionWaitForEndObservesRapidReplacement(t *testing.T) {
 	}()
 
 	first.Stopped()
-	second, owner := serviceLease.AcquireElection()
-	if !owner || !second.Started() {
+	secondParticipation := serviceLease.JoinElection()
+	second := secondParticipation.Session
+	if !secondParticipation.RunsCampaign() || !second.Started() {
 		t.Fatal("replacement election session did not become leader")
 	}
 	select {
@@ -398,18 +412,20 @@ func TestElectionSessionBroadcastsTransitionsToAllObservers(t *testing.T) {
 	defer cancel()
 	serviceLease := newLease(leaseCtx, cancel)
 
-	ownerSession, owner := serviceLease.AcquireElection()
-	if !owner {
+	ownerParticipation := serviceLease.JoinElection()
+	if !ownerParticipation.RunsCampaign() {
 		t.Fatal("first election session did not acquire the runner")
 	}
+	ownerSession := ownerParticipation.Session
 
 	const observerCount = 32
 	observers := make([]*ElectionSession, 0, observerCount)
 	for range observerCount {
-		observer, observerOwnsElection := serviceLease.AcquireElection()
-		if observerOwnsElection {
+		observerParticipation := serviceLease.JoinElection()
+		if observerParticipation.RunsCampaign() {
 			t.Fatal("observer acquired an election that was already campaigning")
 		}
+		observer := observerParticipation.Session
 		observers = append(observers, observer)
 	}
 
@@ -452,19 +468,21 @@ func TestElectionSessionBroadcastsCandidateStopToAllObservers(t *testing.T) {
 	defer cancel()
 	serviceLease := newLease(leaseCtx, cancel)
 
-	ownerSession, owner := serviceLease.AcquireElection()
-	if !owner {
+	ownerParticipation := serviceLease.JoinElection()
+	if !ownerParticipation.RunsCampaign() {
 		t.Fatal("first election session did not acquire the runner")
 	}
+	ownerSession := ownerParticipation.Session
 
 	const observerCount = 32
 	results := make(chan bool, observerCount)
 	var waiters sync.WaitGroup
 	for range observerCount {
-		observer, observerOwnsElection := serviceLease.AcquireElection()
-		if observerOwnsElection {
+		observerParticipation := serviceLease.JoinElection()
+		if observerParticipation.RunsCampaign() {
 			t.Fatal("observer acquired an election that was already campaigning")
 		}
+		observer := observerParticipation.Session
 		waiters.Go(func() {
 			results <- observer.WaitForLeader(context.Background())
 		})
@@ -481,14 +499,16 @@ func TestElectionSessionPreservesRapidStartStopResult(t *testing.T) {
 	defer cancel()
 	serviceLease := newLease(leaseCtx, cancel)
 
-	ownerSession, owner := serviceLease.AcquireElection()
-	if !owner {
+	ownerParticipation := serviceLease.JoinElection()
+	if !ownerParticipation.RunsCampaign() {
 		t.Fatal("first election session did not acquire the runner")
 	}
-	observer, owner := serviceLease.AcquireElection()
-	if owner {
+	ownerSession := ownerParticipation.Session
+	observerParticipation := serviceLease.JoinElection()
+	if observerParticipation.RunsCampaign() {
 		t.Fatal("observer acquired an election that was already campaigning")
 	}
+	observer := observerParticipation.Session
 	if !ownerSession.Started() || !ownerSession.Stopped() {
 		t.Fatal("owner session did not complete its leadership transition")
 	}
@@ -502,10 +522,11 @@ func TestElectionSessionWaitForEndReturnsBeforeLeadership(t *testing.T) {
 	defer cancel()
 	serviceLease := newLease(leaseCtx, cancel)
 
-	election, owner := serviceLease.AcquireElection()
-	if !owner {
+	participation := serviceLease.JoinElection()
+	if !participation.RunsCampaign() {
 		t.Fatal("first election session did not acquire the runner")
 	}
+	election := participation.Session
 	done := make(chan struct{})
 	go func() {
 		election.WaitForEnd(context.Background())
@@ -536,14 +557,16 @@ func TestLeaseWaitForLeaderReturnsWhenCandidateStops(t *testing.T) {
 	leaseCtx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	lease := newLease(leaseCtx, cancel)
-	election, owner := lease.AcquireElection()
-	if !owner {
+	participation := lease.JoinElection()
+	if !participation.RunsCampaign() {
 		t.Fatal("candidate was not admitted")
 	}
-	observer, owner := lease.AcquireElection()
-	if owner {
+	election := participation.Session
+	observerParticipation := lease.JoinElection()
+	if observerParticipation.RunsCampaign() {
 		t.Fatal("observer acquired an election that was already campaigning")
 	}
+	observer := observerParticipation.Session
 
 	joined := make(chan bool, 1)
 	go func() {
@@ -569,14 +592,16 @@ func TestLeaseSupportsRetakingElectionAfterCandidateStops(t *testing.T) {
 	leaseCtx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	lease := newLease(leaseCtx, cancel)
-	election, owner := lease.AcquireElection()
-	if !owner {
+	participation := lease.JoinElection()
+	if !participation.RunsCampaign() {
 		t.Fatal("candidate was not admitted")
 	}
-	observer, owner := lease.AcquireElection()
-	if owner {
+	election := participation.Session
+	observerParticipation := lease.JoinElection()
+	if observerParticipation.RunsCampaign() {
 		t.Fatal("observer acquired an election that was already campaigning")
 	}
+	observer := observerParticipation.Session
 
 	retried := make(chan bool, 1)
 	go func() {
@@ -584,8 +609,7 @@ func TestLeaseSupportsRetakingElectionAfterCandidateStops(t *testing.T) {
 			retried <- false
 			return
 		}
-		_, owner := lease.AcquireElection()
-		retried <- owner
+		retried <- lease.JoinElection().RunsCampaign()
 	}()
 	election.Stopped()
 
@@ -603,10 +627,11 @@ func TestLeaseWaitForElectionEndReleasesFollowers(t *testing.T) {
 	leaseCtx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	lease := newLease(leaseCtx, cancel)
-	election, owner := lease.AcquireElection()
-	if !owner {
+	participation := lease.JoinElection()
+	if !participation.RunsCampaign() {
 		t.Fatal("candidate was not admitted")
 	}
+	election := participation.Session
 	election.Started()
 
 	finished := make(chan struct{})
@@ -634,10 +659,11 @@ func TestLeaseWaitForLeaderReturnsWhenContextCancelled(t *testing.T) {
 			leaseCtx, cancelLease := context.WithCancel(context.Background())
 			defer cancelLease()
 			lease := newLease(leaseCtx, cancelLease)
-			election, owner := lease.AcquireElection()
-			if !owner {
+			participation := lease.JoinElection()
+			if !participation.RunsCampaign() {
 				t.Fatal("candidate was not admitted")
 			}
+			election := participation.Session
 
 			callerCtx, cancelCaller := context.WithCancel(context.Background())
 			defer cancelCaller()
@@ -1179,10 +1205,11 @@ func TestManager_CommonLeaseScenario(t *testing.T) {
 	}
 
 	// Simulate first service starting leadership.
-	election, owner := lease1.AcquireElection()
-	if !owner {
+	participation := lease1.JoinElection()
+	if !participation.RunsCampaign() {
 		t.Fatal("expected first service to become election candidate")
 	}
+	election := participation.Session
 	if !election.Started() {
 		t.Fatal("expected first service to become leader")
 	}
@@ -1200,8 +1227,9 @@ func TestManager_CommonLeaseScenario(t *testing.T) {
 	if lease1 != lease2 {
 		t.Error("expected same lease for services with same lease annotation")
 	}
-	observer, owner := lease2.AcquireElection()
-	if owner || !observer.WaitForLeader(context.Background()) {
+	observerParticipation := lease2.JoinElection()
+	observer := observerParticipation.Session
+	if observerParticipation.RunsCampaign() || !observer.WaitForLeader(context.Background()) {
 		t.Fatal("shared-lease follower did not observe the elected lease")
 	}
 

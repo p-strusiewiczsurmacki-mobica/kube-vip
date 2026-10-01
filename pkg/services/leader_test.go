@@ -50,8 +50,9 @@ func TestStartServicesLeaderElectionTracksSharedMembersAcrossReadinessLoss(t *te
 	namespace, name := lease.ServiceName(firstService)
 	id := lease.NewID(p.config.LeaderElectionType, namespace, name)
 	sharedLease := p.leaseMgr.Add(context.Background(), id)
-	externalElection, owner := sharedLease.AcquireElection()
-	if !owner || !externalElection.Started() {
+	externalParticipation := sharedLease.JoinElection()
+	externalElection := externalParticipation.Session
+	if !externalParticipation.RunsCampaign() || !externalElection.Started() {
 		t.Fatal("external election did not become leader")
 	}
 
@@ -111,8 +112,9 @@ func TestServiceMemberLeavingDoesNotCancelControlPlaneLease(t *testing.T) {
 	id := lease.NewID(p.config.LeaderElectionType, namespace, name)
 	controlPlaneToken := lease.ObjectName(id, "cp")
 	sharedLease, _ := p.leaseMgr.Acquire(context.Background(), id, controlPlaneToken, nil)
-	controlPlaneElection, owner := sharedLease.AcquireElection()
-	if !owner {
+	controlPlaneParticipation := sharedLease.JoinElection()
+	controlPlaneElection := controlPlaneParticipation.Session
+	if !controlPlaneParticipation.RunsCampaign() {
 		t.Fatal("control-plane election did not start")
 	}
 	if !controlPlaneElection.Started() {
