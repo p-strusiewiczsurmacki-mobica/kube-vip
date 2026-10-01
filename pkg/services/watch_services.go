@@ -131,7 +131,10 @@ func (q *serviceEventQueue) Wait() {
 }
 
 // This function handles the watching of a services endpoints and updates a load balancers endpoint configurations accordingly
-func (p *Processor) ServicesWatcher(ctx context.Context, serviceFunc *Callback, forcedOnly bool) error {
+func (p *Processor) ServicesWatcher(ctx context.Context, serviceFunc Callback, forcedOnly bool) error {
+	if serviceFunc == nil {
+		return errServiceCallbackRequired
+	}
 	// first start port mirroring if enabled
 	if err := p.startTrafficMirroringIfEnabled(); err != nil {
 		return err
@@ -254,7 +257,7 @@ func (p *Processor) ServicesWatcher(ctx context.Context, serviceFunc *Callback, 
 	return utils.NewPanicError("service watch channel closed unexpectedly")
 }
 
-func (p *Processor) processServiceEvent(ctx context.Context, event watch.Event, serviceFunc *Callback, forcedOnly bool,
+func (p *Processor) processServiceEvent(ctx context.Context, event watch.Event, serviceFunc Callback, forcedOnly bool,
 	wg *sync.WaitGroup, cancelWatcher context.CancelCauseFunc) error {
 	var err error
 	switch event.Type {
