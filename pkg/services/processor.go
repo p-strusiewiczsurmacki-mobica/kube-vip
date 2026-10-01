@@ -734,6 +734,20 @@ func (p *Processor) getServiceContext(uid types.UID) (*servicecontext.Context, e
 	return ctx, nil
 }
 
+// serviceContextCurrentLocked reports whether expected is the live context
+// published for uid. The caller must hold the Service lock for uid so the
+// identity check and the state mutation it guards form one critical section.
+func (p *Processor) serviceContextCurrentLocked(uid types.UID, expected *servicecontext.Context) (bool, error) {
+	if expected == nil || expected.Ctx == nil {
+		return false, nil
+	}
+	current, err := p.getServiceContext(uid)
+	if err != nil {
+		return false, err
+	}
+	return current == expected && expected.Ctx.Err() == nil, nil
+}
+
 // ensureServiceContext returns the current usable context or creates one. It
 // acquires the Service lock for svc.UID; callers must not already hold it.
 func (p *Processor) ensureServiceContext(ctx context.Context, svc *v1.Service) (*servicecontext.Context, error) {
