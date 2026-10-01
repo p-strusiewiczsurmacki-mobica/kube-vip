@@ -440,8 +440,9 @@ func TestExternalElectionEndDeactivatesMember(t *testing.T) {
 	if claimed, _ := leaseMgr.Claim(id, controlPlaneToken); claimed != sharedLease {
 		t.Fatal("control plane did not join the Service lease")
 	}
-	externalElection, owner := sharedLease.AcquireElection()
-	if !owner {
+	externalParticipation := sharedLease.JoinElection()
+	externalElection := externalParticipation.Session
+	if !externalParticipation.RunsCampaign() {
 		t.Fatal("external election did not start")
 	}
 	externalElection.Started()

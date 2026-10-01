@@ -32,8 +32,9 @@ func TestGlobalElectionFollowsSharedLeaseLeadership(t *testing.T) {
 	leaseID := lease.NewID(config.LeaderElectionType, "default", "shared")
 	leaseMgr := lease.NewManager()
 	sharedLease, _ := leaseMgr.Acquire(context.Background(), leaseID, "service", nil)
-	serviceElection, owner := sharedLease.AcquireElection()
-	if !owner {
+	serviceParticipation := sharedLease.JoinElection()
+	serviceElection := serviceParticipation.Session
+	if !serviceParticipation.RunsCampaign() {
 		t.Fatal("Service election did not start")
 	}
 	if !serviceElection.Started() {
@@ -79,8 +80,9 @@ func TestGlobalElectionFollowerShutdownIsNotLeadershipLoss(t *testing.T) {
 	leaseID := lease.NewID(config.LeaderElectionType, "default", "shared")
 	leaseMgr := lease.NewManager()
 	sharedLease, _ := leaseMgr.Acquire(context.Background(), leaseID, "service", nil)
-	serviceElection, owner := sharedLease.AcquireElection()
-	if !owner {
+	serviceParticipation := sharedLease.JoinElection()
+	serviceElection := serviceParticipation.Session
+	if !serviceParticipation.RunsCampaign() {
 		t.Fatal("Service election did not start")
 	}
 	if !serviceElection.Started() {
@@ -127,8 +129,9 @@ func TestGlobalElectionContributesDynamicVIPsToSharedLease(t *testing.T) {
 	leaseMgr := lease.NewManager()
 	sharedLease, _ := leaseMgr.Acquire(context.Background(), leaseID, "control-plane",
 		lease.StaticVIPProvider([]string{"192.0.2.10"}))
-	controlPlaneElection, owner := sharedLease.AcquireElection()
-	if !owner {
+	controlPlaneParticipation := sharedLease.JoinElection()
+	controlPlaneElection := controlPlaneParticipation.Session
+	if !controlPlaneParticipation.RunsCampaign() {
 		t.Fatal("control-plane election did not start")
 	}
 	if !controlPlaneElection.Started() {
