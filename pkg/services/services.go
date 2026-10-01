@@ -32,6 +32,8 @@ import (
 
 type ServiceInstanceAction string
 
+var errStaleServiceContext = errors.New("stale service context")
+
 const (
 	ActionDelete ServiceInstanceAction = "delete"
 	ActionAdd    ServiceInstanceAction = "add"
@@ -275,7 +277,7 @@ func (p *Processor) prepareServiceInstance(ctx context.Context, svcCtx *servicec
 
 // configureService configures a tracked instance. It acquires the Service lock
 // for svc.UID and verifies inst is still current; callers must not hold the lock.
-func (p *Processor) configureService(ctx context.Context, _ *servicecontext.Context, inst *instance.Instance,
+func (p *Processor) configureService(ctx context.Context, svcCtx *servicecontext.Context, inst *instance.Instance,
 	svc *v1.Service, wg *sync.WaitGroup) error {
 	p.serviceLock.Lock(svc.UID)
 	defer func() {
@@ -285,6 +287,13 @@ func (p *Processor) configureService(ctx context.Context, _ *servicecontext.Cont
 	}()
 	if err := ctx.Err(); err != nil {
 		return err
+	}
+	currentContext, err := p.serviceContextCurrentLocked(svc.UID, svcCtx)
+	if err != nil {
+		return err
+	}
+	if !currentContext {
+		return errStaleServiceContext
 	}
 	current := p.findServiceInstance(svc)
 	if current != inst {
