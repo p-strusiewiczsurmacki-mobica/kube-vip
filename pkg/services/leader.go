@@ -14,7 +14,7 @@ import (
 
 // The StartServicesWatchForLeaderElection function will start a services watcher, the
 func (p *Processor) StartServicesWatchForLeaderElection(ctx context.Context, forcedOnly bool) error {
-	err := p.ServicesWatcher(ctx, NewCallback(p.StartServicesLeaderElection), forcedOnly)
+	err := p.ServicesWatcher(ctx, p.StartServicesLeaderElection, forcedOnly)
 	if err != nil {
 		return err
 	}

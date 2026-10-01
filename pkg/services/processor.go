@@ -121,13 +121,12 @@ func NewServicesProcessor(config *kubevip.Config, bgpServer *bgp.Server,
 	return processor, nil
 }
 
-func (p *Processor) Reconcile(ctx context.Context, event watch.Event, serviceFunc *Callback, forcedOnly bool,
+func (p *Processor) Reconcile(ctx context.Context, event watch.Event, serviceFunc Callback, forcedOnly bool,
 	wg *sync.WaitGroup, cancelWatcher context.CancelCauseFunc) error {
 	svc, ok := event.Object.(*v1.Service)
 	if !ok || svc == nil {
 		return fmt.Errorf("unable to parse Kubernetes services from API watcher")
 	}
-
 	timer := prometheus.NewTimer(metrics.ServiceReconcileDuration.WithLabelValues(svc.Namespace))
 	defer timer.ObserveDuration()
 
@@ -149,6 +148,9 @@ func (p *Processor) Reconcile(ctx context.Context, event watch.Event, serviceFun
 	// Check the loadBalancer class
 	if p.lbClassFilter(svc, p.config) {
 		return nil
+	}
+	if serviceFunc == nil {
+		return errServiceCallbackRequired
 	}
 
 	// The Service annotation is cluster-wide while nftables state is local to
@@ -271,7 +273,7 @@ func (p *Processor) Reconcile(ctx context.Context, event watch.Event, serviceFun
 				// start if service is not already watched/handled
 				// signal endpoints goroutine we are ready to start and run service handling function
 				log.Info("(svcs) service function starting", "uid", svc.UID)
-				err = serviceFunc.Run(svcCtx, svc, wg)
+				err = serviceFunc(svcCtx, svc, wg)
 				if err != nil {
 					log.Error(err.Error())
 					if utils.IsPanicError(err) {
