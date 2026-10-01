@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/kube-vip/kube-vip/pkg/election"
+	"github.com/kube-vip/kube-vip/pkg/instance"
 	"github.com/kube-vip/kube-vip/pkg/kubevip"
 	"github.com/kube-vip/kube-vip/pkg/lease"
 	"github.com/kube-vip/kube-vip/pkg/metrics"
@@ -136,6 +137,108 @@ func TestServiceMemberLeavingDoesNotCancelControlPlaneLease(t *testing.T) {
 		t.Fatal("leaving Service member cancelled the control-plane lease")
 	}
 	p.leaseMgr.Delete(id, controlPlaneToken, sharedLease)
+}
+
+func TestDelayedElectionActivationDoesNotRestoreDeletedService(t *testing.T) {
+	service := &v1.Service{ObjectMeta: metav1.ObjectMeta{
+		Name: "service", Namespace: "default", UID: types.UID("service"),
+		Annotations: map[string]string{kubevip.ServiceLease: "shared"},
+	}, Spec: v1.ServiceSpec{LoadBalancerIP: "192.0.2.10"}}
+	labeler := &testLabeler{}
+	var factoryCalls atomic.Int32
+	p := &Processor{
+		serviceLock: newTestServiceLocks(),
+		config: &kubevip.Config{
+			DisableServiceUpdates:  true,
+			EnableServicesElection: true,
+		},
+		leaseMgr:         lease.NewManager(),
+		nodeLabelManager: labeler,
+		instanceFactory: serviceInstanceFactoryFunc(func(_ context.Context, svc *v1.Service,
+			_ *sync.WaitGroup) (*instance.Instance, error) {
+			factoryCalls.Add(1)
+			return &instance.Instance{ServiceUID: svc.UID, ServiceSnapshot: svc.DeepCopy()}, nil
+		}),
+	}
+
+	activationStarted := make(chan struct{})
+	continueActivation := make(chan struct{})
+	activationFinished := make(chan struct{})
+	runner := &electionTestRunner{started: make(chan struct{})}
+	var releaseActivation sync.Once
+	t.Cleanup(func() {
+		releaseActivation.Do(func() { close(continueActivation) })
+	})
+	initializeTestElectionCoordinators(p, withTestCampaignRunner(runner), withTestElectionActivation(
+		func(ctx context.Context, svc *v1.Service, svcCtx *servicecontext.Context, wg *sync.WaitGroup) error {
+			close(activationStarted)
+			<-continueActivation
+			defer close(activationFinished)
+			return p.activateElectedService(ctx, svcCtx, svc, wg)
+		},
+	))
+
+	namespace, name := lease.ServiceName(service)
+	id := lease.NewID(p.config.LeaderElectionType, namespace, name)
+	svcCtx := servicecontext.New(context.Background())
+	p.svcMap.Store(service.UID, svcCtx)
+	electionDone := make(chan error, 1)
+	go func() {
+		electionDone <- p.StartServicesLeaderElection(svcCtx, service, nil)
+	}()
+	svcCtx.SignalReadiness()
+
+	select {
+	case <-activationStarted:
+	case <-time.After(time.Second):
+		t.Fatal("Service activation did not reach the delayed datapath call")
+	}
+	sharedLease := p.leaseMgr.Get(id)
+	if sharedLease == nil || !sharedLease.IsLeading() {
+		t.Fatal("Service-owned election did not become leader")
+	}
+	controlPlaneToken := lease.ObjectName(id, "cp")
+	if claimed, _ := p.leaseMgr.Claim(id, controlPlaneToken); claimed != sharedLease {
+		t.Fatal("control plane did not join the Service-owned lease")
+	}
+	t.Cleanup(func() {
+		p.leaseMgr.Delete(id, controlPlaneToken, sharedLease)
+	})
+
+	if err := p.deleteTrackedService(service); err != nil {
+		t.Fatalf("deleteTrackedService() error = %v", err)
+	}
+	if sharedLease.Ctx.Err() != nil || !sharedLease.IsLeading() {
+		t.Fatal("deleting Service stopped the shared control-plane election")
+	}
+
+	releaseActivation.Do(func() { close(continueActivation) })
+	select {
+	case <-activationFinished:
+	case <-time.After(time.Second):
+		t.Fatal("delayed Service activation did not finish")
+	}
+	select {
+	case err := <-electionDone:
+		if err != nil {
+			t.Fatalf("Service election returned error: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Service election did not stop after deletion")
+	}
+
+	if got := p.findServiceInstance(service); got != nil {
+		t.Error("delayed activation restored a deleted Service instance")
+	}
+	if got := factoryCalls.Load(); got != 0 {
+		t.Errorf("instance factory calls after deletion = %d, want 0", got)
+	}
+	if got := labeler.addCalls; got != 0 {
+		t.Errorf("node label additions after deletion = %d, want 0", got)
+	}
+	if got := p.OwnedServiceVIPs(); len(got) != 0 {
+		t.Errorf("owned Service VIPs after deletion = %v, want none", got)
+	}
 }
 
 func TestStartServicesLeaderElectionRejectsNilContext(t *testing.T) {
