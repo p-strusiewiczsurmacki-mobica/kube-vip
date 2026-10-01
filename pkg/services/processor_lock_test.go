@@ -398,7 +398,14 @@ func TestStopMarksServiceInstanceForReconfiguration(t *testing.T) {
 	if svcCtx.StartWatching() {
 		t.Fatal("stopped Service context reacquired watcher ownership")
 	}
-	action := processor.getServiceInstanceAction(service)
+	replacementCtx := publishTestServiceContext(processor, service)
+	action, current, err := processor.getServiceInstanceAction(replacementCtx, service)
+	if err != nil {
+		t.Fatalf("getServiceInstanceAction() error = %v", err)
+	}
+	if !current {
+		t.Fatal("replacement Service context was not current")
+	}
 	if action != ActionAdd {
 		t.Fatalf("action after Stop() = %q, want %q", action, ActionAdd)
 	}
@@ -418,7 +425,13 @@ func TestAddServiceAfterDeleteTracksOneFreshInstance(t *testing.T) {
 	initializeTestElectionCoordinators(processor)
 	svcCtx := publishTestServiceContext(processor, service)
 
-	action := processor.getServiceInstanceAction(service)
+	action, contextCurrent, err := processor.getServiceInstanceAction(svcCtx, service)
+	if err != nil {
+		t.Fatalf("getServiceInstanceAction() error = %v", err)
+	}
+	if !contextCurrent {
+		t.Fatal("Service context was not current")
+	}
 	if action != ActionAdd {
 		t.Fatalf("getServiceInstanceAction() = %q, want ActionAdd", action)
 	}
