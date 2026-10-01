@@ -32,12 +32,6 @@ type coordinator struct {
 	retiredDone  chan struct{}
 	retiredCtx   context.Context
 	retireCancel context.CancelFunc
-
-	// restartFailures counts consecutive campaigns that ended via
-	// cancelCampaign (an activation failure with no other ready member)
-	// rather than a normal leadership change. It backs off campaign restarts
-	// and resets on the next successful activation.
-	restartFailures int
 }
 
 const (
