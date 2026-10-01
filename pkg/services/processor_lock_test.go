@@ -113,6 +113,50 @@ func TestServiceLockReturnsUnlockError(t *testing.T) {
 	}
 }
 
+func TestServiceContextCurrentLocked(t *testing.T) {
+	uid := types.UID("service-a")
+	active := servicecontext.New(context.Background())
+	replacement := servicecontext.New(context.Background())
+	cancelled := servicecontext.New(context.Background())
+	cancelled.Cancel()
+
+	tests := []struct {
+		name      string
+		published any
+		expected  *servicecontext.Context
+		want      bool
+		wantErr   bool
+	}{
+		{name: "current active context", published: active, expected: active, want: true},
+		{name: "different context", published: replacement, expected: active},
+		{name: "cancelled context", published: cancelled, expected: cancelled},
+		{name: "missing context", expected: active},
+		{name: "nil expected context", published: active},
+		{name: "invalid stored value", published: "not a service context", expected: active, wantErr: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			processor := &Processor{serviceLock: newTestServiceLocks()}
+			if tt.published != nil {
+				processor.svcMap.Store(uid, tt.published)
+			}
+
+			processor.serviceLock.Lock(uid)
+			got, err := processor.serviceContextCurrentLocked(uid, tt.expected)
+			if unlockErr := processor.serviceLock.Unlock(uid); unlockErr != nil {
+				t.Fatalf("Unlock() error = %v", unlockErr)
+			}
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("serviceContextCurrentLocked() error = %v, wantErr %t", err, tt.wantErr)
+			}
+			if got != tt.want {
+				t.Errorf("serviceContextCurrentLocked() = %t, want %t", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestAdmissionDoesNotSerializeUnrelatedInstanceConstruction(t *testing.T) {
 	started := make(chan struct{})
 	release := make(chan struct{})
