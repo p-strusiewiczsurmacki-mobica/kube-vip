@@ -117,7 +117,16 @@ func TestDropCancelledServiceContext(t *testing.T) {
 		if serviceInstance.AddCalled {
 			t.Fatal("cancelled context left the Service marked as configured")
 		}
-		if action := p.getServiceInstanceAction(service); action != ActionAdd {
+		replacementCtx := servicecontext.New(context.Background())
+		p.svcMap.Store(uid, replacementCtx)
+		action, current, err := p.getServiceInstanceAction(replacementCtx, service)
+		if err != nil {
+			t.Fatalf("getServiceInstanceAction() error = %v", err)
+		}
+		if !current {
+			t.Fatal("replacement Service context was not current")
+		}
+		if action != ActionAdd {
 			t.Fatalf("action after dropping cancelled context = %q, want %q", action, ActionAdd)
 		}
 	})

@@ -68,7 +68,13 @@ func (p *Processor) syncServicesWithContext(operationCtx context.Context, svcCtx
 	log.Debug("[STARTING] Service Sync", "namespace", svc.Namespace, "name", svc.Name, "uid", svc.UID)
 
 	// Iterate through the synchronising services
-	action := p.getServiceInstanceAction(svc)
+	action, current, err := p.getServiceInstanceAction(svcCtx, svc)
+	if err != nil {
+		return fmt.Errorf("validate service context for %s/%s: %w", svc.Namespace, svc.Name, err)
+	}
+	if !current {
+		return nil
+	}
 	switch action {
 	case ActionDelete:
 		log.Debug("[service] delete", "namespace", svc.Namespace, "name", svc.Name, "uid", svc.UID)
@@ -105,13 +111,18 @@ func (p *Processor) syncServicesWithContext(operationCtx context.Context, svcCtx
 	return nil
 }
 
-func (p *Processor) getServiceInstanceAction(svc *v1.Service) ServiceInstanceAction {
+func (p *Processor) getServiceInstanceAction(svcCtx *servicecontext.Context,
+	svc *v1.Service) (ServiceInstanceAction, bool, error) {
 	p.serviceLock.Lock(svc.UID)
 	defer func() {
 		if err := p.serviceLock.Unlock(svc.UID); err != nil {
 			log.Error("failed to release service lock", "uid", svc.UID, "err", err)
 		}
 	}()
+	currentContext, err := p.serviceContextCurrentLocked(svc.UID, svcCtx)
+	if err != nil || !currentContext {
+		return ActionNone, currentContext, err
+	}
 
 	// protect against multiple calls
 	// get the annotations or legacy values from manual configuration
@@ -121,52 +132,52 @@ func (p *Processor) getServiceInstanceAction(svc *v1.Service) ServiceInstanceAct
 	inst := p.findServiceInstance(svc)
 	if inst != nil {
 		if !inst.AddCalled {
-			return ActionAdd
+			return ActionAdd, true, nil
 		}
 		for _, address := range addresses {
 			// handle the case where the service instance needs to be deleted
 			if inst.IsDHCPv4 {
 				if address != "0.0.0.0" {
-					return ActionDelete
+					return ActionDelete, true, nil
 				}
 				if len(svc.Status.LoadBalancer.Ingress) > 0 && !slices.Contains(statusAddresses, inst.DHCPInterfaceIPv4) {
-					return ActionDelete
+					return ActionDelete, true, nil
 				}
 			} else {
 				if address == "0.0.0.0" {
-					return ActionDelete
+					return ActionDelete, true, nil
 				}
 				if len(svc.Status.LoadBalancer.Ingress) > 0 && !slices.Contains(statusAddresses, address) {
-					return ActionDelete
+					return ActionDelete, true, nil
 				}
 			}
 			if inst.IsDHCPv6 {
 				if address != "::" {
-					return ActionDelete
+					return ActionDelete, true, nil
 				}
 				if len(svc.Status.LoadBalancer.Ingress) > 0 && !slices.Contains(statusAddresses, inst.DHCPInterfaceIPv6) {
-					return ActionDelete
+					return ActionDelete, true, nil
 				}
 			} else {
 				if address == "::" {
-					return ActionDelete
+					return ActionDelete, true, nil
 				}
 				if len(svc.Status.LoadBalancer.Ingress) > 0 && !slices.Contains(statusAddresses, address) {
-					return ActionDelete
+					return ActionDelete, true, nil
 				}
 			}
 			if len(svc.Status.LoadBalancer.Ingress) > 0 && !comparePortsAndPortStatuses(svc) {
-				return ActionDelete
+				return ActionDelete, true, nil
 			}
 		}
 		// If we reach here, it means the service instance matches the service UID and is not a DHCP service, so we can return "no action"
-		return ActionNone
+		return ActionNone, true, nil
 	}
 	if len(addresses) > 0 || len(hostnames) > 0 {
 		log.Debug("no matching service instance found", "service", svc.Name, "namespace", svc.Namespace, "uid", svc.UID, "addresses", addresses, "hostnames", hostnames)
-		return ActionAdd // If no matching instance is found, we need to add a new service instance
+		return ActionAdd, true, nil // If no matching instance is found, we need to add a new service instance
 	}
-	return ActionNone
+	return ActionNone, true, nil
 }
 
 func comparePortsAndPortStatuses(svc *v1.Service) bool {
