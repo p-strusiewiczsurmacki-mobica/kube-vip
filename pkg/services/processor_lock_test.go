@@ -332,6 +332,29 @@ func TestDeleteServiceIsIdempotentWhenInstanceIsMissing(t *testing.T) {
 	}
 }
 
+func TestDeleteServiceForContextRejectsStaleServiceContext(t *testing.T) {
+	uid := types.UID("service-a")
+	service := &v1.Service{ObjectMeta: metav1.ObjectMeta{
+		UID: uid, Name: "service-a", Namespace: "default",
+	}}
+	serviceInstance := &instance.Instance{ServiceUID: uid, ServiceSnapshot: service}
+	processor := &Processor{
+		serviceLock:      newTestServiceLocks(),
+		config:           &kubevip.Config{},
+		ServiceInstances: []*instance.Instance{serviceInstance},
+	}
+	initializeTestElectionCoordinators(processor)
+	staleCtx := servicecontext.New(context.Background())
+	publishTestServiceContext(processor, service)
+
+	if err := processor.deleteServiceForContext(context.Background(), uid, staleCtx); err != nil {
+		t.Fatalf("deleteServiceForContext() error = %v", err)
+	}
+	if got := processor.findServiceInstance(service); got != serviceInstance {
+		t.Fatal("stale Service context deleted the current instance")
+	}
+}
+
 func TestAddServiceMarksPreTrackedInstanceAdded(t *testing.T) {
 	uid := types.UID("service-a")
 	service := &v1.Service{ObjectMeta: metav1.ObjectMeta{

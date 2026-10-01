@@ -80,7 +80,7 @@ func (p *Processor) syncServicesWithContext(operationCtx context.Context, svcCtx
 	switch action {
 	case ActionDelete:
 		log.Debug("[service] delete", "namespace", svc.Namespace, "name", svc.Name, "uid", svc.UID)
-		if err := p.deleteService(operationCtx, svc.UID); err != nil {
+		if err := p.deleteServiceForContext(operationCtx, svc.UID, svcCtx); err != nil {
 			return fmt.Errorf("error deleting service %s/%s: %w", svc.Namespace, svc.Name, err)
 		}
 	case ActionAdd:
@@ -104,7 +104,7 @@ func (p *Processor) syncServicesWithContext(operationCtx context.Context, svcCtx
 		// LB IP, the initial addService call may have missed the SNAT configuration because
 		// ActiveEndpoint was not yet present. Re-run it here.
 		if svc.Annotations[kubevip.Egress] == "true" && svc.Annotations[kubevip.ActiveEndpoint] != "" {
-			if err := p.updateEgressConfiguration(operationCtx, svc); err != nil {
+			if err := p.updateEgressConfiguration(operationCtx, svcCtx, svc); err != nil {
 				log.Warn("[service] egress reconfigure on ActionNone", "service", svc.Name, "namespace", svc.Namespace, "err", err)
 			}
 		}
@@ -529,8 +529,29 @@ func serviceSnapshotForEgress(inst *instance.Instance, service *v1.Service) *v1.
 	return merged
 }
 
+// deleteServiceForContext removes the tracked instance only while expectedCtx
+// remains the current live Service generation.
+func (p *Processor) deleteServiceForContext(ctx context.Context, uid types.UID,
+	expectedCtx *servicecontext.Context) error {
+	p.serviceLock.Lock(uid)
+	defer func() {
+		if err := p.serviceLock.Unlock(uid); err != nil {
+			log.Error("failed to release service lock", "uid", uid, "err", err)
+		}
+	}()
+	current, err := p.serviceContextCurrentLocked(uid, expectedCtx)
+	if err != nil {
+		return err
+	}
+	if !current {
+		return nil
+	}
+	return p.deleteCurrentServiceByUID(ctx, uid)
+}
+
 // deleteService removes the tracked instance for uid. It acquires the Service
-// lock; callers must not already hold it.
+// lock; callers must not already hold it. Unlike deleteServiceForContext, this
+// cleanup operation may intentionally run after its Service context was removed.
 func (p *Processor) deleteService(ctx context.Context, uid types.UID, expectedCtx ...*servicecontext.Context) error {
 	p.serviceLock.Lock(uid)
 	defer func() {
@@ -616,13 +637,21 @@ func (p *Processor) deleteCurrentService(ctx context.Context, serviceInstance *i
 
 // updateEgressConfiguration updates egress state for the current instance. It
 // acquires the Service lock for svc.UID; callers must not already hold it.
-func (p *Processor) updateEgressConfiguration(ctx context.Context, svc *v1.Service, expected ...*instance.Instance) error {
+func (p *Processor) updateEgressConfiguration(ctx context.Context, svcCtx *servicecontext.Context,
+	svc *v1.Service, expected ...*instance.Instance) error {
 	p.serviceLock.Lock(svc.UID)
 	defer func() {
 		if err := p.serviceLock.Unlock(svc.UID); err != nil {
 			log.Error("failed to release service lock", "uid", svc.UID, "err", err)
 		}
 	}()
+	currentContext, err := p.serviceContextCurrentLocked(svc.UID, svcCtx)
+	if err != nil {
+		return err
+	}
+	if !currentContext {
+		return nil
+	}
 
 	i := p.findServiceInstance(svc)
 	if i == nil {
