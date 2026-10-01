@@ -101,25 +101,33 @@ type failingKeyMutex struct {
 func (f failingKeyMutex) LockKey(string)         {}
 func (f failingKeyMutex) UnlockKey(string) error { return f.err }
 
-type configureBlockingKeyMutex struct {
+type lifecycleBlockingKeyMutex struct {
 	mutex            sync.Mutex
 	lockCalls        int
 	configureLock    chan struct{}
 	releaseConfigure chan struct{}
+	cleanupLock      chan struct{}
+	releaseCleanup   chan struct{}
 }
 
-func (m *configureBlockingKeyMutex) LockKey(string) {
+func (m *lifecycleBlockingKeyMutex) LockKey(string) {
 	m.mutex.Lock()
 	m.lockCalls++
 	lockCall := m.lockCalls
 	m.mutex.Unlock()
-	if lockCall == 2 {
+	switch lockCall {
+	case 2:
 		close(m.configureLock)
 		<-m.releaseConfigure
+	case 3:
+		if m.cleanupLock != nil {
+			close(m.cleanupLock)
+			<-m.releaseCleanup
+		}
 	}
 }
 
-func (m *configureBlockingKeyMutex) UnlockKey(string) error { return nil }
+func (m *lifecycleBlockingKeyMutex) UnlockKey(string) error { return nil }
 
 func TestServiceLockReturnsUnlockError(t *testing.T) {
 	want := errors.New("unlock failed")
@@ -569,7 +577,7 @@ func TestAddServiceTreatsContextLossBeforeConfigurationAsNormalCompletion(t *tes
 	releaseConfigure := make(chan struct{})
 	var releaseOnce sync.Once
 	t.Cleanup(func() { releaseOnce.Do(func() { close(releaseConfigure) }) })
-	keyMutex := &configureBlockingKeyMutex{
+	keyMutex := &lifecycleBlockingKeyMutex{
 		configureLock: configureLock, releaseConfigure: releaseConfigure,
 	}
 	labeler := &testLabeler{}
@@ -612,6 +620,76 @@ func TestAddServiceTreatsContextLossBeforeConfigurationAsNormalCompletion(t *tes
 	}
 	if labeler.addCalls != 0 {
 		t.Fatalf("node label additions after Service context loss = %d, want 0", labeler.addCalls)
+	}
+}
+
+func TestStaleActivationCleanupPreservesReplacementInstance(t *testing.T) {
+	service := admissionTestService("replaced-before-cleanup", "192.0.2.10")
+	svcCtx := servicecontext.New(context.Background())
+	configureLock := make(chan struct{})
+	releaseConfigure := make(chan struct{})
+	cleanupLock := make(chan struct{})
+	releaseCleanup := make(chan struct{})
+	var releaseConfigureOnce sync.Once
+	var releaseCleanupOnce sync.Once
+	t.Cleanup(func() {
+		releaseConfigureOnce.Do(func() { close(releaseConfigure) })
+		releaseCleanupOnce.Do(func() { close(releaseCleanup) })
+	})
+	keyMutex := &lifecycleBlockingKeyMutex{
+		configureLock: configureLock, releaseConfigure: releaseConfigure,
+		cleanupLock: cleanupLock, releaseCleanup: releaseCleanup,
+	}
+	processor := &Processor{
+		serviceLock: &ServiceLock{mutex: keyMutex},
+		config: &kubevip.Config{
+			DisableServiceUpdates: true, EnableServicesElection: true,
+		},
+		nodeLabelManager: &testLabeler{},
+		instanceFactory: serviceInstanceFactoryFunc(func(_ context.Context, svc *v1.Service,
+			_ *sync.WaitGroup) (*instance.Instance, error) {
+			return &instance.Instance{ServiceUID: svc.UID, ServiceSnapshot: svc.DeepCopy()}, nil
+		}),
+	}
+	initializeTestElectionCoordinators(processor)
+	processor.svcMap.Store(service.UID, svcCtx)
+
+	done := make(chan error, 1)
+	go func() {
+		done <- processor.addService(context.Background(), svcCtx, service, &sync.WaitGroup{})
+	}()
+	select {
+	case <-configureLock:
+	case <-time.After(time.Second):
+		t.Fatal("addService() did not reach configuration")
+	}
+	svcCtx.Cancel()
+	releaseConfigureOnce.Do(func() { close(releaseConfigure) })
+	select {
+	case <-cleanupLock:
+	case <-time.After(time.Second):
+		t.Fatal("stale activation did not reach cleanup")
+	}
+
+	removed, _ := processor.detachServiceInstance(service.UID)
+	if removed == nil {
+		t.Fatal("prepared instance was not tracked before cleanup")
+	}
+	replacementService := service.DeepCopy()
+	replacement := &instance.Instance{ServiceUID: service.UID, ServiceSnapshot: replacementService, AddCalled: true}
+	processor.appendServiceInstance(replacement)
+	releaseCleanupOnce.Do(func() { close(releaseCleanup) })
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("addService() error after replacement = %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("stale activation cleanup did not finish")
+	}
+	if got := processor.findServiceInstance(service); got != replacement {
+		t.Fatal("stale activation cleanup removed the replacement instance")
 	}
 }
 
