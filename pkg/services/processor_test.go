@@ -19,6 +19,12 @@ func newTestServiceLocks() *ServiceLock {
 	return NewServiceLock()
 }
 
+func publishTestServiceContext(processor *Processor, service *v1.Service) *servicecontext.Context {
+	svcCtx := servicecontext.New(context.Background())
+	processor.svcMap.Store(service.UID, svcCtx)
+	return svcCtx
+}
+
 type serviceInstanceFactoryFunc func(context.Context, *v1.Service, *sync.WaitGroup) (*instance.Instance, error)
 
 func (f serviceInstanceFactoryFunc) Create(ctx context.Context, service *v1.Service,
