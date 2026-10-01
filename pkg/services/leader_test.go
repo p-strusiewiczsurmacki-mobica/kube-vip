@@ -144,6 +144,10 @@ func TestDelayedElectionActivationDoesNotRestoreDeletedService(t *testing.T) {
 		Name: "service", Namespace: "default", UID: types.UID("service"),
 		Annotations: map[string]string{kubevip.ServiceLease: "shared"},
 	}, Spec: v1.ServiceSpec{LoadBalancerIP: "192.0.2.10"}}
+	metrics.ServiceElectionErrorsTotal.DeleteLabelValues(service.Namespace, service.Name, "service_sync")
+	t.Cleanup(func() {
+		metrics.ServiceElectionErrorsTotal.DeleteLabelValues(service.Namespace, service.Name, "service_sync")
+	})
 	labeler := &testLabeler{}
 	var factoryCalls atomic.Int32
 	p := &Processor{
@@ -164,7 +168,7 @@ func TestDelayedElectionActivationDoesNotRestoreDeletedService(t *testing.T) {
 	activationStarted := make(chan struct{})
 	continueActivation := make(chan struct{})
 	activationFinished := make(chan struct{})
-	runner := &electionTestRunner{started: make(chan struct{})}
+	runner := &electionTestRunner{started: make(chan struct{}), stopping: make(chan struct{})}
 	var releaseActivation sync.Once
 	t.Cleanup(func() {
 		releaseActivation.Do(func() { close(continueActivation) })
@@ -238,6 +242,18 @@ func TestDelayedElectionActivationDoesNotRestoreDeletedService(t *testing.T) {
 	}
 	if got := p.OwnedServiceVIPs(); len(got) != 0 {
 		t.Errorf("owned Service VIPs after deletion = %v, want none", got)
+	}
+	if sharedLease.Ctx.Err() != nil || !sharedLease.IsLeading() || p.leaseMgr.Get(id) != sharedLease {
+		t.Error("delayed activation stopped the shared control-plane campaign")
+	}
+	select {
+	case <-runner.stopping:
+		t.Error("delayed activation stopped the Service-owned campaign")
+	default:
+	}
+	if got := testutil.ToFloat64(metrics.ServiceElectionErrorsTotal.WithLabelValues(
+		service.Namespace, service.Name, "service_sync")); got != 0 {
+		t.Errorf("Service election errors after stale activation = %v, want 0", got)
 	}
 }
 
