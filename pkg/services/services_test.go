@@ -21,8 +21,9 @@ import (
 )
 
 type testDHCPClient struct {
-	ips    chan string
-	errors chan error
+	ips     chan string
+	errors  chan error
+	stopped bool
 }
 
 func newTestDHCPClient() *testDHCPClient {
@@ -35,7 +36,7 @@ func (c *testDHCPClient) IPChannel() chan string   { return c.ips }
 func (c *testDHCPClient) Start(context.Context) error {
 	return nil
 }
-func (c *testDHCPClient) Stop() {}
+func (c *testDHCPClient) Stop() { c.stopped = true }
 func (c *testDHCPClient) WithHostName(string) vip.DHCPClient {
 	return c
 }

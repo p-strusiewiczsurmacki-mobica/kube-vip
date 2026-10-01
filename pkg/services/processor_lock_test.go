@@ -352,6 +352,68 @@ func TestPrepareServiceInstanceRejectsCancelledContext(t *testing.T) {
 	}
 }
 
+func TestPrepareServiceInstanceRejectsStaleServiceContext(t *testing.T) {
+	service := admissionTestService("stale-service", "192.0.2.10")
+	staleCtx := servicecontext.New(context.Background())
+	factoryCalls := 0
+	processor := &Processor{
+		serviceLock: newTestServiceLocks(),
+		config:      &kubevip.Config{},
+		instanceFactory: serviceInstanceFactoryFunc(func(_ context.Context, svc *v1.Service,
+			_ *sync.WaitGroup) (*instance.Instance, error) {
+			factoryCalls++
+			return &instance.Instance{ServiceUID: svc.UID, ServiceSnapshot: svc.DeepCopy()}, nil
+		}),
+	}
+	initializeTestElectionCoordinators(processor)
+	publishTestServiceContext(processor, service)
+
+	created, err := processor.prepareServiceInstance(context.Background(), staleCtx, service, &sync.WaitGroup{})
+	if err != nil {
+		t.Fatalf("prepareServiceInstance() error = %v", err)
+	}
+	if created != nil {
+		t.Fatal("prepareServiceInstance() returned an instance for a stale Service context")
+	}
+	if factoryCalls != 0 {
+		t.Fatalf("instance factory calls = %d, want 0", factoryCalls)
+	}
+}
+
+func TestPrepareServiceInstanceCleansUpWhenContextIsCancelledDuringConstruction(t *testing.T) {
+	service := admissionTestService("cancelled-during-construction", "192.0.2.10")
+	svcCtx := servicecontext.New(context.Background())
+	dhcpClient := newTestDHCPClient()
+	processor := &Processor{
+		serviceLock: newTestServiceLocks(),
+		config:      &kubevip.Config{},
+		instanceFactory: serviceInstanceFactoryFunc(func(_ context.Context, svc *v1.Service,
+			_ *sync.WaitGroup) (*instance.Instance, error) {
+			svcCtx.Cancel()
+			return &instance.Instance{
+				ServiceUID: svc.UID, ServiceSnapshot: svc.DeepCopy(),
+				IsDHCPv4: true, DHCPv4Client: dhcpClient,
+			}, nil
+		}),
+	}
+	initializeTestElectionCoordinators(processor)
+	processor.svcMap.Store(service.UID, svcCtx)
+
+	created, err := processor.prepareServiceInstance(context.Background(), svcCtx, service, &sync.WaitGroup{})
+	if err != nil {
+		t.Fatalf("prepareServiceInstance() error = %v", err)
+	}
+	if created != nil {
+		t.Fatal("prepareServiceInstance() returned an instance after its Service context was cancelled")
+	}
+	if got := processor.findServiceInstance(service); got != nil {
+		t.Fatal("cancelled Service context left a constructed instance tracked")
+	}
+	if !dhcpClient.stopped {
+		t.Fatal("discarding the constructed instance did not stop its DHCP client")
+	}
+}
+
 func TestPrepareServiceInstanceUsesSharedFactory(t *testing.T) {
 	service := admissionTestService("service", "192.0.2.10")
 	called := false
