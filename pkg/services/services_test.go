@@ -205,12 +205,38 @@ func TestUpdateEgressConfigurationRejectsRecreatedService(t *testing.T) {
 		ServiceInstances: []*instance.Instance{serviceInstance},
 	}
 	initializeTestElectionCoordinators(processor)
+	svcCtx := publishTestServiceContext(processor, trackedService)
 
-	if err := processor.updateEgressConfiguration(context.Background(), updatedService); err != nil {
+	if err := processor.updateEgressConfiguration(context.Background(), svcCtx, updatedService); err != nil {
 		t.Fatalf("updateEgressConfiguration() error = %v", err)
 	}
 	if serviceInstance.ServiceSnapshot != snapshot {
 		t.Fatal("recreated Service replaced the tracked instance snapshot")
+	}
+}
+
+func TestUpdateEgressConfigurationRejectsStaleServiceContext(t *testing.T) {
+	trackedService := &v1.Service{ObjectMeta: metav1.ObjectMeta{
+		Name: "test-service", Namespace: "default", UID: "service-uid",
+		Annotations: map[string]string{kubevip.ActiveEndpoint: "10.0.0.1"},
+	}}
+	updatedService := trackedService.DeepCopy()
+	updatedService.Annotations[kubevip.ActiveEndpoint] = "10.0.0.2"
+	serviceInstance := &instance.Instance{ServiceUID: trackedService.UID, ServiceSnapshot: trackedService}
+	processor := &Processor{
+		serviceLock:      newTestServiceLocks(),
+		config:           &kubevip.Config{},
+		ServiceInstances: []*instance.Instance{serviceInstance},
+	}
+	initializeTestElectionCoordinators(processor)
+	staleCtx := servicecontext.New(context.Background())
+	publishTestServiceContext(processor, trackedService)
+
+	if err := processor.updateEgressConfiguration(context.Background(), staleCtx, updatedService); err != nil {
+		t.Fatalf("updateEgressConfiguration() error = %v", err)
+	}
+	if serviceInstance.ServiceSnapshot != trackedService {
+		t.Fatal("stale Service context updated the instance snapshot")
 	}
 }
 

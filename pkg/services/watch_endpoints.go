@@ -86,7 +86,7 @@ func (p *Processor) watchEndpoint(svcCtx *servicecontext.Context, id string, ser
 
 			restart, err := epProcessor.Reconcile(svcCtx, event, &lastKnownGoodEndpoint, service, id,
 				&wg, p.clientSet, func(ctx context.Context, service *v1.Service, inst *instance.Instance) error {
-					return p.updateEgressConfiguration(ctx, service, inst)
+					return p.updateEgressConfiguration(ctx, svcCtx, service, inst)
 				})
 			if restart {
 				continue
