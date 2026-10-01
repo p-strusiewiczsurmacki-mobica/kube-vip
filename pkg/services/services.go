@@ -224,7 +224,7 @@ func (p *Processor) addService(ctx context.Context, svcCtx *servicecontext.Conte
 
 // prepareServiceInstance finds or constructs the instance and marks it added. It
 // acquires the Service lock for svc.UID; callers must not already hold it.
-func (p *Processor) prepareServiceInstance(ctx context.Context, _ *servicecontext.Context, svc *v1.Service,
+func (p *Processor) prepareServiceInstance(ctx context.Context, svcCtx *servicecontext.Context, svc *v1.Service,
 	wg *sync.WaitGroup) (*instance.Instance, error) {
 	p.serviceLock.Lock(svc.UID)
 	defer func() {
@@ -234,6 +234,13 @@ func (p *Processor) prepareServiceInstance(ctx context.Context, _ *servicecontex
 	}()
 	if err := ctx.Err(); err != nil {
 		return nil, err
+	}
+	currentContext, err := p.serviceContextCurrentLocked(svc.UID, svcCtx)
+	if err != nil {
+		return nil, err
+	}
+	if !currentContext {
+		return nil, nil
 	}
 
 	current := p.findServiceInstance(svc)
@@ -248,6 +255,17 @@ func (p *Processor) prepareServiceInstance(ctx context.Context, _ *servicecontex
 	inst, err := p.createServiceInstance(ctx, svc, wg)
 	if err != nil {
 		return nil, err
+	}
+	currentContext, contextErr := p.serviceContextCurrentLocked(svc.UID, svcCtx)
+	if contextErr != nil || !currentContext {
+		cleanupErr := inst.CleanupLinkAttachments(p.serviceInstances()...)
+		if contextErr != nil {
+			return nil, errors.Join(contextErr, cleanupErr)
+		}
+		if cleanupErr != nil {
+			return nil, fmt.Errorf("cleanup instance for stale service context: %w", cleanupErr)
+		}
+		return nil, nil
 	}
 	inst.AddCalled = true
 	p.appendServiceInstance(inst)
