@@ -101,6 +101,26 @@ type failingKeyMutex struct {
 func (f failingKeyMutex) LockKey(string)         {}
 func (f failingKeyMutex) UnlockKey(string) error { return f.err }
 
+type configureBlockingKeyMutex struct {
+	mutex            sync.Mutex
+	lockCalls        int
+	configureLock    chan struct{}
+	releaseConfigure chan struct{}
+}
+
+func (m *configureBlockingKeyMutex) LockKey(string) {
+	m.mutex.Lock()
+	m.lockCalls++
+	lockCall := m.lockCalls
+	m.mutex.Unlock()
+	if lockCall == 2 {
+		close(m.configureLock)
+		<-m.releaseConfigure
+	}
+}
+
+func (m *configureBlockingKeyMutex) UnlockKey(string) error { return nil }
+
 func TestServiceLockReturnsUnlockError(t *testing.T) {
 	want := errors.New("unlock failed")
 	serviceLock := &ServiceLock{mutex: failingKeyMutex{err: want}}
@@ -539,6 +559,59 @@ func TestAddServiceCleansUpAfterConfigurationFailure(t *testing.T) {
 	}
 	if got := processor.findServiceInstance(service); got != nil {
 		t.Fatal("configuration failure left a partial instance tracked")
+	}
+}
+
+func TestAddServiceTreatsContextLossBeforeConfigurationAsNormalCompletion(t *testing.T) {
+	service := admissionTestService("cancelled-before-configuration", "192.0.2.10")
+	svcCtx := servicecontext.New(context.Background())
+	configureLock := make(chan struct{})
+	releaseConfigure := make(chan struct{})
+	var releaseOnce sync.Once
+	t.Cleanup(func() { releaseOnce.Do(func() { close(releaseConfigure) }) })
+	keyMutex := &configureBlockingKeyMutex{
+		configureLock: configureLock, releaseConfigure: releaseConfigure,
+	}
+	labeler := &testLabeler{}
+	processor := &Processor{
+		serviceLock: &ServiceLock{mutex: keyMutex},
+		config: &kubevip.Config{
+			DisableServiceUpdates: true, EnableServicesElection: true,
+		},
+		nodeLabelManager: labeler,
+		instanceFactory: serviceInstanceFactoryFunc(func(_ context.Context, svc *v1.Service,
+			_ *sync.WaitGroup) (*instance.Instance, error) {
+			return &instance.Instance{ServiceUID: svc.UID, ServiceSnapshot: svc.DeepCopy()}, nil
+		}),
+	}
+	initializeTestElectionCoordinators(processor)
+	processor.svcMap.Store(service.UID, svcCtx)
+
+	done := make(chan error, 1)
+	go func() {
+		done <- processor.addService(context.Background(), svcCtx, service, &sync.WaitGroup{})
+	}()
+	select {
+	case <-configureLock:
+	case <-time.After(time.Second):
+		t.Fatal("addService() did not reach configuration")
+	}
+	svcCtx.Cancel()
+	releaseOnce.Do(func() { close(releaseConfigure) })
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("addService() error after normal Service context loss = %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("addService() did not finish after configuration was released")
+	}
+	if got := processor.findServiceInstance(service); got != nil {
+		t.Fatal("Service context loss left the prepared instance tracked")
+	}
+	if labeler.addCalls != 0 {
+		t.Fatalf("node label additions after Service context loss = %d, want 0", labeler.addCalls)
 	}
 }
 
