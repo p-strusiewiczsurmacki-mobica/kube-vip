@@ -17,6 +17,7 @@ import (
 	"github.com/kube-vip/kube-vip/pkg/instance"
 	"github.com/kube-vip/kube-vip/pkg/kubevip"
 	"github.com/kube-vip/kube-vip/pkg/node/noop"
+	"github.com/kube-vip/kube-vip/pkg/servicecontext"
 	"github.com/kube-vip/kube-vip/pkg/vip"
 )
 
@@ -137,6 +138,31 @@ func TestConfigureServiceRejectsCancelledContext(t *testing.T) {
 
 	if err := processor.configureService(ctx, svcCtx, serviceInstance, service, &sync.WaitGroup{}); !errors.Is(err, context.Canceled) {
 		t.Fatalf("configureService() error = %v, want context cancellation", err)
+	}
+}
+
+func TestConfigureServiceRejectsStaleServiceContext(t *testing.T) {
+	service := &v1.Service{ObjectMeta: metav1.ObjectMeta{
+		Name: "stale", Namespace: "default", UID: "stale",
+	}}
+	serviceInstance := &instance.Instance{ServiceUID: service.UID, ServiceSnapshot: service}
+	labeler := &testLabeler{}
+	processor := &Processor{
+		serviceLock:      newTestServiceLocks(),
+		config:           &kubevip.Config{EnableServicesElection: true},
+		ServiceInstances: []*instance.Instance{serviceInstance},
+		nodeLabelManager: labeler,
+	}
+	initializeTestElectionCoordinators(processor)
+	staleCtx := servicecontext.New(context.Background())
+	publishTestServiceContext(processor, service)
+
+	err := processor.configureService(context.Background(), staleCtx, serviceInstance, service, &sync.WaitGroup{})
+	if !errors.Is(err, errStaleServiceContext) {
+		t.Fatalf("configureService() error = %v, want stale Service context", err)
+	}
+	if labeler.addCalls != 0 {
+		t.Fatalf("node label additions for stale context = %d, want 0", labeler.addCalls)
 	}
 }
 
