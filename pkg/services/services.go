@@ -215,6 +215,9 @@ func (p *Processor) addService(ctx context.Context, svcCtx *servicecontext.Conte
 		if cleanupErr != nil {
 			return fmt.Errorf("configure service %s/%s: %w; cleanup: %w", svc.Namespace, svc.Name, err, cleanupErr)
 		}
+		if errors.Is(err, errStaleServiceContext) {
+			return nil
+		}
 		return err
 	}
 
