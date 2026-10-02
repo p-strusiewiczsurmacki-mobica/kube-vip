@@ -16,13 +16,14 @@ import (
 	"github.com/kube-vip/kube-vip/pkg/lease"
 	"github.com/kube-vip/kube-vip/pkg/nftables"
 	"github.com/kube-vip/kube-vip/pkg/route"
+	"github.com/kube-vip/kube-vip/pkg/wireguard"
 )
 
 // CleanupService stops one Service's datapath before its instance is detached.
 // The service processor owns labels and instance bookkeeping; this package owns
 // endpoint-dependent networking and waits for worker shutdown to complete.
 func CleanupService(ctx context.Context, config *kubevip.Config, bgpServer *bgp.Server, routeMgr *route.Manager,
-	tunnelMgr ServiceTunnelManager, serviceInstance *instance.Instance, remaining []*instance.Instance) error {
+	tunnelMgr wireguard.ServiceTunnelManager, serviceInstance *instance.Instance, remaining []*instance.Instance) error {
 	if serviceInstance == nil || serviceInstance.ServiceSnapshot == nil {
 		return nil
 	}
@@ -124,7 +125,7 @@ func sharedServiceVIPs(config *kubevip.Config, serviceInstance *instance.Instanc
 	return shared
 }
 
-func cleanupWireguardService(tunnelMgr ServiceTunnelManager, service *v1.Service) {
+func cleanupWireguardService(tunnelMgr wireguard.ServiceTunnelManager, service *v1.Service) {
 	if tunnelMgr == nil {
 		return
 	}
