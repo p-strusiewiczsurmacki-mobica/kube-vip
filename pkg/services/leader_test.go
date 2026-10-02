@@ -445,6 +445,7 @@ func TestServiceWatcherWaitGroupDoesNotOwnCampaignShutdown(t *testing.T) {
 	}
 
 	close(releaseStop)
+	p.electionCoordinators.Wait()
 }
 
 func TestServiceElectionAttemptWaitsForReadiness(t *testing.T) {
@@ -730,6 +731,7 @@ func TestServiceWatcherWaitGroupDoesNotOwnCampaignRetainedByControlPlane(t *test
 	t.Cleanup(func() {
 		svcCtx.Cancel()
 		p.leaseMgr.Delete(id, controlPlaneToken, sharedLease)
+		p.electionCoordinators.Wait()
 	})
 
 	svcCtx.Cancel()
@@ -937,7 +939,7 @@ func TestCancelledServiceOwnedCampaignRejectsLateLeadership(t *testing.T) {
 	}
 
 	releaseRunner()
-	wg.Wait()
+	p.electionCoordinators.Wait()
 }
 
 type electionTestRunner struct {
