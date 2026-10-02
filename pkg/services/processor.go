@@ -720,6 +720,12 @@ func (p *Processor) Stop() {
 	}
 }
 
+// WaitForElectionCampaigns blocks until all Service election campaigns have
+// stopped. Callers must first stop the watchers that can start new campaigns.
+func (p *Processor) WaitForElectionCampaigns() {
+	p.electionCoordinators.Wait()
+}
+
 // getServiceContext performs one concurrency-safe svcMap lookup. Callers that
 // combine the result with other state changes must hold the Service lock for uid.
 func (p *Processor) getServiceContext(uid types.UID) (*servicecontext.Context, error) {
