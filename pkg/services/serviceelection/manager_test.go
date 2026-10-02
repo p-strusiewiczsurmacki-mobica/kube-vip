@@ -163,7 +163,7 @@ func (h *watchHarness) stop() {
 		h.t.Error("Watch did not return after Service context cancellation")
 		return
 	}
-	h.manager.campaignWG.Wait()
+	h.manager.Wait()
 }
 
 // Join validates a generation twice: before admitting the member (call 1) and

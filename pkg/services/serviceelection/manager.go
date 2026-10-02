@@ -131,3 +131,10 @@ func (m *Manager) Watch(svcCtx *servicecontext.Context, service *v1.Service) {
 		}
 	}
 }
+
+// Wait blocks until all election campaigns owned by the Manager have stopped.
+// Callers must stop every source that can start a new campaign before calling
+// Wait.
+func (m *Manager) Wait() {
+	m.campaignWG.Wait()
+}
