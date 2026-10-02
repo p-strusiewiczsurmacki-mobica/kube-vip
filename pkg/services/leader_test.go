@@ -815,6 +815,77 @@ func TestServiceOwnedCampaignPublishesLeadershipAfterFinalServiceLeaves(t *testi
 	}
 }
 
+func TestCancelledServiceOwnedCampaignRejectsLateLeadership(t *testing.T) {
+	releaseLeading := make(chan struct{})
+	releaseStop := make(chan struct{})
+	var releaseLeadingOnce sync.Once
+	var releaseStopOnce sync.Once
+	releaseLeadership := func() {
+		releaseLeadingOnce.Do(func() { close(releaseLeading) })
+	}
+	releaseRunner := func() {
+		releaseStopOnce.Do(func() { close(releaseStop) })
+	}
+	runner := &electionTestRunner{
+		started:        make(chan struct{}),
+		stopping:       make(chan struct{}),
+		releaseLeading: releaseLeading,
+		releaseStop:    releaseStop,
+	}
+	p := &Processor{
+		serviceLock: newTestServiceLocks(),
+		config:      &kubevip.Config{},
+		leaseMgr:    lease.NewManager(),
+	}
+	initializeTestElectionCoordinators(p, withTestCampaignRunner(runner))
+	service := &v1.Service{ObjectMeta: metav1.ObjectMeta{
+		Name: "service", Namespace: "default", UID: types.UID("service"),
+	}}
+	namespace, name := lease.ServiceName(service)
+	id := lease.NewID(p.config.LeaderElectionType, namespace, name)
+	svcCtx := servicecontext.New(context.Background())
+	p.svcMap.Store(service.UID, svcCtx)
+	svcCtx.SignalReadiness()
+	t.Cleanup(func() {
+		svcCtx.Cancel()
+		releaseLeadership()
+		releaseRunner()
+	})
+
+	var wg sync.WaitGroup
+	serviceDone := make(chan error, 1)
+	go func() {
+		serviceDone <- p.StartServicesLeaderElection(svcCtx, service, &wg)
+	}()
+	waitForElectionRunner(t, runner.started)
+	sharedLease := p.leaseMgr.Get(id)
+	if sharedLease == nil {
+		t.Fatal("Service-owned campaign did not acquire its lease")
+	}
+
+	svcCtx.Cancel()
+	select {
+	case err := <-serviceDone:
+		if err != nil {
+			t.Fatalf("Service election watcher returned an error: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Service election watcher did not stop after Service departure")
+	}
+	if sharedLease.Ctx.Err() == nil || p.leaseMgr.Get(id) != nil {
+		t.Fatal("final Service departure did not retire its unshared lease")
+	}
+
+	releaseLeadership()
+	waitForElectionRunner(t, runner.stopping)
+	if sharedLease.IsLeading() {
+		t.Fatal("cancelled campaign accepted a late leadership callback")
+	}
+
+	releaseRunner()
+	wg.Wait()
+}
+
 type electionTestRunner struct {
 	started        chan struct{}
 	startedOnce    sync.Once
