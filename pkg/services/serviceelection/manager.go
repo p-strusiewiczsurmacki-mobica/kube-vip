@@ -16,6 +16,7 @@ type Manager struct {
 	config         *kubevip.Config
 	state          ServiceState
 	coordinatorMgr *coordinatorManager
+	campaignWG     sync.WaitGroup
 }
 
 // NewManager creates a Service election manager.
