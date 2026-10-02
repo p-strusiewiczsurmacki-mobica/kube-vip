@@ -654,7 +654,7 @@ func TestSharedElectionReadinessIsMemberLocal(t *testing.T) {
 	}
 }
 
-func TestServiceOwnedCampaignSurvivesFinalServiceWhileControlPlaneRemains(t *testing.T) {
+func TestElectionShutdownWaitsForControlPlaneToReleaseServiceOwnedCampaign(t *testing.T) {
 	runner := &electionTestRunner{started: make(chan struct{}), stopping: make(chan struct{})}
 	p := &Processor{
 		serviceLock: newTestServiceLocks(),
@@ -697,8 +697,28 @@ func TestServiceOwnedCampaignSurvivesFinalServiceWhileControlPlaneRemains(t *tes
 		t.Fatal("Service departure retired the control-plane campaign")
 	}
 
+	shutdownDone := make(chan struct{})
+	go func() {
+		p.electionCoordinators.Wait()
+		close(shutdownDone)
+	}()
+	select {
+	case <-shutdownDone:
+		t.Fatal("election shutdown completed while control plane retained the campaign")
+	case <-time.After(20 * time.Millisecond):
+	}
+
 	p.leaseMgr.Delete(id, controlPlaneToken, sharedLease)
-	waitForElectionRunner(t, runner.stopping)
+	select {
+	case <-shutdownDone:
+	case <-time.After(time.Second):
+		t.Fatal("election shutdown did not complete after control plane released the campaign")
+	}
+	select {
+	case <-runner.stopping:
+	default:
+		t.Fatal("election shutdown completed before the campaign runner stopped")
+	}
 }
 
 func TestServiceWatcherWaitGroupDoesNotOwnCampaignRetainedByControlPlane(t *testing.T) {
