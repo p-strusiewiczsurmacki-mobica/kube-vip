@@ -345,10 +345,10 @@ func (sm *Manager) startMode(ctx context.Context) error {
 	wg := sync.WaitGroup{}
 	modeCtx, cancel := context.WithCancel(ctx)
 	defer func() {
-
-		wg.Wait()
-		w.Cleanup()
 		cancel()
+		wg.Wait()
+		sm.svcProcessor.WaitForElectionCampaigns()
+		w.Cleanup()
 		log.Info("Shutting down Kube-Vip")
 	}()
 
