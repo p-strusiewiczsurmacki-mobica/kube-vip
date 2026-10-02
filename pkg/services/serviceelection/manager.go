@@ -104,6 +104,12 @@ func (m *Manager) Watch(svcCtx *servicecontext.Context, service *v1.Service, wg 
 		member, joined := m.join(svcCtx, service, generation)
 		if !joined {
 			if !m.state.IsCurrent(service, svcCtx, generation) {
+				if svcCtx.Ctx.Err() != nil {
+					return
+				}
+				if !svcCtx.ReadinessGenerationCurrent(generation) {
+					continue
+				}
 				return
 			}
 			select {
