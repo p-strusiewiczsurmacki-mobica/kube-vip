@@ -366,16 +366,28 @@ func (c *coordinator) membersLocked() []*member {
 	return members
 }
 
-// beginLeading records the leader context for a campaign this process won.
-func (c *coordinator) beginLeading(ctx context.Context, svcLease *lease.Lease,
+// publishLeadership announces the result of a current, live campaign to every
+// local participant sharing its Lease. A retired Service coordinator may still
+// own that campaign on behalf of a non-Service participant.
+func (c *coordinator) publishLeadership(campaign *campaign) bool {
+	c.mutex.Lock()
+	defer c.mutex.Unlock()
+
+	if campaign == nil || c.campaigns.current != campaign || campaign.stopped || campaign.ctx.Err() != nil {
+		return false
+	}
+	return campaign.election.Started()
+}
+
+// beginServiceLeadership records the leader context only while this coordinator
+// still has Services eligible for activation.
+func (c *coordinator) beginServiceLeadership(ctx context.Context, svcLease *lease.Lease,
 	campaign *campaign) bool {
 	c.mutex.Lock()
 	defer c.mutex.Unlock()
 
-	if c.retired || c.membership.lease != svcLease || c.campaigns.current != campaign || campaign.stopped || len(c.membership.members) == 0 {
-		return false
-	}
-	if !campaign.election.Started() {
+	if c.retired || c.membership.lease != svcLease || c.campaigns.current != campaign || campaign == nil ||
+		campaign.stopped || len(c.membership.members) == 0 || !campaign.election.IsLeading() {
 		return false
 	}
 	campaign.leaderCtx = ctx
@@ -384,7 +396,7 @@ func (c *coordinator) beginLeading(ctx context.Context, svcLease *lease.Lease,
 
 func (c *coordinator) startedLeading(ctx context.Context, svcLease *lease.Lease,
 	campaign *campaign, wg *sync.WaitGroup) {
-	if !c.beginLeading(ctx, svcLease, campaign) {
+	if !c.publishLeadership(campaign) || !c.beginServiceLeadership(ctx, svcLease, campaign) {
 		return
 	}
 	metrics.LeaderTransitionsTotal.WithLabelValues(c.id.Name()).Inc()
