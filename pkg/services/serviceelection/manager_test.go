@@ -75,7 +75,6 @@ type watchHarness struct {
 	leases  *lease.Manager
 	service *v1.Service
 	svcCtx  *servicecontext.Context
-	wg      sync.WaitGroup
 	done    chan struct{}
 }
 
@@ -111,7 +110,7 @@ func (h *watchHarness) leaseID() lease.ID {
 func (h *watchHarness) start() {
 	go func() {
 		defer close(h.done)
-		h.manager.Watch(h.svcCtx, h.service, &h.wg)
+		h.manager.Watch(h.svcCtx, h.service)
 	}()
 }
 
@@ -164,7 +163,7 @@ func (h *watchHarness) stop() {
 		h.t.Error("Watch did not return after Service context cancellation")
 		return
 	}
-	h.wg.Wait()
+	h.manager.campaignWG.Wait()
 }
 
 // Join validates a generation twice: before admitting the member (call 1) and
