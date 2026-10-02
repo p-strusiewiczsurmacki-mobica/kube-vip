@@ -88,7 +88,7 @@ func (p *Processor) Reconcile(svcCtx *servicecontext.Context, event watch.Event,
 	// Invalidation waits for in-flight activation. It must happen without the
 	// Service lock because activation may need that lock to finish.
 	if result.invalidateReadiness && svcCtx.ResetReadinessGeneration(result.readinessToInvalidate) {
-		p.cleanupEndpointlessService(svcCtx, service, result.instance, lastKnownGoodEndpoint)
+		p.cleanupEndpointlessService(svcCtx, service, lastKnownGoodEndpoint)
 	}
 
 	if result.annotationsChanged && egressUpdateFunc != nil {
@@ -170,14 +170,15 @@ func (p *Processor) makeServiceReady(svcCtx *servicecontext.Context, service *v1
 }
 
 func (p *Processor) cleanupEndpointlessService(svcCtx *servicecontext.Context, service *v1.Service,
-	inst *instance.Instance, lastKnownGoodEndpoint *string) {
+	lastKnownGoodEndpoint *string) {
 	p.serviceLocks.Lock(service.UID)
 	defer func() {
 		if err := p.serviceLocks.Unlock(service.UID); err != nil {
 			log.Error("failed to release service lock", "uid", service.UID, "err", err)
 		}
 	}()
-	p.handleNoEndpoints(svcCtx, service, inst, lastKnownGoodEndpoint)
+	instance := p.findServiceInstance(service)
+	p.handleNoEndpoints(svcCtx, service, instance, lastKnownGoodEndpoint)
 }
 
 // applyEvent updates the provider's view of the objects backing this service.
