@@ -87,7 +87,7 @@ func (m *Manager) DetachForContext(svcCtx *servicecontext.Context, service *v1.S
 }
 
 // Watch follows readiness generations for one Service until its context ends.
-func (m *Manager) Watch(svcCtx *servicecontext.Context, service *v1.Service, wg *sync.WaitGroup) {
+func (m *Manager) Watch(svcCtx *servicecontext.Context, service *v1.Service, _ *sync.WaitGroup) {
 	for {
 		if svcCtx.Ctx.Err() != nil {
 			return
@@ -120,7 +120,7 @@ func (m *Manager) Watch(svcCtx *servicecontext.Context, service *v1.Service, wg 
 				continue
 			}
 		}
-		member.coordinator.startCampaign(wg)
+		member.coordinator.startCampaign(&m.campaignWG)
 
 		select {
 		case <-svcCtx.Ctx.Done():

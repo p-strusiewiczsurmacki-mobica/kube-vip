@@ -401,7 +401,7 @@ func TestStartServicesLeaderElectionRestartsAfterLeaseLoss(t *testing.T) {
 	}
 }
 
-func TestServiceElectionWaitGroupDrainsCampaignOnShutdown(t *testing.T) {
+func TestServiceWatcherWaitGroupDoesNotOwnCampaignShutdown(t *testing.T) {
 	releaseStop := make(chan struct{})
 	runner := &electionTestRunner{started: make(chan struct{}), stopping: make(chan struct{}), releaseStop: releaseStop}
 	p := &Processor{serviceLock: newTestServiceLocks(), config: &kubevip.Config{}, leaseMgr: lease.NewManager()}
@@ -440,16 +440,11 @@ func TestServiceElectionWaitGroupDrainsCampaignOnShutdown(t *testing.T) {
 	<-waitStarted
 	select {
 	case <-waitDone:
-		t.Fatal("Service WaitGroup completed while campaign shutdown was blocked")
-	case <-time.After(25 * time.Millisecond):
+	case <-time.After(time.Second):
+		t.Fatal("Service watcher WaitGroup remained blocked by campaign shutdown")
 	}
 
 	close(releaseStop)
-	select {
-	case <-waitDone:
-	case <-time.After(time.Second):
-		t.Fatal("Service WaitGroup did not complete after campaign shutdown")
-	}
 }
 
 func TestServiceElectionAttemptWaitsForReadiness(t *testing.T) {
@@ -696,12 +691,7 @@ func TestServiceOwnedCampaignSurvivesFinalServiceWhileControlPlaneRemains(t *tes
 	}
 
 	p.leaseMgr.Delete(id, controlPlaneToken, sharedLease)
-	wg.Wait()
-	select {
-	case <-runner.stopping:
-	default:
-		t.Fatal("campaign did not stop after its final control-plane member left")
-	}
+	waitForElectionRunner(t, runner.stopping)
 }
 
 func TestServiceWatcherWaitGroupDoesNotOwnCampaignRetainedByControlPlane(t *testing.T) {
@@ -876,12 +866,7 @@ func TestServiceOwnedCampaignPublishesLeadershipAfterFinalServiceLeaves(t *testi
 	}
 
 	p.leaseMgr.Delete(id, controlPlaneToken, sharedLease)
-	wg.Wait()
-	select {
-	case <-runner.stopping:
-	default:
-		t.Fatal("campaign did not stop after its final control-plane member left")
-	}
+	waitForElectionRunner(t, runner.stopping)
 }
 
 func TestCancelledServiceOwnedCampaignRejectsLateLeadership(t *testing.T) {
