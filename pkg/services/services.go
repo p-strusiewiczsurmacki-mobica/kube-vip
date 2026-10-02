@@ -309,6 +309,11 @@ func (p *Processor) configureService(ctx context.Context, svcCtx *servicecontext
 			return fmt.Errorf("start service datapath: %w", err)
 		}
 	}
+	if p.config.EnableWireguard {
+		if err := endpoints.AcquireWireguardServiceTunnels(p.TunnelMgr, svc); err != nil {
+			return fmt.Errorf("start WireGuard Service tunnels: %w", err)
+		}
+	}
 
 	p.upnpMap(ctx, inst)
 
