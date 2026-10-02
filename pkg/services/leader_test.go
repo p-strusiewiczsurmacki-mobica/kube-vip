@@ -2,6 +2,9 @@ package services
 
 import (
 	"context"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -13,10 +16,13 @@ import (
 	"github.com/kube-vip/kube-vip/pkg/lease"
 	"github.com/kube-vip/kube-vip/pkg/metrics"
 	"github.com/kube-vip/kube-vip/pkg/servicecontext"
+	"github.com/kube-vip/kube-vip/pkg/utils"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 	v1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/rest"
 )
 
 func resetServiceReadiness(t *testing.T, svcCtx *servicecontext.Context) {
@@ -762,6 +768,138 @@ func TestServiceWatcherWaitGroupDoesNotOwnCampaignRetainedByControlPlane(t *test
 	}
 	if sharedLease.Ctx.Err() != nil || p.leaseMgr.Get(id) != sharedLease {
 		t.Fatal("draining the Service watcher retired the shared control-plane lease")
+	}
+}
+
+func TestServicesWatcherReturnsWatchErrorWhileControlPlaneRetainsCampaign(t *testing.T) {
+	service := &v1.Service{
+		TypeMeta: metav1.TypeMeta{APIVersion: "v1", Kind: "Service"},
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "service", Namespace: "default", UID: types.UID("service"), ResourceVersion: "2",
+			Annotations: map[string]string{kubevip.ServiceLease: "shared"},
+		},
+		Spec: v1.ServiceSpec{
+			Type:                  v1.ServiceTypeLoadBalancer,
+			LoadBalancerIP:        "192.0.2.10",
+			ExternalTrafficPolicy: v1.ServiceExternalTrafficPolicyTypeCluster,
+		},
+	}
+	emitWatchError := make(chan struct{})
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		writer.Header().Set("Content-Type", "application/json")
+		writer.WriteHeader(http.StatusOK)
+		flusher, ok := writer.(http.Flusher)
+		if !ok {
+			t.Error("test HTTP writer does not support streaming")
+			return
+		}
+
+		switch request.URL.Path {
+		case "/api/v1/namespaces/default/services":
+			encoder := json.NewEncoder(writer)
+			if err := encoder.Encode(map[string]any{"type": "ADDED", "object": service}); err != nil {
+				t.Errorf("encode Service watch event: %v", err)
+				return
+			}
+			flusher.Flush()
+			select {
+			case <-request.Context().Done():
+				return
+			case <-emitWatchError:
+			}
+			status := &metav1.Status{
+				TypeMeta: metav1.TypeMeta{APIVersion: "v1", Kind: "Status"},
+				Status:   metav1.StatusFailure, Message: "forced service watch failure",
+				Reason: metav1.StatusReasonExpired, Code: http.StatusGone,
+			}
+			if err := encoder.Encode(map[string]any{"type": "ERROR", "object": status}); err != nil {
+				t.Errorf("encode Service watch error: %v", err)
+				return
+			}
+			flusher.Flush()
+		case "/api/v1/namespaces/default/endpoints":
+			flusher.Flush()
+			<-request.Context().Done()
+		default:
+			http.Error(writer, "unexpected request path", http.StatusNotFound)
+		}
+	}))
+	t.Cleanup(server.Close)
+	watchCtx, cancelWatch := context.WithCancel(context.Background())
+	t.Cleanup(cancelWatch)
+
+	clientSet, err := kubernetes.NewForConfig(&rest.Config{
+		Host: server.URL,
+		ContentConfig: rest.ContentConfig{
+			ContentType: "application/json",
+		},
+	})
+	if err != nil {
+		t.Fatalf("create Kubernetes client: %v", err)
+	}
+	runner := &electionTestRunner{started: make(chan struct{}), stopping: make(chan struct{})}
+	p := &Processor{
+		serviceLock: newTestServiceLocks(),
+		config: &kubevip.Config{
+			EnableServicesElection: true,
+			EnableEndpoints:        true,
+			ServiceNamespace:       "default",
+			DebounceTime:           "0s",
+		},
+		clientSet:     clientSet,
+		rwClientSet:   clientSet,
+		leaseMgr:      lease.NewManager(),
+		lbClassFilter: func(*v1.Service, *kubevip.Config) bool { return false },
+		instanceFactory: serviceInstanceFactoryFunc(func(_ context.Context, service *v1.Service,
+			_ *sync.WaitGroup) (*instance.Instance, error) {
+			return &instance.Instance{ServiceUID: service.UID, ServiceSnapshot: service.DeepCopy()}, nil
+		}),
+	}
+	initializeTestElectionCoordinators(p, withTestCampaignRunner(runner))
+
+	watchDone := make(chan error, 1)
+	go func() {
+		watchDone <- p.ServicesWatcher(watchCtx, func(svcCtx *servicecontext.Context,
+			service *v1.Service, wg *sync.WaitGroup) error {
+			svcCtx.SignalReadiness()
+			return p.StartServicesLeaderElection(svcCtx, service, wg)
+		}, false)
+	}()
+	waitForElectionRunner(t, runner.started)
+
+	namespace, name := lease.ServiceName(service)
+	id := lease.NewID(p.config.LeaderElectionType, namespace, name)
+	sharedLease := p.leaseMgr.Get(id)
+	if sharedLease == nil {
+		t.Fatal("Service-owned campaign did not acquire its lease")
+	}
+	controlPlaneToken := lease.ObjectName(id, "cp")
+	if claimed, _ := p.leaseMgr.Claim(id, controlPlaneToken); claimed != sharedLease {
+		t.Fatal("control plane did not join the Service-owned lease")
+	}
+	t.Cleanup(func() {
+		cancelWatch()
+		p.leaseMgr.Delete(id, controlPlaneToken, sharedLease)
+		p.electionCoordinators.Wait()
+	})
+
+	close(emitWatchError)
+	select {
+	case err := <-watchDone:
+		if !utils.IsPanicError(err) {
+			t.Fatalf("ServicesWatcher() error = %v, want non-recoverable watch error", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("ServicesWatcher remained blocked by a campaign retained for control plane")
+	}
+
+	select {
+	case <-runner.stopping:
+		t.Fatal("Service watch failure stopped a campaign retained for control plane")
+	default:
+	}
+	if sharedLease.Ctx.Err() != nil || p.leaseMgr.Get(id) != sharedLease {
+		t.Fatal("Service watch failure retired the shared control-plane lease")
 	}
 }
 
