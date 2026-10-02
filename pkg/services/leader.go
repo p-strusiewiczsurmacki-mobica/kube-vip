@@ -31,7 +31,7 @@ func (p *Processor) StartServicesWatchForLeaderElection(ctx context.Context, for
 // StartServicesLeaderElection watches one Service's endpoint readiness while
 // its per-lease coordinator owns campaign lifetime.
 func (p *Processor) StartServicesLeaderElection(svcCtx *servicecontext.Context, service *v1.Service,
-	wg *sync.WaitGroup) error {
+	_ *sync.WaitGroup) error {
 	if service == nil {
 		return fmt.Errorf("no service for leader election")
 	}
@@ -52,12 +52,9 @@ func (p *Processor) StartServicesLeaderElection(svcCtx *servicecontext.Context, 
 		return nil
 	}
 	defer p.electionLoops.Delete(svcCtx)
-	if wg == nil {
-		wg = &sync.WaitGroup{}
-	}
 	loops := metrics.ServiceElectionLoops.WithLabelValues(service.Namespace, service.Name)
 	loops.Inc()
 	defer loops.Dec()
-	p.electionCoordinators.Watch(svcCtx, service, wg)
+	p.electionCoordinators.Watch(svcCtx, service)
 	return nil
 }

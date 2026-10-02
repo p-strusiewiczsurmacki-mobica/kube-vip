@@ -87,7 +87,7 @@ func (m *Manager) DetachForContext(svcCtx *servicecontext.Context, service *v1.S
 }
 
 // Watch follows readiness generations for one Service until its context ends.
-func (m *Manager) Watch(svcCtx *servicecontext.Context, service *v1.Service, _ *sync.WaitGroup) {
+func (m *Manager) Watch(svcCtx *servicecontext.Context, service *v1.Service) {
 	for {
 		if svcCtx.Ctx.Err() != nil {
 			return
