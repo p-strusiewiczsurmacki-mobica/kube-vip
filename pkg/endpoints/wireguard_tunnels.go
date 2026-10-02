@@ -10,16 +10,6 @@ import (
 	v1 "k8s.io/api/core/v1"
 )
 
-// ServiceTunnelManager is the WireGuard state needed by the Service lifecycle.
-// Endpoint workers receive this dependency only as a tunnelConfigProvider, so
-// observing endpoints cannot claim tunnel ownership.
-type ServiceTunnelManager interface {
-	GetConfigForVIP(vip string) *wireguard.TunnelConfig
-	HasConfigForVIP(vip string) bool
-	AcquireTunnelForVIP(vip, owner string) error
-	ReleaseTunnelForVIP(vip, owner string) error
-}
-
 type tunnelConfigProvider interface {
 	GetConfigForVIP(vip string) *wireguard.TunnelConfig
 }
@@ -31,7 +21,7 @@ type wireguardTunnelReleaser interface {
 // AcquireWireguardServiceTunnels brings up every configured tunnel for one
 // active Service. The Service UID makes repeated activation idempotent and lets
 // cleanup release only this Service's claim on a shared VIP.
-func AcquireWireguardServiceTunnels(tunnelMgr ServiceTunnelManager, service *v1.Service) error {
+func AcquireWireguardServiceTunnels(tunnelMgr wireguard.ServiceTunnelManager, service *v1.Service) error {
 	if tunnelMgr == nil {
 		return fmt.Errorf("WireGuard tunnel manager not configured")
 	}
@@ -61,7 +51,7 @@ func AcquireWireguardServiceTunnels(tunnelMgr ServiceTunnelManager, service *v1.
 	return nil
 }
 
-func rollbackWireguardServiceTunnels(tunnelMgr ServiceTunnelManager, serviceIPs []string, owner string) error {
+func rollbackWireguardServiceTunnels(tunnelMgr wireguard.ServiceTunnelManager, serviceIPs []string, owner string) error {
 	var rollbackErrors []error
 	for index := len(serviceIPs) - 1; index >= 0; index-- {
 		if err := tunnelMgr.ReleaseTunnelForVIP(serviceIPs[index], owner); err != nil {

@@ -14,7 +14,6 @@ import (
 	"github.com/kube-vip/kube-vip/pkg/arp"
 	"github.com/kube-vip/kube-vip/pkg/bgp"
 	"github.com/kube-vip/kube-vip/pkg/election"
-	"github.com/kube-vip/kube-vip/pkg/endpoints"
 	"github.com/kube-vip/kube-vip/pkg/endpoints/providers"
 	"github.com/kube-vip/kube-vip/pkg/instance"
 	"github.com/kube-vip/kube-vip/pkg/kubevip"
@@ -75,7 +74,7 @@ type Processor struct {
 	instanceFactory serviceInstanceFactory
 
 	// TunnelMgr manages multiple WireGuard tunnels (one per service VIP)
-	TunnelMgr endpoints.ServiceTunnelManager
+	TunnelMgr wireguard.ServiceTunnelManager
 
 	routeMgr *route.Manager
 }
