@@ -421,7 +421,12 @@ func (sm *Manager) startMode(ctx context.Context) error {
 
 func (sm *Manager) waitForShutdown(ctx context.Context, cancel context.CancelFunc, cpCluster *cluster.Cluster) {
 	for {
-		sig := <-sm.signalChan
+		var sig os.Signal
+		select {
+		case <-ctx.Done():
+			return
+		case sig = <-sm.signalChan:
+		}
 		switch sig {
 		case syscall.SIGUSR1:
 			log.Info("Received SIGUSR1, dumping configuration")
