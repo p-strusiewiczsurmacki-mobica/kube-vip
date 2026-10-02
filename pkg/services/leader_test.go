@@ -704,6 +704,117 @@ func TestServiceOwnedCampaignSurvivesFinalServiceWhileControlPlaneRemains(t *tes
 	}
 }
 
+func TestServiceOwnedCampaignPublishesLeadershipAfterFinalServiceLeaves(t *testing.T) {
+	releaseLeading := make(chan struct{})
+	var releaseLeadingOnce sync.Once
+	releaseLeadership := func() {
+		releaseLeadingOnce.Do(func() { close(releaseLeading) })
+	}
+	runner := &electionTestRunner{
+		started:        make(chan struct{}),
+		stopping:       make(chan struct{}),
+		releaseLeading: releaseLeading,
+	}
+	var activationCalls atomic.Int64
+	p := &Processor{
+		serviceLock: newTestServiceLocks(),
+		config:      &kubevip.Config{},
+		leaseMgr:    lease.NewManager(),
+	}
+	initializeTestElectionCoordinators(p, withTestCampaignRunner(runner), withTestElectionActivation(
+		func(context.Context, *v1.Service, *servicecontext.Context, *sync.WaitGroup) error {
+			activationCalls.Add(1)
+			return nil
+		},
+	))
+	service := &v1.Service{ObjectMeta: metav1.ObjectMeta{
+		Name: "service", Namespace: "default", UID: types.UID("service"),
+		Annotations: map[string]string{kubevip.ServiceLease: "shared"},
+	}}
+	namespace, name := lease.ServiceName(service)
+	id := lease.NewID(p.config.LeaderElectionType, namespace, name)
+	svcCtx := servicecontext.New(context.Background())
+	p.svcMap.Store(service.UID, svcCtx)
+	svcCtx.SignalReadiness()
+
+	var wg sync.WaitGroup
+	serviceDone := make(chan error, 1)
+	go func() {
+		serviceDone <- p.StartServicesLeaderElection(svcCtx, service, &wg)
+	}()
+	waitForElectionRunner(t, runner.started)
+
+	sharedLease := p.leaseMgr.Get(id)
+	if sharedLease == nil {
+		t.Fatal("Service-owned campaign did not acquire its lease")
+	}
+	controlPlaneToken := lease.ObjectName(id, "cp")
+	if claimed, _ := p.leaseMgr.Claim(id, controlPlaneToken); claimed != sharedLease {
+		t.Fatal("control plane did not join the Service-owned lease")
+	}
+	t.Cleanup(func() {
+		releaseLeadership()
+		svcCtx.Cancel()
+		p.leaseMgr.Delete(id, controlPlaneToken, sharedLease)
+	})
+
+	controlPlaneParticipation := sharedLease.JoinElection()
+	if controlPlaneParticipation.RunsCampaign() {
+		t.Fatal("control plane replaced the running Service-owned campaign")
+	}
+	waitCtx, cancelWait := context.WithTimeout(context.Background(), time.Second)
+	defer cancelWait()
+	leadership := make(chan bool, 1)
+	go func() {
+		leadership <- controlPlaneParticipation.Session.WaitForLeader(waitCtx)
+	}()
+
+	svcCtx.Cancel()
+	select {
+	case err := <-serviceDone:
+		if err != nil {
+			t.Fatalf("Service election watcher returned an error: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Service election watcher did not stop after Service departure")
+	}
+	if sharedLease.Ctx.Err() != nil || p.leaseMgr.Get(id) != sharedLease {
+		t.Fatal("final Service departure retired the shared control-plane lease")
+	}
+	if sharedLease.IsLeading() {
+		t.Fatal("campaign became leader before the test released it")
+	}
+	select {
+	case result := <-leadership:
+		t.Fatalf("control-plane observer stopped before leadership was decided: %t", result)
+	default:
+	}
+
+	releaseLeadership()
+	select {
+	case result := <-leadership:
+		if !result {
+			t.Fatal("control-plane observer did not observe Service-owned leadership")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("control-plane observer remained blocked after the runner became leader")
+	}
+	if !sharedLease.IsLeading() {
+		t.Fatal("Service-owned runner did not publish leadership to the shared lease")
+	}
+	if got := activationCalls.Load(); got != 0 {
+		t.Fatalf("departed Service was activated %d times, want 0", got)
+	}
+
+	p.leaseMgr.Delete(id, controlPlaneToken, sharedLease)
+	wg.Wait()
+	select {
+	case <-runner.stopping:
+	default:
+		t.Fatal("campaign did not stop after its final control-plane member left")
+	}
+}
+
 type electionTestRunner struct {
 	started        chan struct{}
 	startedOnce    sync.Once
