@@ -255,15 +255,35 @@ func (c *coordinator) newCampaignCandidate() campaignCandidate {
 	return campaignCandidate{action: action, lease: svcLease, campaign: campaign, members: members}
 }
 
+// startCampaign restarts the campaign on behalf of every remaining member. If
+// another caller already started a campaign, its leadership snapshot covers
+// those members, so joining it needs no activation here.
 func (c *coordinator) startCampaign(wg *sync.WaitGroup) {
 	candidate := c.newCampaignCandidate()
 	if candidate.action == campaignJoin {
-		if candidate.leaderCtx != nil {
-			c.activateMembers(candidate.leaderCtx, candidate.lease, candidate.campaign, wg)
-		}
 		return
 	}
 	c.launchCampaign(candidate, wg)
+}
+
+// admitToCampaign starts a campaign for a newly admitted member or joins the
+// current one. A member admitted after a leading campaign took its activation
+// snapshot is activated here; members already in that snapshot are owned by the
+// leadership path or by their own activation retry. Both the admission and the
+// leader context are published under c.mutex, so every member is reached by at
+// least one path, and markMemberActive prevents a double activation.
+func (c *coordinator) admitToCampaign(wg *sync.WaitGroup, admitted *member) {
+	candidate := c.newCampaignCandidate()
+	if candidate.action != campaignJoin {
+		c.launchCampaign(candidate, wg)
+		return
+	}
+	if candidate.leaderCtx == nil || admitted == nil {
+		return
+	}
+	if c.activateMember(candidate.leaderCtx, admitted, candidate.lease, candidate.campaign, wg) == memberActivationFailed {
+		c.handleActivationFailures(candidate.leaderCtx, []*member{admitted}, candidate.lease, candidate.campaign, wg)
+	}
 }
 
 // launchCampaign starts the goroutine for a campaign newly created by
