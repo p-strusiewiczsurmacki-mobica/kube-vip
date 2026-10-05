@@ -274,7 +274,10 @@ func (p *Processor) processServiceEvent(ctx context.Context, event watch.Event, 
 	}
 	if err != nil {
 		if errors.Is(err, errServiceAddressPending) {
-			return err
+			// The address controller publishes the address in a later Modified event.
+			log.Debug("service has no load-balancer address yet, waiting for update",
+				"type", event.Type, "error", err)
+			return nil
 		}
 		log.Error("service watcher event failed", "type", event.Type, "error", err)
 	}
