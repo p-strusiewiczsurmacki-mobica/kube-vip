@@ -1,12 +1,18 @@
 package serviceelection
 
 import (
+	"context"
 	"sync"
 
 	"github.com/kube-vip/kube-vip/pkg/lease"
 	"github.com/kube-vip/kube-vip/pkg/servicecontext"
 	v1 "k8s.io/api/core/v1"
 )
+
+type memberActivationRetry struct {
+	campaign *campaign
+	cancel   context.CancelFunc
+}
 
 type member struct {
 	coordinator         *coordinator
@@ -17,6 +23,9 @@ type member struct {
 	registration        *lease.Registration
 	operationMutex      sync.Mutex
 	active              bool
+	activationCampaign  *campaign
+	activationFailures  int
+	activationRetry     *memberActivationRetry
 }
 
 func newMember(coordinator *coordinator, svcCtx *servicecontext.Context, service *v1.Service,

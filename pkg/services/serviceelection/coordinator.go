@@ -74,6 +74,7 @@ func (c *coordinator) join(svcCtx *servicecontext.Context, service *v1.Service,
 	}
 
 	if previous := c.membership.members[service.UID]; previous != nil {
+		c.resetMemberActivationRetryLocked(previous)
 		previous.registration.Release()
 	}
 	member := newMember(c, svcCtx, service, readinessGeneration)
@@ -180,6 +181,7 @@ func (c *coordinator) removeMember(member *member) (campaign *campaign, leaseRet
 	if c.membership.members[member.service.UID] != member {
 		return nil, false, false
 	}
+	c.resetMemberActivationRetryLocked(member)
 	delete(c.membership.members, member.service.UID)
 	leaseRetired = member.registration.Release()
 	if len(c.membership.members) != 0 {
@@ -423,17 +425,28 @@ func (c *coordinator) activateMembers(ctx context.Context, svcLease *lease.Lease
 	if svcLease == nil || campaign == nil || !campaign.election.IsLeading() {
 		return
 	}
-	activationFailed := false
+	failed := make([]*member, 0)
 	for _, member := range c.activatableMembers(svcLease, campaign) {
 		if c.activateMember(ctx, member, svcLease, campaign, wg) == memberActivationFailed {
-			activationFailed = true
+			failed = append(failed, member)
 		}
 	}
-	if !activationFailed {
+	c.handleActivationFailures(ctx, failed, svcLease, campaign, wg)
+}
+
+func (c *coordinator) handleActivationFailures(ctx context.Context, failed []*member,
+	svcLease *lease.Lease, campaign *campaign, wg *sync.WaitGroup) {
+	if len(failed) == 0 {
 		return
 	}
 	if current, active := c.campaignHasActiveMember(svcLease, campaign); current && !active {
 		c.cancelCampaign(svcLease, campaign)
+		return
+	} else if !current {
+		return
+	}
+	for _, member := range failed {
+		c.scheduleMemberActivationRetry(ctx, member, svcLease, campaign, wg)
 	}
 }
 
@@ -464,15 +477,98 @@ func (c *coordinator) activateMember(ctx context.Context, member *member, svcLea
 		metrics.ServiceElectionErrorsTotal.WithLabelValues(member.service.Namespace, member.service.Name, "service_sync").Inc()
 		log.Error("start service after election", "service", member.service.Name, "namespace", member.service.Namespace, "error", err)
 		c.deactivateMemberWithOperationLockHeld(member)
+		c.recordMemberActivationFailure(member, svcLease, campaign)
 		return memberActivationFailed
 	}
-	c.resetRestartFailures()
 	if !c.dependencies.State.IsCurrent(member.service, member.serviceContext, member.readinessGeneration) ||
 		!c.activationStillValid(member, svcLease, campaign) {
 		c.deactivateMemberWithOperationLockHeld(member)
 		return memberActivationSkipped
 	}
+	c.resetMemberActivationRetry(member, campaign)
+	c.resetRestartFailures()
 	return memberActivationSucceeded
+}
+
+func (c *coordinator) recordMemberActivationFailure(member *member, svcLease *lease.Lease,
+	campaign *campaign) {
+	c.mutex.Lock()
+	defer c.mutex.Unlock()
+	if !c.memberValidForActivationLocked(member, svcLease, campaign) {
+		return
+	}
+	if member.activationCampaign != campaign {
+		c.resetMemberActivationRetryLocked(member)
+		member.activationCampaign = campaign
+	}
+	member.activationFailures++
+}
+
+func (c *coordinator) scheduleMemberActivationRetry(ctx context.Context, candidate *member,
+	svcLease *lease.Lease, campaign *campaign, wg *sync.WaitGroup) {
+	c.mutex.Lock()
+	if !c.memberValidForActivationLocked(candidate, svcLease, campaign) || candidate.active ||
+		candidate.activationCampaign != campaign || candidate.activationFailures == 0 || candidate.activationRetry != nil {
+		c.mutex.Unlock()
+		return
+	}
+	retryCtx, cancel := context.WithCancel(ctx)
+	retry := &memberActivationRetry{campaign: campaign, cancel: cancel}
+	candidate.activationRetry = retry
+	delay := activationRetryDelay(candidate.activationFailures)
+	c.mutex.Unlock()
+
+	log.Info("scheduling service activation retry", "service", candidate.service.Name,
+		"namespace", candidate.service.Namespace, "delay", delay)
+	c.dependencies.Scheduler.ScheduleRestart(retryCtx, delay, wg, func() {
+		defer cancel()
+		if !c.claimMemberActivationRetry(candidate, svcLease, campaign, retry) {
+			return
+		}
+		result := c.activateMember(ctx, candidate, svcLease, campaign, wg)
+		if result == memberActivationFailed {
+			c.handleActivationFailures(ctx, []*member{candidate}, svcLease, campaign, wg)
+		}
+	})
+}
+
+func (c *coordinator) claimMemberActivationRetry(member *member, svcLease *lease.Lease,
+	campaign *campaign, retry *memberActivationRetry) bool {
+	c.mutex.Lock()
+	defer c.mutex.Unlock()
+	if retry.campaign != campaign || member.activationRetry != retry {
+		return false
+	}
+	member.activationRetry = nil
+	return c.memberValidForActivationLocked(member, svcLease, campaign) && !member.active
+}
+
+func activationRetryDelay(failures int) time.Duration {
+	delay := restartBaseDelay
+	for failure := 1; failure < failures && delay < restartMaxDelay; failure++ {
+		delay *= 2
+	}
+	if delay > restartMaxDelay {
+		return restartMaxDelay
+	}
+	return delay
+}
+
+func (c *coordinator) resetMemberActivationRetry(member *member, campaign *campaign) {
+	c.mutex.Lock()
+	defer c.mutex.Unlock()
+	if member.activationCampaign == campaign {
+		c.resetMemberActivationRetryLocked(member)
+	}
+}
+
+func (c *coordinator) resetMemberActivationRetryLocked(member *member) {
+	if member.activationRetry != nil {
+		member.activationRetry.cancel()
+	}
+	member.activationRetry = nil
+	member.activationCampaign = nil
+	member.activationFailures = 0
 }
 
 func (c *coordinator) resetRestartFailures() {
@@ -500,6 +596,14 @@ func (c *coordinator) markMemberActive(member *member, svcLease *lease.Lease, ca
 	defer c.mutex.Unlock()
 	if !c.memberValidForActivationLocked(member, svcLease, campaign) || member.active {
 		return false
+	}
+	if member.activationCampaign != campaign {
+		c.resetMemberActivationRetryLocked(member)
+		member.activationCampaign = campaign
+	}
+	if member.activationRetry != nil {
+		member.activationRetry.cancel()
+		member.activationRetry = nil
 	}
 	member.active = true
 	return true
@@ -568,6 +672,11 @@ func (c *coordinator) markCampaignStopped(svcLease *lease.Lease,
 	campaign.stopped = true
 	if campaign.cancelLeader != nil {
 		campaign.cancelLeader()
+	}
+	for _, member := range c.membership.members {
+		if member.activationCampaign == campaign {
+			c.resetMemberActivationRetryLocked(member)
+		}
 	}
 	return c.membersLocked()
 }
