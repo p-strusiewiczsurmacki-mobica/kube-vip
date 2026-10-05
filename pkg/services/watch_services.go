@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"sync"
-	"time"
 
 	log "log/slog"
 
@@ -28,12 +27,12 @@ const concurrentServiceEventWorkers = 4
 
 type serviceEventTask struct {
 	uid types.UID
-	run func() time.Duration
+	run func()
 }
 
 type serviceEventQueue struct {
 	ctx   context.Context
-	queue workqueue.TypedDelayingInterface[types.NamespacedName]
+	queue workqueue.TypedInterface[types.NamespacedName]
 	mutex sync.Mutex
 	tasks map[types.NamespacedName][]*serviceEventTask
 	wg    sync.WaitGroup
@@ -42,7 +41,7 @@ type serviceEventQueue struct {
 func newServiceEventQueue(ctx context.Context, workers int) *serviceEventQueue {
 	q := &serviceEventQueue{
 		ctx:   ctx,
-		queue: workqueue.NewTypedDelayingQueue[types.NamespacedName](),
+		queue: workqueue.NewTyped[types.NamespacedName](),
 		tasks: make(map[types.NamespacedName][]*serviceEventTask),
 	}
 	for range workers {
@@ -51,7 +50,7 @@ func newServiceEventQueue(ctx context.Context, workers int) *serviceEventQueue {
 	return q
 }
 
-func (q *serviceEventQueue) Add(key types.NamespacedName, uid types.UID, run func() time.Duration) {
+func (q *serviceEventQueue) Add(key types.NamespacedName, uid types.UID, run func()) {
 	q.mutex.Lock()
 	defer q.mutex.Unlock()
 	if q.ctx.Err() != nil || q.queue.ShuttingDown() {
@@ -86,22 +85,9 @@ func (q *serviceEventQueue) runNext(key types.NamespacedName) {
 			return
 		}
 		if q.ctx.Err() == nil {
-			if retryAfter := task.run(); retryAfter > 0 {
-				q.retry(key, task, retryAfter)
-				return
-			}
+			task.run()
 		}
 	}
-}
-
-func (q *serviceEventQueue) retry(key types.NamespacedName, task *serviceEventTask, retryAfter time.Duration) {
-	q.mutex.Lock()
-	defer q.mutex.Unlock()
-	if q.ctx.Err() != nil || q.queue.ShuttingDown() || len(q.tasks[key]) != 0 {
-		return
-	}
-	q.tasks[key] = []*serviceEventTask{task}
-	q.queue.AddAfter(key, retryAfter)
 }
 
 func (q *serviceEventQueue) nextTask(key types.NamespacedName) *serviceEventTask {
@@ -226,11 +212,10 @@ func (p *Processor) ServicesWatcher(ctx context.Context, serviceFunc Callback, f
 			}
 			event := event
 			key := types.NamespacedName{Namespace: svc.Namespace, Name: svc.Name}
-			eventQueue.Add(key, svc.UID, func() time.Duration {
+			eventQueue.Add(key, svc.UID, func() {
 				if err := p.processServiceEvent(watcherCtx, event, serviceFunc, forcedOnly, &wg, cancelWatcher); err != nil {
 					cancelWatcher(err)
 				}
-				return 0
 			})
 		case watch.Bookmark:
 			// Un-used
