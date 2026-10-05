@@ -722,7 +722,11 @@ func TestManagerClaimRegistersConcurrentMemberOnce(t *testing.T) {
 	service := createTestService("service", "default", nil)
 	id := getSvcID(service)
 	objectName := ServiceNamespacedName(service)
-	lease := manager.Add(context.Background(), id)
+	const existingMember = "existing"
+	lease, added := manager.Acquire(context.Background(), id, existingMember, nil)
+	if !added {
+		t.Fatal("existing Lease participant was not registered")
+	}
 
 	type result struct {
 		lease *Lease
@@ -752,7 +756,12 @@ func TestManagerClaimRegistersConcurrentMemberOnce(t *testing.T) {
 		t.Fatalf("new member registrations = %d, want 1", newMembers)
 	}
 
-	manager.Delete(id, objectName, lease)
+	if manager.Delete(id, objectName, lease) {
+		t.Fatal("claimed member retired a Lease still held by the existing participant")
+	}
+	if !manager.Delete(id, existingMember, lease) {
+		t.Fatal("final participant did not retire the Lease")
+	}
 }
 
 // TestManager_Acquire_NewLease tests acquiring a new Lease for a new Service.
