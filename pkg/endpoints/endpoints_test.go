@@ -535,7 +535,11 @@ func TestReconcileServicesElectionDoesNotStartElectionLoop(t *testing.T) {
 
 	leaseMgr := lease.NewManager()
 	leaseNamespace, serviceLease := lease.ServiceName(service)
-	svcLease := leaseMgr.Add(ctx, lease.NewID(config.LeaderElectionType, leaseNamespace, serviceLease))
+	leaseID := lease.NewID(config.LeaderElectionType, leaseNamespace, serviceLease)
+	svcLease, added := leaseMgr.Acquire(ctx, leaseID, lease.ServiceNamespacedName(service), nil)
+	if !added {
+		t.Fatal("Service participant was not registered")
+	}
 
 	svcCtx := servicecontext.New(svcLease.Ctx)
 

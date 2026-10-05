@@ -234,8 +234,10 @@ func TestDropCancelledServiceContextAllowsLeaseRecreation(t *testing.T) {
 		t.Fatalf("expected the stale service context to be dropped, got %v", got)
 	}
 
-	// This mirrors the `if svcCtx == nil` branch in AddOrModify.
-	p.leaseMgr.Add(context.Background(), id)
+	// This mirrors registration after the stale Service context has been removed.
+	if _, added := p.leaseMgr.Acquire(context.Background(), id, lease.ServiceNamespacedName(svc), nil); !added {
+		t.Fatal("replacement Service was not registered")
+	}
 
 	if p.leaseMgr.Get(id) == nil {
 		t.Fatal("expected a new lease to be created once the cancelled service context was dropped")
