@@ -3,6 +3,7 @@ package services
 import (
 	"context"
 	"errors"
+	"slices"
 	"sync"
 	"testing"
 	"time"
@@ -849,59 +850,44 @@ func TestDeleteTrackedServiceReturnsPersistentCleanupFailure(t *testing.T) {
 	}
 }
 
-func TestServiceSnapshotsCopiesMutableServiceState(t *testing.T) {
-	uid := types.UID("service-a")
-	service := &v1.Service{ObjectMeta: metav1.ObjectMeta{
-		UID: uid, Name: "service-a", Namespace: "default",
-	}}
-	processor := &Processor{serviceLock: newTestServiceLocks(), ServiceInstances: []*instance.Instance{{
-		ServiceUID:      uid,
-		ServiceSnapshot: service,
-	}}}
-
-	snapshots := processor.ServiceSnapshots()
-	if len(snapshots) != 1 {
-		t.Fatalf("ServiceSnapshots() count = %d, want 1", len(snapshots))
+func TestOwnedServiceVIPsIncludesOnlyActiveDatapathsAndReturnsCopy(t *testing.T) {
+	activeUID := types.UID("active")
+	inactiveUID := types.UID("inactive")
+	processor := &Processor{
+		serviceLock: newTestServiceLocks(),
+		ServiceInstances: []*instance.Instance{
+			{
+				ServiceUID: activeUID,
+				ServiceSnapshot: &v1.Service{
+					ObjectMeta: metav1.ObjectMeta{UID: activeUID, Annotations: map[string]string{
+						kubevip.LoadbalancerIPAnnotation: "192.0.2.10,192.0.2.11",
+					}},
+				},
+				AddCalled: true,
+			},
+			{
+				ServiceUID: inactiveUID,
+				ServiceSnapshot: &v1.Service{
+					ObjectMeta: metav1.ObjectMeta{UID: inactiveUID},
+					Spec:       v1.ServiceSpec{LoadBalancerIP: "192.0.2.20"},
+				},
+			},
+			{ServiceUID: "missing-snapshot", AddCalled: true},
+			nil,
+		},
 	}
-	service.Namespace = "changed"
-	if snapshots[0].Namespace != "default" {
-		t.Fatal("ServiceSnapshots() returned mutable Service state")
-	}
-}
 
-func TestServiceSnapshotsSerializesSnapshotReplacement(t *testing.T) {
-	uid := types.UID("service-a")
-	serviceInstance := &instance.Instance{
-		ServiceUID: uid,
-		ServiceSnapshot: &v1.Service{ObjectMeta: metav1.ObjectMeta{
-			UID: uid, Name: "service-a", Namespace: "default",
-		}},
+	processor.refreshOwnedServiceVIPs()
+	want := []string{"192.0.2.10", "192.0.2.11"}
+	got := processor.OwnedServiceVIPs()
+	if !slices.Equal(got, want) {
+		t.Fatalf("OwnedServiceVIPs() = %v, want active datapath VIPs %v", got, want)
 	}
-	processor := &Processor{serviceLock: newTestServiceLocks(), ServiceInstances: []*instance.Instance{serviceInstance}}
-	initializeTestElectionCoordinators(processor)
 
-	var wg sync.WaitGroup
-	wg.Go(func() {
-		for range 100 {
-			processor.serviceLock.Lock(uid)
-			serviceInstance.ServiceSnapshot = &v1.Service{ObjectMeta: metav1.ObjectMeta{
-				UID: uid, Name: "service-a", Namespace: "default",
-			}}
-			if err := processor.serviceLock.Unlock(uid); err != nil {
-				t.Errorf("Unlock() error = %v", err)
-			}
-		}
-	})
-	wg.Go(func() {
-		for range 100 {
-			snapshots := processor.ServiceSnapshots()
-			if len(snapshots) != 1 || snapshots[0].UID != uid {
-				t.Errorf("ServiceSnapshots() = %+v, want one snapshot for %q", snapshots, uid)
-				return
-			}
-		}
-	})
-	wg.Wait()
+	got[0] = "198.51.100.1"
+	if current := processor.OwnedServiceVIPs(); !slices.Equal(current, want) {
+		t.Fatalf("mutating returned VIPs changed stored snapshot: got %v, want %v", current, want)
+	}
 }
 
 // TestEndpointReconcileWaitsForServiceLock pins the wiring that stops a late

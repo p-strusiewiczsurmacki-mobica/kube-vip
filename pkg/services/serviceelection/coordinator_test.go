@@ -546,7 +546,7 @@ func TestManagerIssuesNewClaimForEachReadinessGeneration(t *testing.T) {
 	manager, adapter, leaseMgr := newTestManager()
 	service := &v1.Service{ObjectMeta: metav1.ObjectMeta{Name: "service", Namespace: "default", UID: "service"}}
 	first := readyMember(t, manager, adapter, service)
-	firstToken := first.registration.Name()
+	firstToken := first.registrationSpec.Name
 	firstContext := first.serviceContext
 	first.coordinator.closeMember(first)
 
@@ -560,7 +560,7 @@ func TestManagerIssuesNewClaimForEachReadinessGeneration(t *testing.T) {
 	if !joined {
 		t.Fatal("new readiness generation did not join")
 	}
-	if second.registration.Name() == firstToken {
+	if second.registrationSpec.Name == firstToken {
 		t.Fatal("new readiness generation reused a claim token")
 	}
 
@@ -838,7 +838,7 @@ func TestExternalElectionEndDeactivatesMember(t *testing.T) {
 	controlPlaneToken := lease.ObjectName(id, "control-plane")
 	member := readyMember(t, manager, adapter, service)
 	sharedLease := member.coordinator.membership.lease
-	if claimed, _ := leaseMgr.Claim(id, controlPlaneToken); claimed != sharedLease {
+	if claimed, _ := leaseMgr.ClaimWithVIPProvider(id, controlPlaneToken, nil); claimed != sharedLease {
 		t.Fatal("control plane did not join the Service lease")
 	}
 	externalParticipation := sharedLease.JoinElection()

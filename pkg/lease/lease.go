@@ -38,20 +38,6 @@ type Registration struct {
 	retired bool
 }
 
-func (r *Registration) Lease() *Lease {
-	if r == nil {
-		return nil
-	}
-	return r.lease
-}
-
-func (r *Registration) Name() string {
-	if r == nil {
-		return ""
-	}
-	return r.spec.Name
-}
-
 // Release removes this registration once and reports whether it retired the
 // shared Lease.
 func (r *Registration) Release() bool {
@@ -90,15 +76,6 @@ func (m *Manager) Acquire(ctx context.Context, id ID, objectName string,
 	return lease, lease.AddWithVIPProvider(objectName, vipProvider)
 }
 
-// AcquireRegistration creates or retrieves a Lease and returns a handle for
-// releasing the participant without reconstructing its identity at the call
-// site.
-func (m *Manager) AcquireRegistration(ctx context.Context, id ID,
-	spec RegistrationSpec) (*Registration, bool) {
-	registeredLease, added := m.Acquire(ctx, id, spec.Name, spec.VIPProvider)
-	return &Registration{manager: m, id: id, spec: spec, lease: registeredLease, owned: added}, added
-}
-
 // AcquireRegistrations atomically registers all supplied participants against
 // one Lease. Either every registration is visible to OwnedVIPs or none of the
 // registrations from this call is retained.
@@ -121,12 +98,6 @@ func (m *Manager) AcquireRegistrations(ctx context.Context, id ID,
 		}
 	}
 	return registeredLease, registrations, nil
-}
-
-// Claim atomically registers objectName against an existing lease. It returns
-// nil when the lease was retired before the caller could join it.
-func (m *Manager) Claim(id ID, objectName string) (*Lease, bool) {
-	return m.ClaimWithVIPProvider(id, objectName, nil)
 }
 
 // ClaimWithVIPProvider atomically registers objectName and its VIP ownership
