@@ -2,12 +2,17 @@ package services
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/kube-vip/kube-vip/pkg/kubevip"
+	"github.com/kube-vip/kube-vip/pkg/servicecontext"
 	"github.com/kube-vip/kube-vip/pkg/utils"
 	v1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -15,6 +20,8 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/watch"
+	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/rest"
 )
 
 // fakeWatchInterface is a minimal watch.Interface for testing.
@@ -233,5 +240,60 @@ func TestServiceMatchesWatcher(t *testing.T) {
 	}
 	if !serviceMatchesWatcher(forced, true) || serviceMatchesWatcher(forced, false) {
 		t.Fatal("forced-election Service watcher ownership is incorrect")
+	}
+}
+
+// TestServiceEventWithoutAddressDoesNotRequestRetry asserts the desired
+// behaviour: a watch event for a Service that has no load-balancer address
+// yet must let processServiceEvent return nil instead of the sentinel that
+// makes ServicesWatcher re-queue the event once per second forever. The
+// address will arrive on a later Modified event instead.
+func TestServiceEventWithoutAddressDoesNotRequestRetry(t *testing.T) {
+	svc := &v1.Service{
+		ObjectMeta: metav1.ObjectMeta{Name: "test-service", Namespace: "default", UID: "service-uid"},
+		Spec:       v1.ServiceSpec{Type: v1.ServiceTypeLoadBalancer},
+	}
+
+	var requests int32
+	// Processor.clientSet is a concrete *kubernetes.Clientset (not an interface),
+	// so the client-go fake clientset cannot be substituted; an httptest server
+	// stands in for the API server instead.
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if request.Method != http.MethodGet || request.URL.Path != "/api/v1/namespaces/default/services/test-service" {
+			t.Errorf("unexpected request: %s %s", request.Method, request.URL.Path)
+			writer.WriteHeader(http.StatusNotFound)
+			return
+		}
+		atomic.AddInt32(&requests, 1)
+		writer.Header().Set("Content-Type", "application/json")
+		if err := json.NewEncoder(writer).Encode(svc); err != nil {
+			t.Errorf("encode Service response: %v", err)
+		}
+	}))
+	defer server.Close()
+
+	clientSet, err := kubernetes.NewForConfig(&rest.Config{
+		Host: server.URL,
+		ContentConfig: rest.ContentConfig{
+			ContentType: "application/json",
+		},
+	})
+	if err != nil {
+		t.Fatalf("create Kubernetes client: %v", err)
+	}
+
+	p := &Processor{
+		config:        &kubevip.Config{},
+		clientSet:     clientSet,
+		lbClassFilter: func(*v1.Service, *kubevip.Config) bool { return false },
+	}
+	callback := Callback(func(*servicecontext.Context, *v1.Service, *sync.WaitGroup) error { return nil })
+
+	err = p.processServiceEvent(context.Background(), watch.Event{Type: watch.Added, Object: svc}, callback, false, &sync.WaitGroup{}, func(error) {})
+	if err != nil {
+		t.Fatalf("processServiceEvent() error = %v, want nil: a Service without an address yet must not request a retry", err)
+	}
+	if got := atomic.LoadInt32(&requests); got != 1 {
+		t.Fatalf("GET requests for the Service = %d, want 1", got)
 	}
 }
