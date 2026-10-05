@@ -257,19 +257,25 @@ func (c *coordinator) newCampaignCandidate() campaignCandidate {
 
 func (c *coordinator) startCampaign(wg *sync.WaitGroup) {
 	candidate := c.newCampaignCandidate()
-	switch candidate.action {
-	case campaignNoop:
-		return
-	case campaignJoin:
+	if candidate.action == campaignJoin {
 		if candidate.leaderCtx != nil {
 			c.activateMembers(candidate.leaderCtx, candidate.lease, candidate.campaign, wg)
 		}
+		return
+	}
+	c.launchCampaign(candidate, wg)
+}
+
+// launchCampaign starts the goroutine for a campaign newly created by
+// newCampaignCandidate. Joining an existing campaign is left to the caller.
+func (c *coordinator) launchCampaign(candidate campaignCandidate, wg *sync.WaitGroup) {
+	switch candidate.action {
+	case campaignNoop, campaignJoin:
 		return
 	case campaignObserve:
 		wg.Go(func() {
 			c.followCampaign(candidate.lease, candidate.campaign, wg)
 		})
-		return
 	case campaignRun:
 		for _, member := range candidate.members {
 			metrics.ServiceElectionAttemptsTotal.WithLabelValues(member.service.Namespace, member.service.Name).Inc()
