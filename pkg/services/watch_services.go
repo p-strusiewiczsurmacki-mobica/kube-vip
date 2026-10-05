@@ -25,7 +25,6 @@ import (
 )
 
 const concurrentServiceEventWorkers = 4
-const serviceAddressRetryDelay = time.Second
 
 type serviceEventTask struct {
 	uid types.UID
@@ -229,9 +228,6 @@ func (p *Processor) ServicesWatcher(ctx context.Context, serviceFunc Callback, f
 			key := types.NamespacedName{Namespace: svc.Namespace, Name: svc.Name}
 			eventQueue.Add(key, svc.UID, func() time.Duration {
 				if err := p.processServiceEvent(watcherCtx, event, serviceFunc, forcedOnly, &wg, cancelWatcher); err != nil {
-					if errors.Is(err, errServiceAddressPending) {
-						return serviceAddressRetryDelay
-					}
 					cancelWatcher(err)
 				}
 				return 0
