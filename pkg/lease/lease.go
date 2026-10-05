@@ -139,7 +139,7 @@ func (m *Manager) addLocked(ctx context.Context, id ID) *Lease {
 // the service unhandled. A stale caller is therefore ignored.
 //
 // Teardown paths have to call this synchronously rather than leaving it to the
-// deferred cleanup: until the lease is out of the map, Add hands the same
+// deferred cleanup: until the lease is out of the map, Acquire hands the same
 // instance back, so a service that is rebuilt straight away gets parented to a
 // lease that the pending cleanup is about to cancel.
 func (m *Manager) Delete(id ID, objectName string, l *Lease) bool {
@@ -342,7 +342,7 @@ func (l *Lease) OwnedVIPs() []string {
 	return vips
 }
 
-// delete removes the service from the lease and decrements the counter.
+// delete removes one participant from the Lease.
 func (l *Lease) delete(service string) {
 	l.membersMu.Lock()
 	defer l.membersMu.Unlock()
