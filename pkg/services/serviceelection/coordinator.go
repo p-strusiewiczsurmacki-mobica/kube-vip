@@ -246,7 +246,7 @@ func (c *coordinator) newCampaignCandidate() campaignCandidate {
 		return campaignCandidate{}
 	}
 	members := c.membersLocked()
-	campaign := newCampaign(context.Background(), svcLease, memberVIPs(members))
+	campaign := newCampaign(context.Background(), svcLease)
 	c.campaigns.current = campaign
 	action := campaignObserve
 	if campaign.runsElection() {
@@ -348,7 +348,6 @@ func (c *coordinator) runCampaign(svcLease *lease.Lease, campaign *campaign, wg 
 		LeaseID:          c.id,
 		Mgr:              c.dependencies.ElectionManager,
 		LeaseAnnotations: map[string]string{},
-		VIPs:             campaign.vips,
 		VIPsProvider:     svcLease.OwnedVIPs,
 		OnStartedLeading: func(ctx context.Context) {
 			c.startedLeading(ctx, svcLease, campaign, wg)
@@ -369,16 +368,6 @@ func (c *coordinator) runCampaign(svcLease *lease.Lease, campaign *campaign, wg 
 	c.stopCampaign(svcLease, campaign)
 	campaign.election.Stopped()
 	c.finishCampaign(svcLease, campaign, wg)
-}
-
-func memberVIPs(members []*member) []string {
-	services := make([]*v1.Service, 0, len(members))
-	for _, member := range members {
-		if member != nil && member.service != nil {
-			services = append(services, member.service)
-		}
-	}
-	return instance.OrderedServiceAddresses(services)
 }
 
 func serviceVIPProvider(service *v1.Service) lease.VIPProvider {

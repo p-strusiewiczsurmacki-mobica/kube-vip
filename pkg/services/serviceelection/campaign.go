@@ -12,12 +12,11 @@ type campaign struct {
 	election     *lease.ElectionSession
 	leaderCtx    context.Context
 	cancelLeader context.CancelFunc
-	vips         []string
 	role         lease.ElectionRole
 	stopped      bool
 }
 
-func newCampaign(parent context.Context, svcLease *lease.Lease, vips []string) *campaign {
+func newCampaign(parent context.Context, svcLease *lease.Lease) *campaign {
 	participation := svcLease.JoinElection()
 	ctx, cancel := svcLease.NewElectionContext(parent)
 	role := lease.ElectionObserver
@@ -28,7 +27,6 @@ func newCampaign(parent context.Context, svcLease *lease.Lease, vips []string) *
 		ctx:      ctx,
 		cancel:   cancel,
 		election: participation.Session,
-		vips:     append([]string(nil), vips...),
 		role:     role,
 	}
 }
