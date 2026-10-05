@@ -409,7 +409,7 @@ func TestActivationFailureCancelsCampaignAndRecordsBackoff(t *testing.T) {
 
 	start := coordinator.newCampaignCandidate()
 	start.campaign.election.Started()
-	coordinator.activateMember(context.Background(), member, start.lease, start.campaign, &sync.WaitGroup{})
+	coordinator.activateMembers(context.Background(), start.lease, start.campaign, &sync.WaitGroup{})
 	if coordinator.campaigns.restartFailures != 1 {
 		t.Fatalf("restartFailures = %d, want 1", coordinator.campaigns.restartFailures)
 	}

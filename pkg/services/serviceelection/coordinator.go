@@ -423,16 +423,33 @@ func (c *coordinator) activateMembers(ctx context.Context, svcLease *lease.Lease
 	if svcLease == nil || campaign == nil || !campaign.election.IsLeading() {
 		return
 	}
+	activationFailed := false
 	for _, member := range c.activatableMembers(svcLease, campaign) {
-		c.activateMember(ctx, member, svcLease, campaign, wg)
+		if c.activateMember(ctx, member, svcLease, campaign, wg) == memberActivationFailed {
+			activationFailed = true
+		}
+	}
+	if !activationFailed {
+		return
+	}
+	if current, active := c.campaignHasActiveMember(svcLease, campaign); current && !active {
+		c.cancelCampaign(svcLease, campaign)
 	}
 }
 
+type memberActivationResult uint8
+
+const (
+	memberActivationSkipped memberActivationResult = iota
+	memberActivationSucceeded
+	memberActivationFailed
+)
+
 func (c *coordinator) activateMember(ctx context.Context, member *member, svcLease *lease.Lease,
-	campaign *campaign, wg *sync.WaitGroup) {
+	campaign *campaign, wg *sync.WaitGroup) memberActivationResult {
 	readinessReservation, ready := member.serviceContext.AcquireReadinessGeneration(member.readinessGeneration)
 	if !ready {
-		return
+		return memberActivationSkipped
 	}
 	defer readinessReservation.Release()
 
@@ -441,22 +458,21 @@ func (c *coordinator) activateMember(ctx context.Context, member *member, svcLea
 
 	if !c.dependencies.State.IsCurrent(member.service, member.serviceContext, member.readinessGeneration) ||
 		!c.markMemberActive(member, svcLease, campaign) {
-		return
+		return memberActivationSkipped
 	}
 	if err := c.dependencies.Datapath.Activate(ctx, member.service, member.serviceContext, wg); err != nil {
 		metrics.ServiceElectionErrorsTotal.WithLabelValues(member.service.Namespace, member.service.Name, "service_sync").Inc()
 		log.Error("start service after election", "service", member.service.Name, "namespace", member.service.Namespace, "error", err)
 		c.deactivateMemberWithOperationLockHeld(member)
-		if !c.hasOtherReadyMember(member) {
-			c.cancelCampaign(svcLease, campaign)
-		}
-		return
+		return memberActivationFailed
 	}
 	c.resetRestartFailures()
 	if !c.dependencies.State.IsCurrent(member.service, member.serviceContext, member.readinessGeneration) ||
 		!c.activationStillValid(member, svcLease, campaign) {
 		c.deactivateMemberWithOperationLockHeld(member)
+		return memberActivationSkipped
 	}
+	return memberActivationSucceeded
 }
 
 func (c *coordinator) resetRestartFailures() {
@@ -489,26 +505,21 @@ func (c *coordinator) markMemberActive(member *member, svcLease *lease.Lease, ca
 	return true
 }
 
-func (c *coordinator) hasOtherReadyMember(member *member) bool {
-	for _, candidate := range c.otherMembers(member) {
-		if candidate.serviceContext.Ctx.Err() == nil && candidate.serviceContext.ReadinessGenerationCurrent(candidate.readinessGeneration) {
-			return true
-		}
-	}
-	return false
-}
-
-// otherMembers returns every member except the supplied one.
-func (c *coordinator) otherMembers(excluded *member) []*member {
+// campaignHasActiveMember reports whether campaign is still eligible for
+// activation and whether at least one of its members has an active datapath.
+func (c *coordinator) campaignHasActiveMember(svcLease *lease.Lease, campaign *campaign) (bool, bool) {
 	c.mutex.Lock()
 	defer c.mutex.Unlock()
-	others := make([]*member, 0, len(c.membership.members))
-	for _, candidate := range c.membership.members {
-		if candidate != excluded {
-			others = append(others, candidate)
+	if c.retired || c.membership.lease != svcLease || c.campaigns.current != campaign ||
+		campaign == nil || campaign.stopped || !campaign.election.IsLeading() {
+		return false, false
+	}
+	for _, member := range c.membership.members {
+		if member.active {
+			return true, true
 		}
 	}
-	return others
+	return true, false
 }
 
 // markMemberInactive clears the active flag and reports the lease that the
