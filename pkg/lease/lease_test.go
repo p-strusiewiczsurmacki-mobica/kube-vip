@@ -942,8 +942,8 @@ func TestManager_Acquire_SameNameDifferentNamespace(t *testing.T) {
 	}
 }
 
-// TestManager_ConcurrentAccess tests concurrent access to the lease manager
-func TestManager_ConcurrentAccess(t *testing.T) {
+// TestManager_ConcurrentAcquire tests concurrent acquisition of one registration.
+func TestManager_ConcurrentAcquire(t *testing.T) {
 	mgr := NewManager()
 	svc := createTestService("test-svc", "default", nil)
 
@@ -953,19 +953,20 @@ func TestManager_ConcurrentAccess(t *testing.T) {
 	objectName1 := ServiceNamespacedName(svc)
 
 	ctx1, leaseID1 := getSvcData(svc)
-	lease1 := mgr.Add(ctx1, leaseID1)
-
-	added := lease1.Add(objectName1)
+	lease1, added := mgr.Acquire(ctx1, leaseID1, objectName1, nil)
 	if !added {
 		t.Error("expected lease to be added")
 	}
 
-	// Concurrent adds
+	// Concurrent duplicate acquires must observe the existing registration.
 	for range numGoroutines {
 		wg.Go(func() {
-			added := lease1.Add(objectName1)
+			acquired, added := mgr.Acquire(ctx1, leaseID1, objectName1, nil)
 			if added {
 				t.Error("expected lease to already exist")
+			}
+			if acquired != lease1 {
+				t.Error("concurrent Acquire returned a different Lease")
 			}
 		})
 	}
@@ -1491,39 +1492,35 @@ func TestManager_NonCommonLease_WaitForLeaseContextDone(t *testing.T) {
 }
 
 // TestManager_NonCommonLease_SpinLoopPrevention tests that the fix prevents
-// a tight spin loop when a non-common lease service repeatedly calls Add
+// a tight spin loop when a non-common lease service repeatedly calls Acquire
 // while leader election is running. The key behavior is that when isNew=false,
 // the lease context should be used to block until the leader election ends.
 func TestManager_NonCommonLease_SpinLoopPrevention(t *testing.T) {
 	mgr := NewManager()
 	svc := createTestService("egress-service", "default", nil) // Non-common lease
 
-	// First Add - leader election starts
+	// First Acquire starts leader election.
 	objectName1 := ServiceNamespacedName(svc)
 
 	ctx1, leaseID1 := getSvcData(svc)
-	lease1 := mgr.Add(ctx1, leaseID1)
-	isNew1 := lease1.Add(objectName1)
+	lease1, isNew1 := mgr.Acquire(ctx1, leaseID1, objectName1, nil)
 
 	if !isNew1 {
-		t.Fatal("expected first add to return isNew=true")
+		t.Fatal("expected first Acquire to return isNew=true")
 	}
 
 	electLease(t, lease1)
 
-	// Track how many times Add is called in a tight loop
+	// Track how many times Acquire is called in a tight loop.
 	// In the buggy code, this would spin forever
-	// In the fixed code, Add returns isNew=false and the caller blocks on lease.Ctx.Done()
+	// In the fixed code, Acquire returns isNew=false and the caller blocks on lease.Ctx.Done()
 	addCount := 0
 	done := make(chan struct{})
 
 	go func() {
 		for i := 0; i < 100; i++ {
-			objectName1 := ServiceNamespacedName(svc)
-
 			ctxTmp, leaseIDTmp := getSvcData(svc)
-			leaseTmp := mgr.Add(ctxTmp, leaseIDTmp)
-			isNewTmp := leaseTmp.Add(objectName1)
+			leaseTmp, isNewTmp := mgr.Acquire(ctxTmp, leaseIDTmp, objectName1, nil)
 			addCount++
 			if isNewTmp {
 				// This shouldn't happen while the first lease exists
@@ -1549,9 +1546,9 @@ func TestManager_NonCommonLease_SpinLoopPrevention(t *testing.T) {
 		t.Fatal("loop timed out")
 	}
 
-	// All 100 adds should have completed (returning isNew=false)
+	// All 100 acquires should have completed, returning isNew=false.
 	if addCount != 100 {
-		t.Errorf("expected 100 adds, got %d", addCount)
+		t.Errorf("expected 100 acquires, got %d", addCount)
 	}
 
 	mgr.Delete(leaseID1, objectName1, nil)
