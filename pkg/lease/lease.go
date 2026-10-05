@@ -286,12 +286,6 @@ func (l *Lease) NewElectionContext(parent context.Context) (context.Context, con
 	}
 }
 
-// Add adds the object to the lease and increments counter
-// it will return true if object was added
-func (l *Lease) Add(name string) bool {
-	return l.AddWithVIPProvider(name, nil)
-}
-
 // AddWithVIPProvider adds an object and its VIP ownership provider to the
 // lease. Re-adding the same object leaves the original registration intact.
 func (l *Lease) AddWithVIPProvider(name string, vipProvider VIPProvider) bool {
