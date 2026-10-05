@@ -71,3 +71,19 @@ campaign selection and member activation. The local election-session runner
 owns finalizing its session. The caller of `DetachForContext` already owns
 datapath cleanup; that method only removes the matching membership to avoid
 reacquiring the Service lock through cleanup.
+
+Activation responsibility within one campaign is split as follows:
+
+* when a campaign starts leading, its leadership path activates every member in
+  its activation snapshot;
+* a member admitted to an already leading campaign is activated by its own
+  admission (`admitToCampaign`), and only that member;
+* a member whose activation failed is retried only by its own backoff retry;
+  admitting another member or restarting the campaign does not re-attempt it;
+* a scheduled campaign restart (`startCampaign`) activates nobody when it finds
+  a campaign already running, because that campaign's snapshot covers every
+  remaining member.
+
+Admission and the leader context are both published under `coordinator.mutex`,
+so a member is reached either by the snapshot or by its admission;
+`markMemberActive` prevents it from being activated twice.
