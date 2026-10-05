@@ -119,16 +119,14 @@ func TestServiceEventQueuePreservesOrderPerUID(t *testing.T) {
 	order := make(chan int, 2)
 	firstStarted := make(chan struct{})
 
-	queue.Add(key, types.UID("service"), func() time.Duration {
+	queue.Add(key, types.UID("service"), func() {
 		close(firstStarted)
 		<-releaseFirst
 		order <- 1
-		return 0
 	})
 	<-firstStarted
-	queue.Add(key, types.UID("service"), func() time.Duration {
+	queue.Add(key, types.UID("service"), func() {
 		order <- 2
-		return 0
 	})
 	releaseOnce.Do(func() { close(releaseFirst) })
 	queue.Wait()
@@ -146,15 +144,13 @@ func TestServiceEventQueueRunsDifferentUIDsConcurrently(t *testing.T) {
 	firstStarted := make(chan struct{})
 	secondStarted := make(chan struct{})
 
-	queue.Add(types.NamespacedName{Namespace: "default", Name: "first"}, types.UID("first"), func() time.Duration {
+	queue.Add(types.NamespacedName{Namespace: "default", Name: "first"}, types.UID("first"), func() {
 		close(firstStarted)
 		<-releaseFirst
-		return 0
 	})
 	<-firstStarted
-	queue.Add(types.NamespacedName{Namespace: "default", Name: "second"}, types.UID("second"), func() time.Duration {
+	queue.Add(types.NamespacedName{Namespace: "default", Name: "second"}, types.UID("second"), func() {
 		close(secondStarted)
-		return 0
 	})
 
 	select {
@@ -170,8 +166,8 @@ func TestServiceEventQueueCoalescesPendingUpdates(t *testing.T) {
 	queue := newServiceEventQueue(context.Background(), 0)
 	key := types.NamespacedName{Namespace: "default", Name: "service"}
 	ran := ""
-	queue.Add(key, types.UID("service"), func() time.Duration { ran = "first"; return 0 })
-	queue.Add(key, types.UID("service"), func() time.Duration { ran = "second"; return 0 })
+	queue.Add(key, types.UID("service"), func() { ran = "first" })
+	queue.Add(key, types.UID("service"), func() { ran = "second" })
 	queue.wg.Go(queue.run)
 	queue.Wait()
 
@@ -188,17 +184,15 @@ func TestServiceEventQueueOrdersDeleteAndRecreateByName(t *testing.T) {
 	addStarted := make(chan struct{})
 	order := make(chan string, 2)
 
-	queue.Add(key, types.UID("old"), func() time.Duration {
+	queue.Add(key, types.UID("old"), func() {
 		close(deleteStarted)
 		<-releaseDelete
 		order <- "delete"
-		return 0
 	})
 	<-deleteStarted
-	queue.Add(key, types.UID("new"), func() time.Duration {
+	queue.Add(key, types.UID("new"), func() {
 		close(addStarted)
 		order <- "add"
-		return 0
 	})
 	select {
 	case <-addStarted:
@@ -211,25 +205,6 @@ func TestServiceEventQueueOrdersDeleteAndRecreateByName(t *testing.T) {
 	if first, second := <-order, <-order; first != "delete" || second != "add" {
 		t.Fatalf("execution order = [%s %s], want [delete add]", first, second)
 	}
-}
-
-func TestServiceEventQueueDelayedTasksDoNotStarveWorkers(t *testing.T) {
-	queue := newServiceEventQueue(context.Background(), concurrentServiceEventWorkers)
-	for index := range concurrentServiceEventWorkers {
-		key := types.NamespacedName{Namespace: "default", Name: fmt.Sprintf("pending-%d", index)}
-		queue.Add(key, types.UID(key.Name), func() time.Duration { return time.Hour })
-	}
-	run := make(chan struct{})
-	queue.Add(types.NamespacedName{Namespace: "default", Name: "ready"}, types.UID("ready"), func() time.Duration {
-		close(run)
-		return 0
-	})
-	select {
-	case <-run:
-	case <-time.After(time.Second):
-		t.Fatal("delayed address tasks starved an unrelated Service event")
-	}
-	queue.Wait()
 }
 
 func TestServiceMatchesWatcher(t *testing.T) {
