@@ -794,46 +794,45 @@ func TestManager_Acquire_NewLease(t *testing.T) {
 	}
 }
 
-// TestManager_Add_ExistingLease tests adding a service with an existing lease
-func TestManager_Add_ExistingLease(t *testing.T) {
+// TestManager_Acquire_ExistingRegistration tests acquiring an already registered Service.
+func TestManager_Acquire_ExistingRegistration(t *testing.T) {
 	mgr := NewManager()
 	svc := createTestService("test-svc", "default", nil)
+	ctx, id := getSvcData(svc)
+	objectName := ServiceNamespacedName(svc)
 
-	leaseID1 := mgr.Add(getSvcData(svc))
-	isNew1 := leaseID1.Add(ServiceNamespacedName(svc))
-
-	leaseID2 := mgr.Add(getSvcData(svc))
-	isNew2 := leaseID2.Add(ServiceNamespacedName(svc))
+	first, isNew1 := mgr.Acquire(ctx, id, objectName, nil)
+	second, isNew2 := mgr.Acquire(ctx, id, objectName, nil)
 
 	if !isNew1 {
-		t.Error("expected first Add to return isNew=true")
+		t.Error("expected first Acquire to return isNew=true")
 	}
 	if isNew2 {
-		t.Error("expected second Add to return isNew=false")
+		t.Error("expected second Acquire to return isNew=false")
 	}
-	if leaseID1 != leaseID2 {
+	if first != second {
 		t.Error("expected same lease to be returned for same service")
 	}
 }
 
-// TestManager_Delete_DecrementCounter tests the decrement counter functionality
-func TestManager_Delete_DecrementCounter(t *testing.T) {
+// TestManager_DuplicateAcquireDoesNotAddRegistration verifies idempotent registration.
+func TestManager_DuplicateAcquireDoesNotAddRegistration(t *testing.T) {
 	mgr := NewManager()
 	svc := createTestService("test-svc", "default", nil)
 
-	// Add twice (simulating adding same service twice)
+	// Acquire twice, simulating duplicate processing of the same Service.
 	objectName := ServiceNamespacedName(svc)
 
 	ctx1, leaseID1 := getSvcData(svc)
-	lease1 := mgr.Add(ctx1, leaseID1)
-	_ = lease1.Add(objectName)
+	lease1, first := mgr.Acquire(ctx1, leaseID1, objectName, nil)
 
 	ctx2, leaseID2 := getSvcData(svc)
-	lease2 := mgr.Add(ctx2, leaseID2)
-	_ = lease2.Add(objectName)
+	lease2, second := mgr.Acquire(ctx2, leaseID2, objectName, nil)
+	if !first || second || lease1 != lease2 {
+		t.Fatalf("duplicate Acquire results: first=%v second=%v same lease=%v", first, second, lease1 == lease2)
+	}
 
-	// Delete once - should remove the lease
-
+	// One Delete removes the single registration created by both Acquire calls.
 	mgr.Delete(leaseID1, objectName, nil)
 
 	lease := mgr.Get(getSvcID(svc))
@@ -1213,7 +1212,7 @@ func TestManager_CommonLeaseScenario(t *testing.T) {
 }
 
 // TestManager_RaceCondition_LeaseExistsBeforeDelete tests the scenario where
-// a second goroutine calls Add before the first goroutine's defer deletes the lease.
+// a second goroutine calls Acquire before the first goroutine's defer deletes the lease.
 // This simulates the race condition that could cause the gaps in the logs where there is no leader.
 func TestManager_RaceCondition_LeaseExistsBeforeDelete(t *testing.T) {
 	mgr := NewManager()
@@ -1223,23 +1222,21 @@ func TestManager_RaceCondition_LeaseExistsBeforeDelete(t *testing.T) {
 	objectName1 := ServiceNamespacedName(svc)
 
 	ctx1, leaseID1 := getSvcData(svc)
-	lease1 := mgr.Add(ctx1, leaseID1)
-	isNew1 := lease1.Add(objectName1)
+	lease1, isNew1 := mgr.Acquire(ctx1, leaseID1, objectName1, nil)
 	if !isNew1 {
-		t.Fatal("expected first add to return isNew=true")
+		t.Fatal("expected first Acquire to return isNew=true")
 	}
 
 	// Simulate leadership acquired.
 	electLease(t, lease1)
 
-	// Simulate a second goroutine calling Add BEFORE the first goroutine's defer deletes the lease
+	// Simulate a second goroutine calling Acquire BEFORE the first goroutine's defer deletes the lease.
 	// This is the race condition scenario
 	ctx2, leaseID2 := getSvcData(svc)
-	lease2 := mgr.Add(ctx2, leaseID2)
-	isNew2 := lease1.Add(objectName1)
+	lease2, isNew2 := mgr.Acquire(ctx2, leaseID2, objectName1, nil)
 
 	if isNew2 {
-		t.Error("expected second add before delete to return isNew=false")
+		t.Error("expected second Acquire before delete to return isNew=false")
 	}
 	if lease1 != lease2 {
 		t.Error("expected same lease to be returned")
@@ -1264,48 +1261,44 @@ func TestManager_RaceCondition_LeaseExistsBeforeDelete(t *testing.T) {
 	}
 }
 
-// TestManager_NonCommonLease_MultipleAdds tests that multiple Adds for a non-common
-// lease service increment the counter correctly.
-func TestManager_NonCommonLease_MultipleAdds(t *testing.T) {
+// TestManager_NonCommonLease_MultipleAcquires tests repeated acquisition of one participant.
+func TestManager_NonCommonLease_MultipleAcquires(t *testing.T) {
 	mgr := NewManager()
 	svc := createTestService("traefik", "traefik", nil) // No common lease annotation
 
-	// First Add
+	// First Acquire.
 	objectName1 := ServiceNamespacedName(svc)
 
 	ctx1, leaseID1 := getSvcData(svc)
-	lease1 := mgr.Add(ctx1, leaseID1)
-	isNew1 := lease1.Add(objectName1)
+	lease1, isNew1 := mgr.Acquire(ctx1, leaseID1, objectName1, nil)
 	if !isNew1 {
-		t.Error("expected first add to return isNew=true")
+		t.Error("expected first Acquire to return isNew=true")
 	}
 
 	// Simulate leadership acquired.
 	electLease(t, lease1)
 
-	// Second Add (simulating another goroutine or restart attempt)
+	// Second Acquire, simulating another goroutine or restart attempt.
 	ctx2, leaseID2 := getSvcData(svc)
-	lease2 := mgr.Add(ctx2, leaseID2)
-	isNew2 := lease1.Add(objectName1)
+	lease2, isNew2 := mgr.Acquire(ctx2, leaseID2, objectName1, nil)
 	if isNew2 {
-		t.Error("expected second add to return isNew=false")
+		t.Error("expected second Acquire to return isNew=false")
 	}
 	if lease1 != lease2 {
 		t.Error("expected same lease")
 	}
 
-	// Third Add
+	// Third Acquire.
 	ctx3, leaseID3 := getSvcData(svc)
-	lease3 := mgr.Add(ctx3, leaseID3)
-	isNew3 := lease1.Add(objectName1)
+	lease3, isNew3 := mgr.Acquire(ctx3, leaseID3, objectName1, nil)
 	if isNew3 {
-		t.Error("expected third add to return isNew=false")
+		t.Error("expected third Acquire to return isNew=false")
 	}
 	if lease1 != lease3 {
 		t.Error("expected same lease")
 	}
 
-	// Need one delete to remove the lease, another delete runs do nothing
+	// One Delete removes the registration; subsequent Deletes are no-ops.
 	mgr.Delete(leaseID1, objectName1, nil)
 	if mgr.Get(getSvcID(svc)) != nil {
 		t.Error("expected lease to be deleted")
@@ -1329,23 +1322,21 @@ func TestManager_LeaseContextCancelledBeforeStarted(t *testing.T) {
 	mgr := NewManager()
 	svc := createTestService("traefik", "traefik", nil)
 
-	// First Add
+	// First Acquire.
 	objectName1 := ServiceNamespacedName(svc)
 
 	ctx1, leaseID1 := getSvcData(svc)
-	lease1 := mgr.Add(ctx1, leaseID1)
-	isNew1 := lease1.Add(objectName1)
+	lease1, isNew1 := mgr.Acquire(ctx1, leaseID1, objectName1, nil)
 
 	if !isNew1 {
-		t.Fatal("expected first add to return isNew=true")
+		t.Fatal("expected first Acquire to return isNew=true")
 	}
 
 	ctx2, leaseID2 := getSvcData(svc)
-	lease2 := mgr.Add(ctx2, leaseID2)
-	isNew2 := lease1.Add(objectName1)
+	lease2, isNew2 := mgr.Acquire(ctx2, leaseID2, objectName1, nil)
 
 	if isNew2 {
-		t.Error("expected second add to return isNew=false")
+		t.Error("expected second Acquire to return isNew=false")
 	}
 
 	if lease2.IsLeading() {
@@ -1417,35 +1408,33 @@ func TestManager_RestartAfterLeaseContextCancelled(t *testing.T) {
 }
 
 // TestManager_NonCommonLease_WaitForLeaseContextDone tests the scenario where
-// a non-common lease service calls Add while another leader election is running.
+// a non-common lease Service calls Acquire while another leader election is running.
 // The caller should wait for the lease context to be done before returning.
 // This test verifies the fix for the tight spin loop issue.
 func TestManager_NonCommonLease_WaitForLeaseContextDone(t *testing.T) {
 	mgr := NewManager()
 	svc := createTestService("egress-service", "default", nil) // Non-common lease
 
-	// First Add - simulates the first leader election starting
+	// First Acquire simulates the first leader election starting.
 	objectName1 := ServiceNamespacedName(svc)
 
 	ctx1, leaseID1 := getSvcData(svc)
-	lease1 := mgr.Add(ctx1, leaseID1)
-	isNew1 := lease1.Add(objectName1)
+	lease1, isNew1 := mgr.Acquire(ctx1, leaseID1, objectName1, nil)
 
 	if !isNew1 {
-		t.Fatal("expected first add to return isNew=true")
+		t.Fatal("expected first Acquire to return isNew=true")
 	}
 
 	// Simulate leadership acquired.
 	electLease(t, lease1)
 
-	// Second Add - simulates another goroutine trying to start leader election
+	// Second Acquire simulates another goroutine trying to start leader election.
 	// This should return isNew=false
 	ctx2, leaseID2 := getSvcData(svc)
-	lease2 := mgr.Add(ctx2, leaseID2)
-	isNew2 := lease1.Add(objectName1)
+	lease2, isNew2 := mgr.Acquire(ctx2, leaseID2, objectName1, nil)
 
 	if isNew2 {
-		t.Error("expected second add to return isNew=false")
+		t.Error("expected second Acquire to return isNew=false")
 	}
 
 	if lease1 != lease2 {
@@ -1484,7 +1473,7 @@ func TestManager_NonCommonLease_WaitForLeaseContextDone(t *testing.T) {
 	mgr.Delete(leaseID1, objectName1, nil)
 
 	// The lease context should now be cancelled (because counter went to 0)
-	// But we added twice, so we need to delete twice
+	// Duplicate Acquire does not add another registration; a second delete is a no-op.
 	mgr.Delete(leaseID2, objectName1, nil)
 
 	// Now the goroutine should have completed
@@ -1578,18 +1567,16 @@ func TestManager_NonCommonLease_ServiceContextCancellation(t *testing.T) {
 	mgr := NewManager()
 	svc := createTestService("egress-service", "default", nil)
 
-	// First Add - leader election starts
+	// First Acquire starts leader election.
 	objectName1 := ServiceNamespacedName(svc)
 
 	ctx1, leaseID1 := getSvcData(svc)
-	lease1 := mgr.Add(ctx1, leaseID1)
-	_ = lease1.Add(objectName1)
+	lease1, _ := mgr.Acquire(ctx1, leaseID1, objectName1, nil)
 	electLease(t, lease1)
 
-	// Second Add - returns isNew=false
+	// Second Acquire returns isNew=false.
 	ctx2, leaseID2 := getSvcData(svc)
-	lease2 := mgr.Add(ctx2, leaseID2)
-	isNew2 := lease2.Add(objectName1)
+	lease2, isNew2 := mgr.Acquire(ctx2, leaseID2, objectName1, nil)
 	if isNew2 {
 		t.Error("expected isNew=false")
 	}
