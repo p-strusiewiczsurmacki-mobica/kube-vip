@@ -1242,9 +1242,9 @@ func TestManager_RaceCondition_LeaseExistsBeforeDelete(t *testing.T) {
 	// Now the first goroutine's defer deletes the lease
 	mgr.Delete(leaseID1, objectName1, nil)
 
-	// The lease should not still exist because same service was processed twice, so we do not increment the counter
+	// Duplicate acquisition did not add a second registration, so one Delete retired the Lease.
 	if mgr.Get(getSvcID(svc)) != nil {
-		t.Error("expected lease tonot exist")
+		t.Error("expected lease to not exist")
 	}
 
 	// Second delete does nothing
@@ -1362,7 +1362,7 @@ func TestManager_RestartAfterLeaseContextCancelled(t *testing.T) {
 	mgr := NewManager()
 	svc := createTestService("traefik", "traefik", nil)
 
-	// First Add
+	// First Acquire.
 	objectName1 := ServiceNamespacedName(svc)
 
 	ctx1, leaseID1 := getSvcData(svc)
@@ -1465,7 +1465,7 @@ func TestManager_NonCommonLease_WaitForLeaseContextDone(t *testing.T) {
 	// Now simulate the first leader election ending (defer deletes the lease)
 	mgr.Delete(leaseID1, objectName1, nil)
 
-	// The lease context should now be cancelled (because counter went to 0)
+	// The Lease context should now be cancelled because its only registration was removed.
 	// Duplicate Acquire does not add another registration; a second delete is a no-op.
 	mgr.Delete(leaseID2, objectName1, nil)
 
@@ -1701,7 +1701,7 @@ func TestManager_Acquire_AfterRetirementReturnsFreshLease(t *testing.T) {
 }
 
 // TestManager_LeaseLifetimeInvariant pins the lifetime rule for the whole
-// Add/Delete surface rather than one scenario: a lease stays usable for exactly as
+// Acquire/Delete surface rather than one scenario: a lease stays usable for exactly as
 // long as at least one object still holds it, and is replaced afterwards.
 //
 // That is the property the common lease depends on, and the one a per-lease
