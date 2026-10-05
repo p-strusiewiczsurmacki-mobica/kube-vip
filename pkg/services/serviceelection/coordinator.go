@@ -587,7 +587,7 @@ func (c *coordinator) activationStillValid(member *member, svcLease *lease.Lease
 func (c *coordinator) memberValidForActivationLocked(member *member, svcLease *lease.Lease,
 	campaign *campaign) bool {
 	return !c.retired && c.membership.lease == svcLease && c.campaigns.current == campaign &&
-		campaign != nil && !campaign.stopped && campaign.election.IsLeading() &&
+		campaign != nil && campaign.ctx.Err() == nil && !campaign.stopped && campaign.election.IsLeading() &&
 		c.membership.members[member.service.UID] == member
 }
 
