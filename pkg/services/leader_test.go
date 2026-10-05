@@ -3,6 +3,7 @@ package services
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"sync"
@@ -652,6 +653,95 @@ func TestSharedElectionReadinessIsMemberLocal(t *testing.T) {
 	if err := <-secondDone; err != nil {
 		t.Fatalf("second service election error = %v", err)
 	}
+}
+
+func TestSharedElectionRetriesFailedMemberWithoutRestartingCampaign(t *testing.T) {
+	releaseLeading := make(chan struct{})
+	var releaseLeadingOnce sync.Once
+	releaseLeadership := func() {
+		releaseLeadingOnce.Do(func() { close(releaseLeading) })
+	}
+	runner := &electionTestRunner{started: make(chan struct{}), releaseLeading: releaseLeading}
+	var activationMutex sync.Mutex
+	activationCalls := make(map[types.UID]int)
+	p := &Processor{
+		serviceLock: newTestServiceLocks(),
+		config:      &kubevip.Config{},
+		leaseMgr:    lease.NewManager(),
+	}
+	initializeTestElectionCoordinators(p,
+		withTestCampaignRunner(runner),
+		withTestRestartScheduler(immediateRestartScheduler{}),
+		withTestElectionActivation(func(_ context.Context, service *v1.Service,
+			_ *servicecontext.Context, _ *sync.WaitGroup) error {
+			activationMutex.Lock()
+			defer activationMutex.Unlock()
+			activationCalls[service.UID]++
+			if service.UID == types.UID("failing") && activationCalls[service.UID] == 1 {
+				return errors.New("transient datapath failure")
+			}
+			return nil
+		}),
+	)
+	annotations := map[string]string{kubevip.ServiceLease: "shared"}
+	failingService := &v1.Service{ObjectMeta: metav1.ObjectMeta{
+		Name: "failing", Namespace: "default", UID: types.UID("failing"), Annotations: annotations,
+	}, Spec: v1.ServiceSpec{LoadBalancerIP: "192.0.2.10"}}
+	healthyService := &v1.Service{ObjectMeta: metav1.ObjectMeta{
+		Name: "healthy", Namespace: "default", UID: types.UID("healthy"), Annotations: annotations,
+	}, Spec: v1.ServiceSpec{LoadBalancerIP: "192.0.2.20"}}
+	failingCtx := servicecontext.New(context.Background())
+	healthyCtx := servicecontext.New(context.Background())
+	p.svcMap.Store(failingService.UID, failingCtx)
+	p.svcMap.Store(healthyService.UID, healthyCtx)
+	failingCtx.SignalReadiness()
+	healthyCtx.SignalReadiness()
+	failingGeneration := failingCtx.CurrentReadiness()
+	healthyGeneration := healthyCtx.CurrentReadiness()
+	t.Cleanup(func() {
+		releaseLeadership()
+		failingCtx.Cancel()
+		healthyCtx.Cancel()
+		p.electionCoordinators.Wait()
+	})
+
+	failingDone := make(chan error, 1)
+	healthyDone := make(chan error, 1)
+	go func() { failingDone <- p.StartServicesLeaderElection(failingCtx, failingService, nil) }()
+	go func() { healthyDone <- p.StartServicesLeaderElection(healthyCtx, healthyService, nil) }()
+	waitForElectionRunner(t, runner.started)
+	namespace, name := lease.ServiceName(failingService)
+	id := lease.NewID(p.config.LeaderElectionType, namespace, name)
+	waitForLeaseVIPCount(t, p.leaseMgr, id, 2)
+
+	releaseLeadership()
+	waitForCondition(t, func() bool {
+		activationMutex.Lock()
+		defer activationMutex.Unlock()
+		return activationCalls[failingService.UID] == 2 && activationCalls[healthyService.UID] == 1
+	}, "failed member retry without healthy sibling reactivation")
+
+	if got := runner.starts.Load(); got != 1 {
+		t.Fatalf("campaign starts = %d, want 1", got)
+	}
+	sharedLease := p.leaseMgr.Get(id)
+	if sharedLease == nil || !sharedLease.IsLeading() {
+		t.Fatal("member retry replaced or stopped the leading campaign")
+	}
+	if !failingCtx.ReadinessGenerationCurrent(failingGeneration) ||
+		!healthyCtx.ReadinessGenerationCurrent(healthyGeneration) {
+		t.Fatal("member retry changed endpoint readiness generation")
+	}
+
+	failingCtx.Cancel()
+	healthyCtx.Cancel()
+	if err := <-failingDone; err != nil {
+		t.Fatalf("failing Service election error: %v", err)
+	}
+	if err := <-healthyDone; err != nil {
+		t.Fatalf("healthy Service election error: %v", err)
+	}
+	p.electionCoordinators.Wait()
 }
 
 func TestElectionShutdownWaitsForControlPlaneToReleaseServiceOwnedCampaign(t *testing.T) {
