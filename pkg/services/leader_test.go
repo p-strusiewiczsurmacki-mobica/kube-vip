@@ -57,9 +57,17 @@ func TestStartServicesLeaderElectionTracksSharedMembersAcrossReadinessLoss(t *te
 	}, Spec: v1.ServiceSpec{LoadBalancerIP: "192.0.2.20"}}
 	namespace, name := lease.ServiceName(firstService)
 	id := lease.NewID(p.config.LeaderElectionType, namespace, name)
-	sharedLease := p.leaseMgr.Add(context.Background(), id)
+	externalToken := lease.ObjectName(id, "external")
+	sharedLease, added := p.leaseMgr.Acquire(context.Background(), id, externalToken, nil)
+	if !added {
+		t.Fatal("external election participant was not registered")
+	}
 	externalParticipation := sharedLease.JoinElection()
 	externalElection := externalParticipation.Session
+	t.Cleanup(func() {
+		externalElection.Stopped()
+		p.leaseMgr.Delete(id, externalToken, sharedLease)
+	})
 	if !externalParticipation.RunsCampaign() || !externalElection.Started() {
 		t.Fatal("external election did not become leader")
 	}
@@ -101,6 +109,8 @@ func TestStartServicesLeaderElectionTracksSharedMembersAcrossReadinessLoss(t *te
 	if err := <-secondDone; err != nil {
 		t.Fatalf("second member returned error: %v", err)
 	}
+	externalElection.Stopped()
+	p.leaseMgr.Delete(id, externalToken, sharedLease)
 	if p.leaseMgr.Get(id) != nil {
 		t.Fatal("final shared member withdrawal did not retire the lease")
 	}
@@ -360,7 +370,10 @@ func TestStartServicesLeaderElectionRecreatesCancelledLease(t *testing.T) {
 	service := &v1.Service{ObjectMeta: metav1.ObjectMeta{Name: "recreate", Namespace: "default", UID: types.UID("recreate")}}
 	namespace, name := lease.ServiceName(service)
 	id := lease.NewID(p.config.LeaderElectionType, namespace, name)
-	oldLease := p.leaseMgr.Add(context.Background(), id)
+	oldLease, added := p.leaseMgr.Acquire(context.Background(), id, lease.ServiceNamespacedName(service), nil)
+	if !added {
+		t.Fatal("old Service participant was not registered")
+	}
 	oldLease.Cancel()
 	svcCtx := servicecontext.New(context.Background())
 	p.svcMap.Store(service.UID, svcCtx)
