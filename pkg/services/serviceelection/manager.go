@@ -120,7 +120,7 @@ func (m *Manager) Watch(svcCtx *servicecontext.Context, service *v1.Service) {
 				continue
 			}
 		}
-		member.coordinator.startCampaign(&m.campaignWG)
+		member.coordinator.admitToCampaign(&m.campaignWG, member)
 
 		select {
 		case <-svcCtx.Ctx.Done():
