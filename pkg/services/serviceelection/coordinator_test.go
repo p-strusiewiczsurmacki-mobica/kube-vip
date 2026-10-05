@@ -438,6 +438,52 @@ func TestStoppingCampaignCancelsPendingMemberActivationRetry(t *testing.T) {
 	coordinator.closeMember(healthyMember)
 }
 
+func TestCanceledCampaignRejectsPendingMemberActivationRetry(t *testing.T) {
+	scheduler := &queuedRestartScheduler{}
+	manager, adapter, _ := newTestManagerWithScheduler(scheduler)
+	annotations := map[string]string{kubevip.ServiceLease: "shared"}
+	failingService := &v1.Service{ObjectMeta: metav1.ObjectMeta{
+		Name: "failing", Namespace: "default", UID: "failing", Annotations: annotations,
+	}}
+	healthyService := &v1.Service{ObjectMeta: metav1.ObjectMeta{
+		Name: "healthy", Namespace: "default", UID: "healthy", Annotations: annotations,
+	}}
+	failingMember := readyMember(t, manager, adapter, failingService)
+	healthyMember := readyMember(t, manager, adapter, healthyService)
+
+	attempts := 0
+	adapter.activate = func(service *v1.Service) error {
+		if service.UID == failingService.UID {
+			attempts++
+			return errors.New("datapath failure")
+		}
+		return nil
+	}
+	coordinator := failingMember.coordinator
+	start := coordinator.newCampaignCandidate()
+	start.campaign.election.Started()
+	leaderCtx, cancelLeader := context.WithCancel(start.campaign.ctx)
+	defer cancelLeader()
+	coordinator.activateMembers(leaderCtx, start.lease, start.campaign, &sync.WaitGroup{})
+	retry := scheduler.next(t)
+
+	start.campaign.cancel()
+	if retry.ctx.Err() == nil {
+		t.Fatal("canceling campaign did not cancel member activation retry context")
+	}
+	scheduler.runNext(t)
+	if attempts != 1 {
+		t.Fatalf("canceled campaign activation attempts = %d, want 1", attempts)
+	}
+	if got := scheduler.count(); got != 0 {
+		t.Fatalf("retries scheduled after campaign cancellation = %d, want 0", got)
+	}
+
+	coordinator.stopCampaign(start.lease, start.campaign)
+	coordinator.closeMember(failingMember)
+	coordinator.closeMember(healthyMember)
+}
+
 func TestNewManagerRejectsMissingDependencies(t *testing.T) {
 	manager, err := NewManager(nil)
 	if err == nil {
