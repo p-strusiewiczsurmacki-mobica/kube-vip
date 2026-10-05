@@ -772,24 +772,24 @@ func TestManagerClaimRegistersConcurrentMemberOnce(t *testing.T) {
 	manager.Delete(id, objectName, lease)
 }
 
-// TestManager_Add_NewLease tests adding a new service with a new lease
-func TestManager_Add_NewLease(t *testing.T) {
+// TestManager_Acquire_NewLease tests acquiring a new Lease for a new Service.
+func TestManager_Acquire_NewLease(t *testing.T) {
 	mgr := NewManager()
 	svc := createTestService("test-svc", "default", nil)
 
-	leaseID := mgr.Add(getSvcData(svc))
-	isNew := leaseID.Add(ServiceNamespacedName(svc))
+	ctx, id := getSvcData(svc)
+	serviceLease, isNew := mgr.Acquire(ctx, id, ServiceNamespacedName(svc), nil)
 
 	if !isNew {
-		t.Error("expected isNew to be true for first Add")
+		t.Error("expected isNew to be true for first Acquire")
 	}
-	if leaseID == nil {
+	if serviceLease == nil {
 		t.Fatal("expected lease to be non-nil")
 	}
-	if leaseID.Ctx == nil {
+	if serviceLease.Ctx == nil {
 		t.Error("expected lease context to be non-nil")
 	}
-	if leaseID.Cancel == nil {
+	if serviceLease.Cancel == nil {
 		t.Error("expected lease cancel func to be non-nil")
 	}
 }
@@ -850,8 +850,7 @@ func TestManager_Delete_CancelsContext(t *testing.T) {
 	objectName := ServiceNamespacedName(svc)
 
 	ctx1, leaseID1 := getSvcData(svc)
-	lease1 := mgr.Add(ctx1, leaseID1)
-	_ = lease1.Add(objectName)
+	lease1, _ := mgr.Acquire(ctx1, leaseID1, objectName, nil)
 
 	// Verify context is not cancelled
 	select {
@@ -873,22 +872,20 @@ func TestManager_Delete_CancelsContext(t *testing.T) {
 	}
 }
 
-// TestManager_Add_AfterDelete_CreatesNewLease tests adding a service after deleting it
-func TestManager_Add_AfterDelete_CreatesNewLease(t *testing.T) {
+// TestManager_Acquire_AfterDelete_CreatesNewLease tests acquiring a Service after deleting it.
+func TestManager_Acquire_AfterDelete_CreatesNewLease(t *testing.T) {
 	mgr := NewManager()
 	svc := createTestService("test-svc", "default", nil)
 
 	objectName := ServiceNamespacedName(svc)
 
 	ctx1, leaseID1 := getSvcData(svc)
-	lease1 := mgr.Add(ctx1, leaseID1)
-	_ = lease1.Add(objectName)
+	lease1, _ := mgr.Acquire(ctx1, leaseID1, objectName, nil)
 
 	mgr.Delete(leaseID1, objectName, nil)
 
 	ctx2, leaseID2 := getSvcData(svc)
-	lease2 := mgr.Add(ctx2, leaseID2)
-	isNew := lease2.Add(objectName)
+	lease2, isNew := mgr.Acquire(ctx2, leaseID2, objectName, nil)
 
 	if !isNew {
 		t.Error("expected isNew to be true after delete and re-add")
@@ -1123,11 +1120,10 @@ func TestManager_LeaderElectionRestartScenario_etcd(t *testing.T) {
 	objectName1 := ServiceNamespacedName(svc)
 
 	ctx1, leaseID1 := getSvcData(svc)
-	lease1 := mgr.Add(ctx1, leaseID1)
-	isNew1 := lease1.Add(objectName1)
+	lease1, isNew1 := mgr.Acquire(ctx1, leaseID1, objectName1, nil)
 
 	if !isNew1 {
-		t.Fatal("expected first add to return isNew=true")
+		t.Fatal("expected first acquire to return isNew=true")
 	}
 
 	// Simulate leadership acquired.
@@ -1144,10 +1140,9 @@ func TestManager_LeaderElectionRestartScenario_etcd(t *testing.T) {
 
 	// Simulate restartable service watcher calling StartServicesLeaderElection again
 	ctx2, leaseID2 := getSvcData(svc)
-	lease2 := mgr.Add(ctx2, leaseID2)
-	isNew2 := lease2.Add(objectName1)
+	lease2, isNew2 := mgr.Acquire(ctx2, leaseID2, objectName1, nil)
 	if !isNew2 {
-		t.Fatal("expected second add after delete to return isNew=true")
+		t.Fatal("expected second acquire after delete to return isNew=true")
 	}
 
 	// Verify we got a new lease with no elected leader.
@@ -1393,8 +1388,7 @@ func TestManager_RestartAfterLeaseContextCancelled(t *testing.T) {
 	objectName1 := ServiceNamespacedName(svc)
 
 	ctx1, leaseID1 := getSvcData(svc)
-	lease1 := mgr.Add(ctx1, leaseID1)
-	_ = lease1.Add(objectName1)
+	lease1, _ := mgr.Acquire(ctx1, leaseID1, objectName1, nil)
 
 	// Cancel context before Started is closed
 	lease1.Cancel()
@@ -1407,10 +1401,9 @@ func TestManager_RestartAfterLeaseContextCancelled(t *testing.T) {
 		t.Error("expected lease to be removed after delete")
 	}
 
-	// Add again - should create new lease
+	// Acquire again - should create a new Lease.
 	ctx2, leaseID2 := getSvcData(svc)
-	lease2 := mgr.Add(ctx2, leaseID2)
-	isNew2 := lease1.Add(objectName1)
+	lease2, isNew2 := mgr.Acquire(ctx2, leaseID2, objectName1, nil)
 
 	if !isNew2 {
 		t.Error("expected new lease after delete")
@@ -1653,14 +1646,12 @@ func TestManager_Delete_DoesNotCancelRecreatedLease(t *testing.T) {
 	objectName := ServiceNamespacedName(svc)
 
 	// The service is set up, and its lease is registered.
-	old := mgr.Add(ctx, id)
-	old.Add(objectName)
+	old, _ := mgr.Acquire(ctx, id, objectName, nil)
 
 	// The service is torn down and rebuilt straight away, so a fresh lease for the
 	// same name exists before the old cleanup goroutine gets to run.
 	mgr.Delete(id, objectName, old)
-	fresh := mgr.Add(ctx, id)
-	fresh.Add(objectName)
+	fresh, _ := mgr.Acquire(ctx, id, objectName, nil)
 
 	if old == fresh {
 		t.Fatal("expected a new lease instance after delete")
@@ -1708,33 +1699,24 @@ func TestManagerDeleteDoesNotCancelReplacementAfterDirectLeaseCancellation(t *te
 	manager.Delete(id, objectName, fresh)
 }
 
-// TestManager_Add_AfterCancelWithoutDelete_ReusesDoomedLease reproduces the
+// TestManager_Acquire_AfterRetirementReturnsFreshLease reproduces the
 // second half of the service rebuild race.
 //
-// A teardown cancels the service context but leaves the lease in the manager,
-// because the cleanup that removes it is deferred to a goroutine. If the
-// replacement service context is built before that goroutine runs, Add hands
-// back the very same lease instance, so the replacement is parented to a lease
-// that is about to be cancelled. The instance guard in Delete cannot help,
-// because the doomed lease and the current lease are the same object.
-//
-// Retiring the lease synchronously during teardown is what makes Add return a
-// genuinely fresh instance.
-func TestManager_Add_AfterCancelWithoutDelete_ReusesDoomedLease(t *testing.T) {
+// Retiring the Lease synchronously during teardown ensures that a subsequent
+// Acquire returns a genuinely fresh instance before deferred cleanup runs.
+func TestManager_Acquire_AfterRetirementReturnsFreshLease(t *testing.T) {
 	mgr := NewManager()
 	svc := createTestService("test-svc", "default", nil)
 	ctx, id := getSvcData(svc)
 	objectName := ServiceNamespacedName(svc)
 
-	old := mgr.Add(ctx, id)
-	old.Add(objectName)
+	old, _ := mgr.Acquire(ctx, id, objectName, nil)
 
 	// Teardown drops the service from its lease synchronously, so the rebuild that
 	// follows cannot be parented to it even though the deferred cleanup has not run.
 	mgr.Delete(id, objectName, old)
 
-	fresh := mgr.Add(ctx, id)
-	fresh.Add(objectName)
+	fresh, _ := mgr.Acquire(ctx, id, objectName, nil)
 
 	if fresh == old {
 		t.Fatal("replacement service context would be parented to the doomed lease")
