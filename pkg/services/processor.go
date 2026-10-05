@@ -205,12 +205,6 @@ func (p *Processor) Reconcile(ctx context.Context, event watch.Event, serviceFun
 	}(); err != nil {
 		return err
 	}
-	if svcCtx != nil && svcCtx.Ctx.Err() != nil {
-		svcCtx, err = p.ensureServiceContext(ctx, svc)
-		if err != nil {
-			return fmt.Errorf("replace cancelled service context: %w", err)
-		}
-	}
 
 	// The modified event should only be triggered if the service has been modified (i.e. moved somewhere else)
 	if event.Type == watch.Modified {
