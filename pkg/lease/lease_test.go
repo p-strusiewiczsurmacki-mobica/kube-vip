@@ -76,6 +76,13 @@ func electLease(t *testing.T, lease *Lease) *ElectionSession {
 	return election
 }
 
+func newTestLease(t *testing.T) *Lease {
+	t.Helper()
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	return newLease(ctx, cancel)
+}
+
 func TestManagerAcquireRegistersMembership(t *testing.T) {
 	manager := NewManager()
 	service := createTestService("service", "default", nil)
@@ -205,9 +212,7 @@ func TestElectionContextCancellationDoesNotCancelSharedLease(t *testing.T) {
 }
 
 func TestWaitForElectionEndObservesRapidRestart(t *testing.T) {
-	manager := NewManager()
-	service := createTestService("service", "default", nil)
-	serviceLease := manager.Add(context.Background(), getSvcID(service))
+	serviceLease := newTestLease(t)
 	firstParticipation := serviceLease.JoinElection()
 	if !firstParticipation.RunsCampaign() {
 		t.Fatal("first election did not start")
@@ -253,9 +258,7 @@ func TestManagerClaimDoesNotCreateRetiredLease(t *testing.T) {
 }
 
 func TestLeaseElectionStateCoordinatesCandidates(t *testing.T) {
-	leaseCtx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	lease := newLease(leaseCtx, cancel)
+	lease := newTestLease(t)
 
 	participation := lease.JoinElection()
 	if !participation.RunsCampaign() {
@@ -289,9 +292,7 @@ func TestLeaseElectionStateCoordinatesCandidates(t *testing.T) {
 }
 
 func TestElectionSessionStaleStopCannotStopReplacement(t *testing.T) {
-	leaseCtx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	serviceLease := newLease(leaseCtx, cancel)
+	serviceLease := newTestLease(t)
 
 	firstParticipation := serviceLease.JoinElection()
 	first := firstParticipation.Session
@@ -327,9 +328,7 @@ func TestElectionSessionStaleStopCannotStopReplacement(t *testing.T) {
 }
 
 func TestElectionSessionWaitForLeaderDoesNotAdoptReplacement(t *testing.T) {
-	leaseCtx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	serviceLease := newLease(leaseCtx, cancel)
+	serviceLease := newTestLease(t)
 
 	firstParticipation := serviceLease.JoinElection()
 	if !firstParticipation.RunsCampaign() {
@@ -356,9 +355,7 @@ func TestElectionSessionWaitForLeaderDoesNotAdoptReplacement(t *testing.T) {
 }
 
 func TestElectionSessionWaitForEndObservesRapidReplacement(t *testing.T) {
-	leaseCtx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	serviceLease := newLease(leaseCtx, cancel)
+	serviceLease := newTestLease(t)
 
 	firstParticipation := serviceLease.JoinElection()
 	first := firstParticipation.Session
@@ -385,9 +382,7 @@ func TestElectionSessionWaitForEndObservesRapidReplacement(t *testing.T) {
 }
 
 func TestElectionSessionBroadcastsTransitionsToAllObservers(t *testing.T) {
-	leaseCtx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	serviceLease := newLease(leaseCtx, cancel)
+	serviceLease := newTestLease(t)
 
 	ownerParticipation := serviceLease.JoinElection()
 	if !ownerParticipation.RunsCampaign() {
@@ -441,9 +436,7 @@ func TestElectionSessionBroadcastsTransitionsToAllObservers(t *testing.T) {
 }
 
 func TestElectionSessionBroadcastsCandidateStopToAllObservers(t *testing.T) {
-	leaseCtx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	serviceLease := newLease(leaseCtx, cancel)
+	serviceLease := newTestLease(t)
 
 	ownerParticipation := serviceLease.JoinElection()
 	if !ownerParticipation.RunsCampaign() {
@@ -472,9 +465,7 @@ func TestElectionSessionBroadcastsCandidateStopToAllObservers(t *testing.T) {
 }
 
 func TestElectionSessionPreservesRapidStartStopResult(t *testing.T) {
-	leaseCtx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	serviceLease := newLease(leaseCtx, cancel)
+	serviceLease := newTestLease(t)
 
 	ownerParticipation := serviceLease.JoinElection()
 	if !ownerParticipation.RunsCampaign() {
@@ -495,9 +486,7 @@ func TestElectionSessionPreservesRapidStartStopResult(t *testing.T) {
 }
 
 func TestElectionSessionWaitForEndReturnsBeforeLeadership(t *testing.T) {
-	leaseCtx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	serviceLease := newLease(leaseCtx, cancel)
+	serviceLease := newTestLease(t)
 
 	participation := serviceLease.JoinElection()
 	if !participation.RunsCampaign() {
@@ -531,9 +520,7 @@ func waitForElectionBoolResults(t *testing.T, results <-chan bool, count int, wa
 }
 
 func TestLeaseWaitForLeaderReturnsWhenCandidateStops(t *testing.T) {
-	leaseCtx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	lease := newLease(leaseCtx, cancel)
+	lease := newTestLease(t)
 	participation := lease.JoinElection()
 	if !participation.RunsCampaign() {
 		t.Fatal("candidate was not admitted")
@@ -566,9 +553,7 @@ func TestLeaseWaitForLeaderReturnsWhenCandidateStops(t *testing.T) {
 // waiter must be able to begin its own election immediately instead of being
 // left with no active runner.
 func TestLeaseSupportsRetakingElectionAfterCandidateStops(t *testing.T) {
-	leaseCtx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	lease := newLease(leaseCtx, cancel)
+	lease := newTestLease(t)
 	participation := lease.JoinElection()
 	if !participation.RunsCampaign() {
 		t.Fatal("candidate was not admitted")
@@ -601,9 +586,7 @@ func TestLeaseSupportsRetakingElectionAfterCandidateStops(t *testing.T) {
 }
 
 func TestLeaseWaitForElectionEndReleasesFollowers(t *testing.T) {
-	leaseCtx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	lease := newLease(leaseCtx, cancel)
+	lease := newTestLease(t)
 	participation := lease.JoinElection()
 	if !participation.RunsCampaign() {
 		t.Fatal("candidate was not admitted")
