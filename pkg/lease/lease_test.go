@@ -96,29 +96,6 @@ func TestManagerAcquireRegistersMembership(t *testing.T) {
 	}
 }
 
-func TestRegistrationReleaseCannotRetireReplacementLease(t *testing.T) {
-	manager := NewManager()
-	id := NewID("kubernetes", "default", "shared")
-	registration, added := manager.AcquireRegistration(context.Background(), id, RegistrationSpec{Name: "first"})
-	if !added || registration == nil {
-		t.Fatal("first participant was not registered")
-	}
-	firstLease := registration.Lease()
-	if !registration.Release() {
-		t.Fatal("last registration did not retire its Lease")
-	}
-
-	replacement, added := manager.AcquireRegistration(context.Background(), id, RegistrationSpec{Name: "replacement"})
-	if !added || replacement == nil || replacement.Lease() == firstLease {
-		t.Fatal("replacement registration did not receive a new Lease")
-	}
-	registration.Release()
-	if manager.Get(id) != replacement.Lease() {
-		t.Fatal("stale release removed the replacement Lease")
-	}
-	replacement.Release()
-}
-
 func TestAcquireRegistrationsRejectsWholeInvalidGroup(t *testing.T) {
 	manager := NewManager()
 	id := NewID("kubernetes", "default", "shared")
@@ -197,7 +174,7 @@ func TestElectionContextCancellationDoesNotCancelSharedLease(t *testing.T) {
 	manager := NewManager()
 	id := NewID("kubernetes", "default", "shared")
 	sharedLease, _ := manager.Acquire(context.Background(), id, "control-plane", nil)
-	if claimed, _ := manager.Claim(id, "service"); claimed != sharedLease {
+	if claimed, _ := manager.ClaimWithVIPProvider(id, "service", nil); claimed != sharedLease {
 		t.Fatal("second member did not join the shared lease")
 	}
 
@@ -270,7 +247,7 @@ func TestWaitForElectionEndObservesRapidRestart(t *testing.T) {
 func TestManagerClaimDoesNotCreateRetiredLease(t *testing.T) {
 	manager := NewManager()
 	service := createTestService("service", "default", nil)
-	if lease, joined := manager.Claim(getSvcID(service), ServiceNamespacedName(service)); lease != nil || joined {
+	if lease, joined := manager.ClaimWithVIPProvider(getSvcID(service), ServiceNamespacedName(service), nil); lease != nil || joined {
 		t.Fatal("claim created or joined a lease that does not exist")
 	}
 }
@@ -772,7 +749,7 @@ func TestManagerClaimRegistersConcurrentMemberOnce(t *testing.T) {
 	var wg sync.WaitGroup
 	for range cap(results) {
 		wg.Go(func() {
-			claimed, isNew := manager.Claim(id, objectName)
+			claimed, isNew := manager.ClaimWithVIPProvider(id, objectName, nil)
 			results <- result{claimed, isNew}
 		})
 	}

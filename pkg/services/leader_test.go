@@ -209,7 +209,7 @@ func TestDelayedElectionActivationDoesNotRestoreDeletedService(t *testing.T) {
 		t.Fatal("Service-owned election did not become leader")
 	}
 	controlPlaneToken := lease.ObjectName(id, "cp")
-	if claimed, _ := p.leaseMgr.Claim(id, controlPlaneToken); claimed != sharedLease {
+	if claimed, _ := p.leaseMgr.ClaimWithVIPProvider(id, controlPlaneToken, nil); claimed != sharedLease {
 		t.Fatal("control plane did not join the Service-owned lease")
 	}
 	t.Cleanup(func() {
@@ -770,7 +770,7 @@ func TestElectionShutdownWaitsForControlPlaneToReleaseServiceOwnedCampaign(t *te
 	waitForElectionRunner(t, runner.started)
 	sharedLease := p.leaseMgr.Get(id)
 	controlPlaneToken := lease.ObjectName(id, "cp")
-	if claimed, _ := p.leaseMgr.Claim(id, controlPlaneToken); claimed != sharedLease {
+	if claimed, _ := p.leaseMgr.ClaimWithVIPProvider(id, controlPlaneToken, nil); claimed != sharedLease {
 		t.Fatal("control plane did not join the Service-owned lease")
 	}
 
@@ -841,7 +841,7 @@ func TestServiceWatcherWaitGroupDoesNotOwnCampaignRetainedByControlPlane(t *test
 		t.Fatal("Service-owned campaign did not acquire its lease")
 	}
 	controlPlaneToken := lease.ObjectName(id, "cp")
-	if claimed, _ := p.leaseMgr.Claim(id, controlPlaneToken); claimed != sharedLease {
+	if claimed, _ := p.leaseMgr.ClaimWithVIPProvider(id, controlPlaneToken, nil); claimed != sharedLease {
 		t.Fatal("control plane did not join the Service-owned lease")
 	}
 	t.Cleanup(func() {
@@ -984,7 +984,7 @@ func TestServicesWatcherReturnsWatchErrorWhileControlPlaneRetainsCampaign(t *tes
 		t.Fatal("Service-owned campaign did not acquire its lease")
 	}
 	controlPlaneToken := lease.ObjectName(id, "cp")
-	if claimed, _ := p.leaseMgr.Claim(id, controlPlaneToken); claimed != sharedLease {
+	if claimed, _ := p.leaseMgr.ClaimWithVIPProvider(id, controlPlaneToken, nil); claimed != sharedLease {
 		t.Fatal("control plane did not join the Service-owned lease")
 	}
 	t.Cleanup(func() {
@@ -1058,7 +1058,7 @@ func TestServiceOwnedCampaignPublishesLeadershipAfterFinalServiceLeaves(t *testi
 		t.Fatal("Service-owned campaign did not acquire its lease")
 	}
 	controlPlaneToken := lease.ObjectName(id, "cp")
-	if claimed, _ := p.leaseMgr.Claim(id, controlPlaneToken); claimed != sharedLease {
+	if claimed, _ := p.leaseMgr.ClaimWithVIPProvider(id, controlPlaneToken, nil); claimed != sharedLease {
 		t.Fatal("control plane did not join the Service-owned lease")
 	}
 	t.Cleanup(func() {

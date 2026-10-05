@@ -586,25 +586,6 @@ func serviceVIPAddresses(service *v1.Service) []string {
 	return addresses
 }
 
-// ElectionVIPs returns configured Service VIPs in stable Service creation order.
-func (p *Processor) ElectionVIPs(ctx context.Context) ([]string, error) {
-	if p == nil || p.clientSet == nil {
-		return nil, nil
-	}
-	serviceList, err := p.clientSet.CoreV1().Services(p.config.ServiceNamespace).List(ctx, metav1.ListOptions{})
-	if err != nil {
-		return nil, fmt.Errorf("list Services for election VIP metadata: %w", err)
-	}
-	services := make([]*v1.Service, 0, len(serviceList.Items))
-	for index := range serviceList.Items {
-		service := &serviceList.Items[index]
-		if p.serviceOwnsRecoverableVIP(service) {
-			services = append(services, service)
-		}
-	}
-	return instance.OrderedServiceAddresses(services), nil
-}
-
 func (p *Processor) Delete(event watch.Event, forcedOnly bool) error {
 	svc, ok := event.Object.(*v1.Service)
 	if !ok || svc == nil {
@@ -877,27 +858,6 @@ func (p *Processor) serviceInstances() []*instance.Instance {
 	return append([]*instance.Instance(nil), p.ServiceInstances...)
 }
 
-// ServiceSnapshots returns stable copies for external observers such as
-// diagnostics. It acquires each instance's Service lock while copying.
-func (p *Processor) ServiceSnapshots() []*v1.Service {
-	instances := p.serviceInstances()
-	snapshots := make([]*v1.Service, 0, len(instances))
-	for _, inst := range instances {
-		if inst == nil {
-			continue
-		}
-		uid := inst.UID()
-		p.serviceLock.Lock(uid)
-		if inst.ServiceSnapshot != nil {
-			snapshots = append(snapshots, inst.ServiceSnapshot.DeepCopy())
-		}
-		if err := p.serviceLock.Unlock(uid); err != nil {
-			log.Error("failed to release service lock", "uid", uid, "err", err)
-		}
-	}
-	return snapshots
-}
-
 // OwnedServiceVIPs returns the VIPs whose Service datapath is currently active.
 // It is safe to use as a dynamic provider for Lease ownership metadata.
 func (p *Processor) OwnedServiceVIPs() []string {
@@ -913,7 +873,7 @@ func (p *Processor) refreshOwnedServiceVIPs() {
 	defer p.ownedVIPsMu.Unlock()
 
 	instances := p.serviceInstances()
-	services := make([]*v1.Service, 0, len(instances))
+	vips := make([]string, 0)
 	for _, inst := range instances {
 		if inst == nil {
 			continue
@@ -921,13 +881,13 @@ func (p *Processor) refreshOwnedServiceVIPs() {
 		uid := inst.UID()
 		p.serviceLock.Lock(uid)
 		if inst.AddCalled && inst.ServiceSnapshot != nil {
-			services = append(services, inst.ServiceSnapshot.DeepCopy())
+			addresses, _ := instance.FetchServiceAddresses(inst.ServiceSnapshot)
+			vips = append(vips, addresses...)
 		}
 		if err := p.serviceLock.Unlock(uid); err != nil {
 			log.Error("failed to release service lock", "uid", uid, "err", err)
 		}
 	}
-	vips := instance.OrderedServiceAddresses(services)
 	p.ownedServiceVIPs.Store(&vips)
 }
 
