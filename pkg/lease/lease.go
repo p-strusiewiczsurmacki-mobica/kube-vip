@@ -66,7 +66,7 @@ func (m *Manager) Acquire(ctx context.Context, id ID, objectName string,
 	defer m.lock.Unlock()
 
 	lease := m.addLocked(ctx, id)
-	return lease, lease.AddWithVIPProvider(objectName, vipProvider)
+	return lease, lease.addWithVIPProvider(objectName, vipProvider)
 }
 
 // AcquireRegistrations atomically registers all supplied participants against
@@ -103,7 +103,7 @@ func (m *Manager) ClaimWithVIPProvider(id ID, objectName string, vipProvider VIP
 	if !exists {
 		return nil, false
 	}
-	return lease, lease.AddWithVIPProvider(objectName, vipProvider)
+	return lease, lease.addWithVIPProvider(objectName, vipProvider)
 }
 
 // ClaimRegistration registers a participant against an existing Lease and
@@ -279,9 +279,9 @@ func (l *Lease) NewElectionContext(parent context.Context) (context.Context, con
 	}
 }
 
-// AddWithVIPProvider adds an object and its VIP ownership provider to the
+// addWithVIPProvider adds an object and its VIP ownership provider to the
 // lease. Re-adding the same object leaves the original registration intact.
-func (l *Lease) AddWithVIPProvider(name string, vipProvider VIPProvider) bool {
+func (l *Lease) addWithVIPProvider(name string, vipProvider VIPProvider) bool {
 	l.membersMu.Lock()
 	defer l.membersMu.Unlock()
 	if _, exists := l.services[name]; exists {
