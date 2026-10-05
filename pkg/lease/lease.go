@@ -57,13 +57,6 @@ func NewManager() *Manager {
 	}
 }
 
-// Add creates or retrieves the lease identified by id.
-func (m *Manager) Add(ctx context.Context, id ID) *Lease {
-	m.lock.Lock()
-	defer m.lock.Unlock()
-	return m.addLocked(ctx, id)
-}
-
 // Acquire creates or retrieves a lease and atomically registers objectName
 // together with its current VIP ownership provider. The returned bool reports
 // whether this object was newly registered.
