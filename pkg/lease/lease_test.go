@@ -895,8 +895,8 @@ func TestManager_Acquire_AfterDelete_CreatesNewLease(t *testing.T) {
 	}
 }
 
-// TestManager_Add_DifferentServices tests adding services with different names
-func TestManager_Add_DifferentServices(t *testing.T) {
+// TestManager_Acquire_DifferentServices tests acquiring Services with different names.
+func TestManager_Acquire_DifferentServices(t *testing.T) {
 	mgr := NewManager()
 	svc1 := createTestService("svc1", "default", nil)
 	svc2 := createTestService("svc2", "default", nil)
@@ -904,25 +904,23 @@ func TestManager_Add_DifferentServices(t *testing.T) {
 	objectName1 := ServiceNamespacedName(svc1)
 
 	ctx1, leaseID1 := getSvcData(svc1)
-	lease1 := mgr.Add(ctx1, leaseID1)
-	isNew1 := lease1.Add(objectName1)
+	lease1, isNew1 := mgr.Acquire(ctx1, leaseID1, objectName1, nil)
 
 	objectName2 := ServiceNamespacedName(svc2)
 
 	ctx2, leaseID2 := getSvcData(svc2)
-	lease2 := mgr.Add(ctx2, leaseID2)
-	isNew2 := lease1.Add(objectName2)
+	lease2, isNew2 := mgr.Acquire(ctx2, leaseID2, objectName2, nil)
 
 	if !isNew1 || !isNew2 {
-		t.Error("expected both adds to return isNew=true")
+		t.Error("expected both acquires to return isNew=true")
 	}
 	if lease1 == lease2 {
 		t.Error("expected different leases for different services")
 	}
 }
 
-// TestManager_Add_SameNameDifferentNamespace tests adding services with the same name but different namespaces
-func TestManager_Add_SameNameDifferentNamespace(t *testing.T) {
+// TestManager_Acquire_SameNameDifferentNamespace tests acquiring Services with the same name in different namespaces.
+func TestManager_Acquire_SameNameDifferentNamespace(t *testing.T) {
 	mgr := NewManager()
 	svc1 := createTestService("test-svc", "namespace1", nil)
 	svc2 := createTestService("test-svc", "namespace2", nil)
@@ -930,17 +928,15 @@ func TestManager_Add_SameNameDifferentNamespace(t *testing.T) {
 	objectName1 := ServiceNamespacedName(svc1)
 
 	ctx1, leaseID1 := getSvcData(svc1)
-	lease1 := mgr.Add(ctx1, leaseID1)
-	isNew1 := lease1.Add(objectName1)
+	lease1, isNew1 := mgr.Acquire(ctx1, leaseID1, objectName1, nil)
 
 	objectName2 := ServiceNamespacedName(svc2)
 
 	ctx2, leaseID2 := getSvcData(svc2)
-	lease2 := mgr.Add(ctx2, leaseID2)
-	isNew2 := lease1.Add(objectName2)
+	lease2, isNew2 := mgr.Acquire(ctx2, leaseID2, objectName2, nil)
 
 	if !isNew1 || !isNew2 {
-		t.Error("expected both adds to return isNew=true")
+		t.Error("expected both acquires to return isNew=true")
 	}
 	if lease1 == lease2 {
 		t.Error("expected different leases for services in different namespaces")
@@ -1170,10 +1166,9 @@ func TestManager_CommonLeaseScenario(t *testing.T) {
 	objectName1 := ServiceNamespacedName(svc1)
 
 	ctx1, leaseID1 := getSvcData(svc1)
-	lease1 := mgr.Add(ctx1, leaseID1)
-	isNew1 := lease1.Add(objectName1)
+	lease1, isNew1 := mgr.Acquire(ctx1, leaseID1, objectName1, nil)
 	if !isNew1 {
-		t.Error("expected first add to return isNew=true")
+		t.Error("expected first acquire to return isNew=true")
 	}
 
 	// Simulate first service starting leadership.
@@ -1189,12 +1184,11 @@ func TestManager_CommonLeaseScenario(t *testing.T) {
 	objectName2 := ServiceNamespacedName(svc2)
 
 	ctx2, leaseID2 := getSvcData(svc2)
-	lease2 := mgr.Add(ctx2, leaseID2)
-	isNew2 := lease2.Add(objectName2)
+	lease2, isNew2 := mgr.Acquire(ctx2, leaseID2, objectName2, nil)
 
 	// Second service should get the same lease
 	if !isNew2 {
-		t.Error("expected second add with same lease name to return isNew=true")
+		t.Error("expected second acquire with same lease name to return isNew=true")
 	}
 	if lease1 != lease2 {
 		t.Error("expected same lease for services with same lease annotation")
@@ -1757,29 +1751,35 @@ func TestManager_LeaseLifetimeInvariant(t *testing.T) {
 				objects[i] = ServiceNamespacedName(createTestService(fmt.Sprintf("svc%d", i), "default", shared))
 			}
 
-			l := mgr.Add(ctx, id)
+			var serviceLease *Lease
 			for _, o := range objects {
-				if !l.Add(o) {
+				acquired, added := mgr.Acquire(ctx, id, o, nil)
+				if !added {
 					t.Fatalf("object %q was not added", o)
+				}
+				if serviceLease == nil {
+					serviceLease = acquired
+				} else if acquired != serviceLease {
+					t.Fatalf("object %q received a different shared Lease", o)
 				}
 			}
 
 			// Drop the objects one at a time. Every drop but the last has to leave
 			// the lease usable, because the rest still depend on it.
 			for i, o := range objects {
-				mgr.Delete(id, o, l)
+				mgr.Delete(id, o, serviceLease)
 
 				if remaining := len(objects) - i - 1; remaining > 0 {
-					if l.Ctx.Err() != nil {
+					if serviceLease.Ctx.Err() != nil {
 						t.Fatalf("lease was cancelled with %d object(s) still holding it", remaining)
 					}
-					if mgr.Get(id) != l {
+					if mgr.Get(id) != serviceLease {
 						t.Fatalf("lease was dropped with %d object(s) still holding it", remaining)
 					}
 					continue
 				}
 
-				if l.Ctx.Err() == nil {
+				if serviceLease.Ctx.Err() == nil {
 					t.Error("lease was not cancelled after its last object went away")
 				}
 				if mgr.Get(id) != nil {
@@ -1789,9 +1789,11 @@ func TestManager_LeaseLifetimeInvariant(t *testing.T) {
 
 			// A rebuild has to get a genuinely fresh lease, so nothing derived from it
 			// is cancelled by the teardown that just happened.
-			if fresh := mgr.Add(ctx, id); fresh == l || fresh.Ctx.Err() != nil {
+			fresh, added := mgr.Acquire(ctx, id, objects[0], nil)
+			if !added || fresh == serviceLease || fresh.Ctx.Err() != nil {
 				t.Error("rebuild reused the retired lease")
 			}
+			mgr.Delete(id, objects[0], fresh)
 		})
 	}
 }
