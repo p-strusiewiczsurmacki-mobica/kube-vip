@@ -13,6 +13,7 @@ import (
 
 	"github.com/kube-vip/kube-vip/pkg/arp"
 	"github.com/kube-vip/kube-vip/pkg/bgp"
+	"github.com/kube-vip/kube-vip/pkg/cluster"
 	"github.com/kube-vip/kube-vip/pkg/election"
 	"github.com/kube-vip/kube-vip/pkg/endpoints/providers"
 	"github.com/kube-vip/kube-vip/pkg/instance"
@@ -535,12 +536,9 @@ func (p *Processor) retainControlPlaneVIPs(ctx context.Context, holders map[stri
 }
 
 func configuredVIPAddresses(config *kubevip.Config) ([]string, bool) {
-	configured := config.VIP
-	if config.Address != "" {
-		configured = config.Address
-	}
+	configured := cluster.ControlPlaneElectionVIPs(config)
 	addresses := make([]string, 0)
-	for _, value := range vip.Split(configured) {
+	for _, value := range configured {
 		address := net.ParseIP(utils.StripCIDR(value))
 		if address == nil {
 			return nil, false

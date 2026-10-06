@@ -17,8 +17,8 @@ import (
 func TestControlPlaneElectionVIPsPreservesConfigOrder(t *testing.T) {
 	config := &kubevip.Config{Address: "2001:db8::10,192.0.2.10"}
 	want := []string{"2001:db8::10", "192.0.2.10"}
-	if got := controlPlaneElectionVIPs(config); !slices.Equal(got, want) {
-		t.Fatalf("controlPlaneElectionVIPs() = %v, want %v", got, want)
+	if got := ControlPlaneElectionVIPs(config); !slices.Equal(got, want) {
+		t.Fatalf("ControlPlaneElectionVIPs() = %v, want %v", got, want)
 	}
 }
 

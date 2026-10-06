@@ -17,7 +17,6 @@ import (
 	"github.com/kube-vip/kube-vip/pkg/node"
 	"github.com/kube-vip/kube-vip/pkg/route"
 	"github.com/kube-vip/kube-vip/pkg/services"
-	"github.com/kube-vip/kube-vip/pkg/vip"
 	"k8s.io/client-go/kubernetes"
 )
 
@@ -243,12 +242,4 @@ func (c *Common) runGlobalElectionWithVIPProvider(ctx context.Context, a electio
 	if err := election.RunOrDie(electionCtx, run, config); err != nil {
 		log.Error("leaderelection failed", "err", err, "id", config.NodeName, "name", leaseID.Name())
 	}
-}
-
-func controlPlaneElectionVIPs(config *kubevip.Config) []string {
-	configured := config.VIP
-	if config.Address != "" {
-		configured = config.Address
-	}
-	return vip.Split(configured)
 }

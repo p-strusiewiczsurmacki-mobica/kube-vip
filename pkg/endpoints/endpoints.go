@@ -13,7 +13,6 @@ import (
 	"github.com/kube-vip/kube-vip/pkg/endpoints/providers"
 	"github.com/kube-vip/kube-vip/pkg/instance"
 	"github.com/kube-vip/kube-vip/pkg/kubevip"
-	"github.com/kube-vip/kube-vip/pkg/lease"
 	"github.com/kube-vip/kube-vip/pkg/route"
 	"github.com/kube-vip/kube-vip/pkg/servicecontext"
 	"github.com/kube-vip/kube-vip/pkg/utils"
@@ -31,7 +30,6 @@ type Processor struct {
 	worker         endpointWorker
 	instances      *[]*instance.Instance
 	instancesMutex *sync.RWMutex
-	leaseMgr       *lease.Manager
 	serviceLocks   ServiceLocker
 }
 
@@ -52,7 +50,7 @@ type ServiceLocker interface {
 }
 
 func NewEndpointProcessor(config *kubevip.Config, provider providers.Provider, bgpServer *bgp.Server,
-	instances *[]*instance.Instance, instancesMutex *sync.RWMutex, leaseMgr *lease.Manager, tunnelMgr wireguard.ServiceTunnelManager, routeMgr *route.Manager,
+	instances *[]*instance.Instance, instancesMutex *sync.RWMutex, tunnelMgr wireguard.ServiceTunnelManager, routeMgr *route.Manager,
 	serviceLocks ServiceLocker) *Processor {
 	return &Processor{
 		config:         config,
@@ -60,9 +58,8 @@ func NewEndpointProcessor(config *kubevip.Config, provider providers.Provider, b
 		bgpServer:      bgpServer,
 		instances:      instances,
 		instancesMutex: instancesMutex,
-		leaseMgr:       leaseMgr,
 		serviceLocks:   serviceLocks,
-		worker:         newEndpointWorker(config, provider, bgpServer, leaseMgr, tunnelMgr, routeMgr),
+		worker:         newEndpointWorker(config, provider, bgpServer, tunnelMgr, routeMgr),
 	}
 }
 

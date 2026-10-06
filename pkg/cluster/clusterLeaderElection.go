@@ -26,7 +26,7 @@ func (cluster *Cluster) StartCluster(ctx context.Context, c *kubevip.Config,
 	log.Info("cluster membership", "namespace", leaseID.Namespace(), "lock", leaseID.Name(), "id", c.NodeName)
 
 	objectName := lease.ObjectName(leaseID, "cp")
-	controlPlaneVIPs := controlPlaneElectionVIPs(c)
+	controlPlaneVIPs := ControlPlaneElectionVIPs(c)
 	objLease, _ := leaseMgr.Acquire(context.Background(), leaseID, objectName,
 		lease.StaticVIPProvider(controlPlaneVIPs))
 	defer leaseMgr.Delete(leaseID, objectName, objLease)
@@ -76,7 +76,7 @@ func (cluster *Cluster) StartCluster(ctx context.Context, c *kubevip.Config,
 			leaderCtx, cancelLeader := context.WithCancel(electionCtx)
 			leaderWG := sync.WaitGroup{}
 			leaderWG.Go(func() {
-				cluster.OnStartedLeading(leaderCtx, c, em, bgpServer, killFunc, true)
+				cluster.OnStartedLeading(leaderCtx, c, em, bgpServer, killFunc)
 			})
 
 			log.Debug("cluster waiting for shared election to finish", "lease", leaseName)
@@ -104,7 +104,7 @@ func (cluster *Cluster) StartCluster(ctx context.Context, c *kubevip.Config,
 			if !electionSession.Started() {
 				return
 			}
-			cluster.OnStartedLeading(ctx, c, em, bgpServer, killFunc, false)
+			cluster.OnStartedLeading(ctx, c, em, bgpServer, killFunc)
 		},
 		OnStoppedLeading: func() {
 			if !electionSession.IsCurrent() {
@@ -125,7 +125,7 @@ func (cluster *Cluster) StartCluster(ctx context.Context, c *kubevip.Config,
 	return nil
 }
 
-func controlPlaneElectionVIPs(config *kubevip.Config) []string {
+func ControlPlaneElectionVIPs(config *kubevip.Config) []string {
 	configured := config.VIP
 	if config.Address != "" {
 		configured = config.Address
@@ -134,7 +134,7 @@ func controlPlaneElectionVIPs(config *kubevip.Config) []string {
 }
 
 func (cluster *Cluster) OnStartedLeading(ctx context.Context, c *kubevip.Config,
-	em *election.Manager, bgpServer *bgp.Server, killFunc func(), _ bool) {
+	em *election.Manager, bgpServer *bgp.Server, killFunc func()) {
 	labels := generateLabelsFromConfig(c.Address, kubevip.HasIP)
 	if err := cluster.nodeLabelMgr.AddLabel(labels); err != nil {
 		log.Error("error adding label to node", "err", err)
