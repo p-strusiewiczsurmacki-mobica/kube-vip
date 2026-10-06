@@ -207,7 +207,7 @@ func TestUpdateEgressConfigurationRejectsRecreatedService(t *testing.T) {
 	initializeTestElectionCoordinators(processor)
 	svcCtx := publishTestServiceContext(processor, trackedService)
 
-	if err := processor.updateEgressConfiguration(context.Background(), svcCtx, updatedService); err != nil {
+	if err := processor.updateEgressConfiguration(context.Background(), svcCtx, updatedService, nil); err != nil {
 		t.Fatalf("updateEgressConfiguration() error = %v", err)
 	}
 	if serviceInstance.ServiceSnapshot != snapshot {
@@ -232,7 +232,7 @@ func TestUpdateEgressConfigurationRejectsStaleServiceContext(t *testing.T) {
 	staleCtx := servicecontext.New(context.Background())
 	publishTestServiceContext(processor, trackedService)
 
-	if err := processor.updateEgressConfiguration(context.Background(), staleCtx, updatedService); err != nil {
+	if err := processor.updateEgressConfiguration(context.Background(), staleCtx, updatedService, nil); err != nil {
 		t.Fatalf("updateEgressConfiguration() error = %v", err)
 	}
 	if serviceInstance.ServiceSnapshot != trackedService {

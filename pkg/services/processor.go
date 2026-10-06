@@ -219,7 +219,7 @@ func (p *Processor) Reconcile(ctx context.Context, event watch.Event, serviceFun
 				//Set it to inactive
 				svcCtx.Cancel()
 
-				if err := p.deleteService(ctx, svc.UID); err != nil {
+				if err := p.deleteService(ctx, svc.UID, nil); err != nil {
 					metrics.ServiceReconcileErrorsTotal.WithLabelValues(svc.Namespace, svc.Name, "delete_service").Inc()
 					log.Error("(svc) unable to remove", "service", svc.UID)
 				}
