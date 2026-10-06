@@ -758,6 +758,102 @@ func TestGenerationReplacementAfterExternalLeaseCleanupCompletesStaleCampaign(t 
 	replacement.coordinator.closeMember(replacement)
 }
 
+func TestCompleteCampaignClearsCurrentCampaignAfterLeaseReplacement(t *testing.T) {
+	manager, adapter, leaseManager := newTestManager()
+	service := &v1.Service{ObjectMeta: metav1.ObjectMeta{Name: "service", Namespace: "default", UID: "service"}}
+	member := readyMember(t, manager, adapter, service)
+	coordinator := member.coordinator
+	oldLease := coordinator.membership.lease
+	newLeaseID := lease.NewID("test", "default", "replacement")
+	newLease, added := leaseManager.Acquire(context.Background(), newLeaseID, "replacement", nil)
+	if !added {
+		t.Fatal("failed to create replacement Lease")
+	}
+	t.Cleanup(func() {
+		leaseManager.Delete(newLeaseID, "replacement", newLease)
+		coordinator.closeMember(member)
+	})
+
+	oldCampaign := newCampaign(context.Background(), oldLease)
+	defer oldCampaign.cancel()
+	coordinator.mutex.Lock()
+	coordinator.campaigns.current = oldCampaign
+	coordinator.membership.lease = newLease
+	coordinator.mutex.Unlock()
+
+	restart, _ := coordinator.completeCampaign(oldLease, oldCampaign)
+
+	if coordinator.campaigns.current != nil {
+		t.Fatal("completed current campaign remained current after Lease replacement")
+	}
+	if !restart {
+		t.Fatal("completing the current campaign did not request a restart")
+	}
+}
+
+func TestCompleteCampaignDoesNotClearNewerCurrentCampaign(t *testing.T) {
+	manager, adapter, leaseManager := newTestManager()
+	service := &v1.Service{ObjectMeta: metav1.ObjectMeta{Name: "service", Namespace: "default", UID: "service"}}
+	member := readyMember(t, manager, adapter, service)
+	coordinator := member.coordinator
+	oldLease := coordinator.membership.lease
+	newLeaseID := lease.NewID("test", "default", "replacement")
+	newLease, added := leaseManager.Acquire(context.Background(), newLeaseID, "replacement", nil)
+	if !added {
+		t.Fatal("failed to create replacement Lease")
+	}
+	t.Cleanup(func() {
+		leaseManager.Delete(newLeaseID, "replacement", newLease)
+		coordinator.closeMember(member)
+	})
+
+	oldCampaign := newCampaign(context.Background(), oldLease)
+	defer oldCampaign.cancel()
+	replacementCampaign := newCampaign(context.Background(), newLease)
+	defer replacementCampaign.cancel()
+	coordinator.mutex.Lock()
+	coordinator.campaigns.current = replacementCampaign
+	coordinator.membership.lease = newLease
+	coordinator.mutex.Unlock()
+
+	coordinator.completeCampaign(oldLease, oldCampaign)
+
+	if coordinator.campaigns.current != replacementCampaign {
+		t.Fatal("completed stale campaign cleared the newer current campaign")
+	}
+}
+
+func TestCompleteCampaignDoesNotClearReplacementLease(t *testing.T) {
+	manager, adapter, leaseManager := newTestManager()
+	service := &v1.Service{ObjectMeta: metav1.ObjectMeta{Name: "service", Namespace: "default", UID: "service"}}
+	member := readyMember(t, manager, adapter, service)
+	coordinator := member.coordinator
+	oldLease := coordinator.membership.lease
+	newLeaseID := lease.NewID("test", "default", "replacement")
+	newLease, added := leaseManager.Acquire(context.Background(), newLeaseID, "replacement", nil)
+	if !added {
+		t.Fatal("failed to create replacement Lease")
+	}
+	t.Cleanup(func() {
+		leaseManager.Delete(newLeaseID, "replacement", newLease)
+		coordinator.closeMember(member)
+	})
+
+	oldCampaign := newCampaign(context.Background(), oldLease)
+	defer oldCampaign.cancel()
+	coordinator.mutex.Lock()
+	coordinator.campaigns.current = oldCampaign
+	coordinator.membership.lease = newLease
+	coordinator.mutex.Unlock()
+	oldLease.Cancel()
+
+	coordinator.completeCampaign(oldLease, oldCampaign)
+
+	if coordinator.membership.lease != newLease {
+		t.Fatal("completed campaign cleared the replacement Lease")
+	}
+}
+
 func TestActivationFailureCancelsCampaignAndRecordsBackoff(t *testing.T) {
 	manager, adapter, _ := newTestManager()
 	adapter.activateErr = errors.New("datapath failed")
