@@ -552,6 +552,76 @@ func TestSharedElectionDrainsBeforeRestartAfterAllMembersLoseReadiness(t *testin
 	}
 }
 
+func TestSharedElectionReplacesCampaignAfterServiceGenerationAndControlPlaneDeparture(t *testing.T) {
+	runner := &electionTestRunner{started: make(chan struct{}), stopping: make(chan struct{})}
+	var activations atomic.Int64
+	p := &Processor{
+		serviceLock: newTestServiceLocks(),
+		config:      &kubevip.Config{},
+		leaseMgr:    lease.NewManager(),
+	}
+	initializeTestElectionCoordinators(p, withTestCampaignRunner(runner),
+		withTestRestartScheduler(immediateRestartScheduler{}),
+		withTestElectionActivation(func(context.Context, *v1.Service, *servicecontext.Context, *sync.WaitGroup) error {
+			activations.Add(1)
+			return nil
+		}),
+	)
+	service := &v1.Service{ObjectMeta: metav1.ObjectMeta{
+		Name: "service", Namespace: "default", UID: types.UID("service"),
+		Annotations: map[string]string{kubevip.ServiceLease: "shared"},
+	}, Spec: v1.ServiceSpec{LoadBalancerIP: "192.0.2.10"}}
+	namespace, name := lease.ServiceName(service)
+	id := lease.NewID(p.config.LeaderElectionType, namespace, name)
+	controlPlaneToken := lease.ObjectName(id, "cp")
+	svcCtx := servicecontext.New(context.Background())
+	p.svcMap.Store(service.UID, svcCtx)
+	svcCtx.SignalReadiness()
+	var sharedLease *lease.Lease
+	t.Cleanup(func() {
+		svcCtx.Cancel()
+		if sharedLease != nil {
+			p.leaseMgr.Delete(id, controlPlaneToken, sharedLease)
+		}
+		p.electionCoordinators.Wait()
+	})
+
+	done := make(chan error, 1)
+	go func() { done <- p.StartServicesLeaderElection(svcCtx, service, nil) }()
+	waitForElectionRunner(t, runner.started)
+	waitForCondition(t, func() bool { return activations.Load() == 1 }, "initial Service activation")
+	sharedLease = p.leaseMgr.Get(id)
+	if sharedLease == nil {
+		t.Fatal("Service-owned campaign did not acquire its lease")
+	}
+	if claimed, _ := p.leaseMgr.ClaimWithVIPProvider(id, controlPlaneToken, nil); claimed != sharedLease {
+		t.Fatal("control plane did not join the Service-owned lease")
+	}
+
+	resetServiceReadiness(t, svcCtx)
+	waitForLeaseVIPCount(t, p.leaseMgr, id, 0)
+	p.leaseMgr.Delete(id, controlPlaneToken, sharedLease)
+	waitForElectionRunner(t, runner.stopping)
+	svcCtx.SignalReadiness()
+	waitForCondition(t, func() bool { return runner.starts.Load() == 2 }, "replacement campaign after shared lease loss")
+	waitForCondition(t, func() bool { return activations.Load() == 2 }, "replacement Service activation")
+	if got := activations.Load(); got != 2 {
+		t.Fatalf("service activations = %d, want 2", got)
+	}
+	if got := runner.starts.Load(); got != 2 {
+		t.Fatalf("campaign starts = %d, want 2", got)
+	}
+
+	svcCtx.Cancel()
+	if err := <-done; err != nil {
+		t.Fatalf("Service election watcher returned an error: %v", err)
+	}
+	p.electionCoordinators.Wait()
+	if got := runner.starts.Load(); got != 2 {
+		t.Fatalf("campaign starts after shutdown = %d, want 2", got)
+	}
+}
+
 func TestSharedElectionDeletedCandidateNeverActivates(t *testing.T) {
 	releaseLeading := make(chan struct{})
 	runner := &electionTestRunner{started: make(chan struct{}), releaseLeading: releaseLeading}
