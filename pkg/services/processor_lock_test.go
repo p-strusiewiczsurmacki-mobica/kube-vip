@@ -903,7 +903,7 @@ func TestEndpointReconcileWaitsForServiceLock(t *testing.T) {
 	}
 	initializeTestElectionCoordinators(processor)
 	epProcessor := endpoints.NewEndpointProcessor(config, providers.NewEndpointslices(), nil,
-		&processor.ServiceInstances, &processor.instancesMutex, nil, nil, processor.serviceLock)
+		processor.findServiceInstance, nil, nil, processor.serviceLock)
 
 	processor.serviceLock.Lock(uid)
 

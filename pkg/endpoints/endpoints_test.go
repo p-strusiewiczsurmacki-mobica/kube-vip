@@ -102,24 +102,25 @@ func TestUpdateAnnotationsZeroEndpointsThenSameEndpoint(t *testing.T) {
 				service := &v1.Service{ObjectMeta: metav1.ObjectMeta{
 					Name: "test-service", Namespace: "default", UID: "test-uid", Annotations: annotations,
 				}}
-				serviceInstance := &instance.Instance{ServiceUID: service.UID, ServiceSnapshot: service.DeepCopy()}
-				instances := []*instance.Instance{serviceInstance}
+				serviceInst := &instance.Instance{ServiceUID: service.UID, ServiceSnapshot: service.DeepCopy()}
 				recorder := &recordingProvider{Provider: provider}
 				processor := &Processor{
-					config:    &kubevip.Config{EnableEndpoints: enableEndpoints},
-					provider:  recorder,
-					instances: &instances,
+					config:   &kubevip.Config{EnableEndpoints: enableEndpoints},
+					provider: recorder,
+					findServiceInstance: func(s *v1.Service) *instance.Instance {
+						return serviceInst
+					},
 				}
 
 				noEndpoint := ""
-				updated, changed := processor.updateAnnotations(service, serviceInstance, &noEndpoint, nil)
+				updated, changed := processor.updateAnnotations(service, serviceInst, &noEndpoint, nil)
 				if changed {
-					serviceInstance.ServiceSnapshot = updated
+					serviceInst.ServiceSnapshot = updated
 				}
 				repopulatedEndpoint := family.endpoint
-				updated, changed = processor.updateAnnotations(service, serviceInstance, &repopulatedEndpoint, nil)
+				updated, changed = processor.updateAnnotations(service, serviceInst, &repopulatedEndpoint, nil)
 				if changed {
-					serviceInstance.ServiceSnapshot = updated
+					serviceInst.ServiceSnapshot = updated
 				}
 
 				cleared := annotationUpdate{}
@@ -168,16 +169,19 @@ func TestUpdateAnnotationsEndpointSlicesClearsConfiguredFamily(t *testing.T) {
 			service := &v1.Service{ObjectMeta: metav1.ObjectMeta{
 				Name: "test-service", Namespace: "default", UID: "test-uid", Annotations: annotations,
 			}}
-			instances := []*instance.Instance{{ServiceUID: service.UID, ServiceSnapshot: service.DeepCopy()}}
+
+			inst := &instance.Instance{ServiceUID: service.UID, ServiceSnapshot: service.DeepCopy()}
 			recorder := &recordingProvider{Provider: providers.NewEndpointslices()}
 			processor := &Processor{
-				config:    &kubevip.Config{EnableEndpoints: false},
-				provider:  recorder,
-				instances: &instances,
+				config:   &kubevip.Config{EnableEndpoints: false},
+				provider: recorder,
+				findServiceInstance: func(service *v1.Service) *instance.Instance {
+					return inst
+				},
 			}
 
 			noEndpoint := ""
-			processor.updateAnnotations(service, instances[0], &noEndpoint, nil)
+			processor.updateAnnotations(service, inst, &noEndpoint, nil)
 
 			if len(recorder.updates) != 1 || recorder.updates[0] != test.want {
 				t.Fatalf("annotation updates = %+v, want [%+v]", recorder.updates, test.want)
