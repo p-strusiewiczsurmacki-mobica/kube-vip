@@ -23,14 +23,15 @@ import (
 	"k8s.io/client-go/kubernetes"
 )
 
+type serviceInstanceFinder func(*v1.Service) *instance.Instance
+
 type Processor struct {
-	config         *kubevip.Config
-	provider       providers.Provider
-	bgpServer      *bgp.Server
-	worker         endpointWorker
-	instances      *[]*instance.Instance
-	instancesMutex *sync.RWMutex
-	serviceLocks   ServiceLocker
+	config              *kubevip.Config
+	provider            providers.Provider
+	bgpServer           *bgp.Server
+	worker              endpointWorker
+	findServiceInstance serviceInstanceFinder
+	serviceLocks        ServiceLocker
 }
 
 type reconcileResult struct {
@@ -50,16 +51,15 @@ type ServiceLocker interface {
 }
 
 func NewEndpointProcessor(config *kubevip.Config, provider providers.Provider, bgpServer *bgp.Server,
-	instances *[]*instance.Instance, instancesMutex *sync.RWMutex, tunnelMgr wireguard.ServiceTunnelManager, routeMgr *route.Manager,
+	findServiceInstance serviceInstanceFinder, tunnelMgr wireguard.ServiceTunnelManager, routeMgr *route.Manager,
 	serviceLocks ServiceLocker) *Processor {
 	return &Processor{
-		config:         config,
-		provider:       provider,
-		bgpServer:      bgpServer,
-		instances:      instances,
-		instancesMutex: instancesMutex,
-		serviceLocks:   serviceLocks,
-		worker:         newEndpointWorker(config, provider, bgpServer, tunnelMgr, routeMgr),
+		config:              config,
+		provider:            provider,
+		bgpServer:           bgpServer,
+		findServiceInstance: findServiceInstance,
+		serviceLocks:        serviceLocks,
+		worker:              newEndpointWorker(config, provider, bgpServer, tunnelMgr, routeMgr),
 	}
 }
 
@@ -125,7 +125,7 @@ func (p *Processor) reconcileEndpointState(svcCtx *servicecontext.Context, event
 		endpoints = nil
 	}
 	result.endpointCount = len(endpoints)
-	result.instance = p.findServiceInstance(service)
+	result.instance = p.serviceInstance(service)
 
 	if err := p.worker.setInstanceEndpointsStatus(service, result.instance, endpoints); err != nil {
 		log.Error("updating instance", "err", err)
@@ -174,7 +174,7 @@ func (p *Processor) cleanupEndpointlessService(svcCtx *servicecontext.Context, s
 			log.Error("failed to release service lock", "uid", service.UID, "err", err)
 		}
 	}()
-	instance := p.findServiceInstance(service)
+	instance := p.serviceInstance(service)
 	p.handleNoEndpoints(svcCtx, service, instance, lastKnownGoodEndpoint)
 }
 
@@ -339,16 +339,11 @@ func (p *Processor) startServiceHandlingIfNeeded(svcCtx *servicecontext.Context,
 	return nil
 }
 
-func (p *Processor) findServiceInstance(service *v1.Service) *instance.Instance {
-	if p.instances == nil {
+func (p *Processor) serviceInstance(service *v1.Service) *instance.Instance {
+	if p.findServiceInstance == nil {
 		return nil
 	}
-	if p.instancesMutex != nil {
-		p.instancesMutex.RLock()
-		defer p.instancesMutex.RUnlock()
-	}
-	inst := instance.FindServiceInstance(service, *p.instances)
-	return inst
+	return p.findServiceInstance(service)
 }
 
 func shouldAllowReconcileWithoutEndpoints(service *v1.Service) bool {
