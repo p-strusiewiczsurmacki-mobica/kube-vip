@@ -658,6 +658,106 @@ func TestReplacingUIDGenerationKeepsSiblingClaim(t *testing.T) {
 	sibling.coordinator.closeMember(sibling)
 }
 
+func TestGenerationReplacementAfterExternalLeaseCleanupCompletesStaleCampaign(t *testing.T) {
+	adapter := &testAdapter{current: make(map[types.UID]*servicecontext.Context)}
+	leaseManager := lease.NewManager()
+	leases := newBlockingLeaseStore(t, leaseManager)
+	manager, err := NewManager(&Dependencies{
+		Config: &kubevip.Config{}, Leases: leases,
+		State: adapter, Datapath: adapter, Runner: adapter, Scheduler: adapter,
+	})
+	if err != nil {
+		t.Fatalf("NewManager() error = %v", err)
+	}
+	service := &v1.Service{
+		ObjectMeta: metav1.ObjectMeta{Name: "service", Namespace: "default", UID: "service"},
+		Spec:       v1.ServiceSpec{LoadBalancerIP: "192.0.2.10"},
+	}
+	first := readyMember(t, manager, adapter, service)
+	coordinator := first.coordinator
+	firstLease := coordinator.membership.lease
+
+	cpRegistration, added := leaseManager.ClaimRegistration(coordinator.id, lease.RegistrationSpec{
+		Name: "control-plane", VIPProvider: lease.StaticVIPProvider(nil),
+	})
+	if cpRegistration == nil || !added {
+		t.Fatal("control-plane participant was not registered on the shared Lease")
+	}
+
+	firstCampaign := coordinator.newCampaignCandidate()
+	if firstCampaign.action == campaignNoop || firstCampaign.lease != firstLease {
+		t.Fatal("failed to create the initial campaign for the first Lease")
+	}
+
+	replacementContext := servicecontext.New(context.Background())
+	adapter.mutex.Lock()
+	adapter.current[service.UID] = replacementContext
+	adapter.mutex.Unlock()
+	replacementContext.SignalReadiness()
+	replacementGeneration := replacementContext.CurrentReadiness()
+
+	claimEntered := leases.armNextClaim()
+	joinDone := make(chan struct{})
+	var replacement *member
+	var joined bool
+	go func() {
+		replacement, joined = manager.join(replacementContext, service, replacementGeneration)
+		close(joinDone)
+	}()
+	t.Cleanup(func() {
+		leases.releaseClaim()
+		<-joinDone
+	})
+
+	select {
+	case <-claimEntered:
+	case <-time.After(time.Second):
+		t.Fatal("replacement join did not reach ClaimRegistration")
+	}
+
+	if !cpRegistration.Release() {
+		t.Fatal("control-plane cleanup did not retire the first Lease")
+	}
+	if firstLease.Ctx.Err() == nil {
+		t.Fatal("the retired first Lease was not cancelled")
+	}
+
+	leases.releaseClaim()
+	select {
+	case <-joinDone:
+	case <-time.After(time.Second):
+		t.Fatal("replacement join did not finish after ClaimRegistration was released")
+	}
+	if !joined || replacement == nil {
+		t.Fatal("replacement generation did not join")
+	}
+
+	restart, _ := coordinator.completeCampaign(firstLease, firstCampaign.campaign)
+	if coordinator.campaigns.current != nil {
+		t.Fatal("completed stale campaign remained current")
+	}
+	if !restart {
+		t.Fatal("completing the stale campaign did not request a restart")
+	}
+
+	replacementCampaign := coordinator.newCampaignCandidate()
+	if replacementCampaign.action == campaignJoin {
+		t.Fatal("new campaign candidate joined the completed stale campaign")
+	}
+	if replacementCampaign.lease == nil || replacementCampaign.lease == firstLease {
+		t.Fatal("new campaign candidate did not use a replacement Lease")
+	}
+	if !slices.Contains(replacementCampaign.members, replacement) {
+		t.Fatal("new campaign candidate omitted the replacement member")
+	}
+	if got, want := replacementCampaign.lease.OwnedVIPs(), []string{"192.0.2.10"}; !slices.Equal(got, want) {
+		t.Fatalf("replacement Lease OwnedVIPs() = %v, want %v", got, want)
+	}
+
+	replacementCampaign.campaign.cancel()
+	replacement.coordinator.closeMember(replacement)
+}
+
 func TestActivationFailureCancelsCampaignAndRecordsBackoff(t *testing.T) {
 	manager, adapter, _ := newTestManager()
 	adapter.activateErr = errors.New("datapath failed")
