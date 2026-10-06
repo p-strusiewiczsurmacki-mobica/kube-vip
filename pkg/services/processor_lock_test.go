@@ -328,7 +328,7 @@ func TestRetireServiceContextCancelsBeforeServiceLockIsAvailable(t *testing.T) {
 func TestDeleteServiceIsIdempotentWhenInstanceIsMissing(t *testing.T) {
 	processor := &Processor{serviceLock: newTestServiceLocks()}
 	initializeTestElectionCoordinators(processor)
-	if err := processor.deleteService(context.Background(), types.UID("missing-service")); err != nil {
+	if err := processor.deleteService(context.Background(), types.UID("missing-service"), nil); err != nil {
 		t.Fatalf("deleteService() error = %v, want nil", err)
 	}
 }
@@ -549,7 +549,7 @@ func TestAddServiceAfterDeleteTracksOneFreshInstance(t *testing.T) {
 	if action != ActionAdd {
 		t.Fatalf("getServiceInstanceAction() = %q, want ActionAdd", action)
 	}
-	if err := processor.deleteService(context.Background(), uid); err != nil {
+	if err := processor.deleteService(context.Background(), uid, nil); err != nil {
 		t.Fatalf("deleteService() error = %v", err)
 	}
 	if err := processor.addService(context.Background(), svcCtx, service, &sync.WaitGroup{}); err != nil {
@@ -731,7 +731,7 @@ func TestDeleteServiceKeepsInstanceWhenLabelRemovalFails(t *testing.T) {
 	}
 	initializeTestElectionCoordinators(processor)
 
-	if err := processor.deleteService(context.Background(), uid); err == nil {
+	if err := processor.deleteService(context.Background(), uid, nil); err == nil {
 		t.Fatal("deleteService() error = nil, want label removal error")
 	}
 	if got := processor.findServiceInstance(service); got != serviceInstance {

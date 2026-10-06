@@ -104,7 +104,7 @@ func (p *Processor) syncServicesWithContext(operationCtx context.Context, svcCtx
 		// LB IP, the initial addService call may have missed the SNAT configuration because
 		// ActiveEndpoint was not yet present. Re-run it here.
 		if svc.Annotations[kubevip.Egress] == "true" && svc.Annotations[kubevip.ActiveEndpoint] != "" {
-			if err := p.updateEgressConfiguration(operationCtx, svcCtx, svc); err != nil {
+			if err := p.updateEgressConfiguration(operationCtx, svcCtx, svc, nil); err != nil {
 				log.Warn("[service] egress reconfigure on ActionNone", "service", svc.Name, "namespace", svc.Namespace, "err", err)
 			}
 		}
@@ -557,23 +557,20 @@ func (p *Processor) deleteServiceForContext(ctx context.Context, uid types.UID,
 // deleteService removes the tracked instance for uid. It acquires the Service
 // lock; callers must not already hold it. Unlike deleteServiceForContext, this
 // cleanup operation may intentionally run after its Service context was removed.
-func (p *Processor) deleteService(ctx context.Context, uid types.UID, expectedCtx ...*servicecontext.Context) error {
+func (p *Processor) deleteService(ctx context.Context, uid types.UID, expectedCtx *servicecontext.Context) error {
 	p.serviceLock.Lock(uid)
 	defer func() {
 		if err := p.serviceLock.Unlock(uid); err != nil {
 			log.Error("failed to release service lock", "uid", uid, "err", err)
 		}
 	}()
-	var expected *servicecontext.Context
-	if len(expectedCtx) > 0 {
-		expected = expectedCtx[0]
-	}
-	if expected != nil {
+
+	if expectedCtx != nil {
 		currentCtx, err := p.getServiceContext(uid)
 		if err != nil {
 			return err
 		}
-		if currentCtx != nil && currentCtx != expected {
+		if currentCtx != nil && currentCtx != expectedCtx {
 			return nil
 		}
 	}
@@ -643,7 +640,7 @@ func (p *Processor) deleteCurrentService(ctx context.Context, serviceInstance *i
 // updateEgressConfiguration updates egress state for the current instance. It
 // acquires the Service lock for svc.UID; callers must not already hold it.
 func (p *Processor) updateEgressConfiguration(ctx context.Context, svcCtx *servicecontext.Context,
-	svc *v1.Service, expected ...*instance.Instance) error {
+	svc *v1.Service, expected *instance.Instance) error {
 	p.serviceLock.Lock(svc.UID)
 	defer func() {
 		if err := p.serviceLock.Unlock(svc.UID); err != nil {
@@ -662,7 +659,7 @@ func (p *Processor) updateEgressConfiguration(ctx context.Context, svcCtx *servi
 	if i == nil {
 		return fmt.Errorf("service instance not found for %s/%s", svc.Namespace, svc.Name)
 	}
-	if len(expected) > 0 && expected[0] != nil && i != expected[0] {
+	if expected != nil && i != expected {
 		return nil
 	}
 
