@@ -551,7 +551,6 @@ func TestReconcileServicesElectionDoesNotStartElectionLoop(t *testing.T) {
 		config:       config,
 		provider:     providers.NewEndpointslices(),
 		worker:       &fakeWorker{endpoints: []string{"10.0.0.1"}},
-		leaseMgr:     leaseMgr,
 		serviceLocks: noOpServiceLocker{},
 	}
 
