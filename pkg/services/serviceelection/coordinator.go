@@ -690,19 +690,35 @@ func (c *coordinator) markCampaignStopped(svcLease *lease.Lease,
 	c.mutex.Lock()
 	defer c.mutex.Unlock()
 
-	if c.retired || c.membership.lease != svcLease || c.campaigns.current != campaign || campaign.stopped {
+	if c.retired || campaign == nil || c.campaigns.current != campaign || campaign.stopped {
 		return nil
 	}
 	campaign.stopped = true
 	if campaign.cancelLeader != nil {
 		campaign.cancelLeader()
 	}
+
+	// A campaign normally stops while its Lease is still current, in which
+	// case every member belongs to the campaign being stopped. A replacement
+	// Lease may have been published before this runner observes cancellation;
+	// then only members that were activated by this campaign may be torn down.
+	// Take that snapshot before resetting retries, which clears
+	// activationCampaign.
+	members := c.membersLocked()
+	if c.membership.lease != svcLease {
+		members = make([]*member, 0)
+		for _, member := range c.membership.members {
+			if member.active && member.activationCampaign == campaign {
+				members = append(members, member)
+			}
+		}
+	}
 	for _, member := range c.membership.members {
 		if member.activationCampaign == campaign {
 			c.resetMemberActivationRetryLocked(member)
 		}
 	}
-	return c.membersLocked()
+	return members
 }
 
 func (c *coordinator) stopCampaign(svcLease *lease.Lease, campaign *campaign) {
