@@ -322,7 +322,7 @@ func TestElectionSessionStaleStopCannotStopReplacement(t *testing.T) {
 	if first.Started() {
 		t.Fatal("stale session restarted after it had been replaced")
 	}
-	if !second.IsLeading() || !serviceLease.IsLeading() {
+	if !second.IsLeading() {
 		t.Fatal("replacement election lost leadership after stale callbacks")
 	}
 }
@@ -1137,9 +1137,11 @@ func TestManager_LeaderElectionRestartScenario_etcd(t *testing.T) {
 	if lease1 == lease2 {
 		t.Error("expected new lease to be different from old lease")
 	}
-	if lease2.IsLeading() {
+	newElection := lease2.JoinElection()
+	if newElection.Session.IsLeading() {
 		t.Error("expected new lease to have no elected leader")
 	}
+	newElection.Session.Stopped()
 }
 
 // TestManager_CommonLeaseScenario tests the common lease feature where
@@ -1221,7 +1223,7 @@ func TestManager_RaceCondition_LeaseExistsBeforeDelete(t *testing.T) {
 	}
 
 	// Simulate leadership acquired.
-	electLease(t, lease1)
+	firstElection := electLease(t, lease1)
 
 	// Simulate a second goroutine calling Acquire BEFORE the first goroutine's defer deletes the lease.
 	// This is the race condition scenario
@@ -1235,7 +1237,7 @@ func TestManager_RaceCondition_LeaseExistsBeforeDelete(t *testing.T) {
 		t.Error("expected same lease to be returned")
 	}
 
-	if !lease2.IsLeading() {
+	if !firstElection.IsLeading() {
 		t.Error("expected lease to remain elected")
 	}
 
@@ -1332,9 +1334,11 @@ func TestManager_LeaseContextCancelledBeforeStarted(t *testing.T) {
 		t.Error("expected second Acquire to return isNew=false")
 	}
 
-	if lease2.IsLeading() {
+	newElection := lease2.JoinElection()
+	if newElection.Session.IsLeading() {
 		t.Error("expected lease to have no elected leader")
 	}
+	newElection.Session.Stopped()
 
 	// Cancel the lease context (simulating timeout or leadership loss before acquiring)
 	lease1.Cancel()
@@ -1395,9 +1399,11 @@ func TestManager_RestartAfterLeaseContextCancelled(t *testing.T) {
 		// Expected
 	}
 
-	if lease2.IsLeading() {
+	newElection := lease2.JoinElection()
+	if newElection.Session.IsLeading() {
 		t.Error("expected new lease to have no elected leader")
 	}
+	newElection.Session.Stopped()
 }
 
 // TestManager_NonCommonLease_WaitForLeaseContextDone tests the scenario where
@@ -1419,7 +1425,7 @@ func TestManager_NonCommonLease_WaitForLeaseContextDone(t *testing.T) {
 	}
 
 	// Simulate leadership acquired.
-	electLease(t, lease1)
+	firstElection := electLease(t, lease1)
 
 	// Second Acquire simulates another goroutine trying to start leader election.
 	// This should return isNew=false
@@ -1434,7 +1440,7 @@ func TestManager_NonCommonLease_WaitForLeaseContextDone(t *testing.T) {
 		t.Error("expected same lease to be returned")
 	}
 
-	if !lease2.IsLeading() {
+	if !firstElection.IsLeading() {
 		t.Error("expected lease to remain elected")
 	}
 
