@@ -37,6 +37,9 @@ type RestartScheduler interface {
 // LeaseStore is the narrow lease ownership contract used by coordinators.
 type LeaseStore interface {
 	AcquireRegistrations(context.Context, lease.ID, []lease.RegistrationSpec) (*lease.Lease, map[string]*lease.Registration, error)
+	// ClaimRegistration returns nil when no entry exists for the requested Lease.
+	// Implementations must cancel a retired Lease before making its entry
+	// unavailable, so a coordinator can let work using that generation drain.
 	ClaimRegistration(lease.ID, lease.RegistrationSpec) (*lease.Registration, bool)
 }
 
