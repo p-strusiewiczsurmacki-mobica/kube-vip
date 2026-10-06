@@ -481,15 +481,6 @@ func (s *ElectionSession) WaitForEnd(ctx context.Context) {
 	}
 }
 
-// IsLeading reports whether the Lease's current election generation is
-// leading. Callers that participate in an election should prefer the
-// generation-scoped ElectionSession.IsLeading method.
-func (l *Lease) IsLeading() bool {
-	l.stateMu.Lock()
-	defer l.stateMu.Unlock()
-	return l.election != nil && l.election.phase == electionLeading
-}
-
 func (l *Lease) electionState(generation *electionGeneration) (electionPhase, bool) {
 	l.stateMu.Lock()
 	defer l.stateMu.Unlock()
