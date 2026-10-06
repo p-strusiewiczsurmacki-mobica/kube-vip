@@ -101,8 +101,17 @@ func (c *coordinator) join(svcCtx *servicecontext.Context, service *v1.Service,
 		return member, true
 	}
 
-	// An external cleanup retired the manager entry. Rebuild it from the live
-	// coordinator snapshot rather than admitting a member to a dead lease.
+	// An external cleanup retired the manager entry after the liveness check
+	// above. Keep the retired Lease while its campaign is still running: that
+	// campaign must complete against the Lease it was created for before a
+	// restart atomically registers the current member snapshot on a new Lease.
+	// The newly admitted member intentionally has no registration until then.
+	if c.campaigns.current != nil {
+		return member, true
+	}
+
+	// No campaign remains tied to the retired Lease, so it is safe to rebuild
+	// the manager entry immediately from the live coordinator snapshot.
 	c.membership.lease = nil
 	if c.ensureLeaseLocked() == nil {
 		delete(c.membership.members, service.UID)
