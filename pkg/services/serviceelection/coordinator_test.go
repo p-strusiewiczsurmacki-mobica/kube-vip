@@ -854,6 +854,99 @@ func TestCompleteCampaignDoesNotClearReplacementLease(t *testing.T) {
 	}
 }
 
+func TestMarkCampaignStoppedStopsCurrentCampaignAfterLeaseReplacement(t *testing.T) {
+	manager, adapter, leaseManager := newTestManager()
+	service := &v1.Service{ObjectMeta: metav1.ObjectMeta{Name: "service", Namespace: "default", UID: "service"}}
+	member := readyMember(t, manager, adapter, service)
+	coordinator := member.coordinator
+	oldLease := coordinator.membership.lease
+	newLeaseID := lease.NewID("test", "default", "replacement")
+	newLease, added := leaseManager.Acquire(context.Background(), newLeaseID, "replacement", nil)
+	if !added {
+		t.Fatal("failed to create replacement Lease")
+	}
+	t.Cleanup(func() {
+		leaseManager.Delete(newLeaseID, "replacement", newLease)
+		coordinator.closeMember(member)
+	})
+
+	oldCampaign := newCampaign(context.Background(), oldLease)
+	defer oldCampaign.cancel()
+	leaderCtx, cancelLeader := context.WithCancel(context.Background())
+	defer cancelLeader()
+	coordinator.mutex.Lock()
+	coordinator.campaigns.current = oldCampaign
+	coordinator.membership.lease = newLease
+	oldCampaign.cancelLeader = cancelLeader
+	coordinator.mutex.Unlock()
+
+	coordinator.markCampaignStopped(oldLease, oldCampaign)
+
+	if !oldCampaign.stopped {
+		t.Fatal("current campaign was not marked stopped after Lease replacement")
+	}
+	if leaderCtx.Err() == nil {
+		t.Fatal("stopping current campaign did not cancel its leader context after Lease replacement")
+	}
+}
+
+func TestMarkCampaignStoppedSelectsOnlyMembersActivatedByStaleCampaignAfterLeaseReplacement(t *testing.T) {
+	manager, adapter, leaseManager := newTestManager()
+	annotations := map[string]string{kubevip.ServiceLease: "shared"}
+	oldService := &v1.Service{ObjectMeta: metav1.ObjectMeta{
+		Name: "old", Namespace: "default", UID: "old", Annotations: annotations,
+	}}
+	newService := &v1.Service{ObjectMeta: metav1.ObjectMeta{
+		Name: "new", Namespace: "default", UID: "new", Annotations: annotations,
+	}}
+	oldMember := readyMember(t, manager, adapter, oldService)
+	newMember := readyMember(t, manager, adapter, newService)
+	coordinator := oldMember.coordinator
+	oldLease := coordinator.membership.lease
+	newLeaseID := lease.NewID("test", "default", "replacement")
+	newLease, added := leaseManager.Acquire(context.Background(), newLeaseID, "replacement", nil)
+	if !added {
+		t.Fatal("failed to create replacement Lease")
+	}
+	t.Cleanup(func() {
+		leaseManager.Delete(newLeaseID, "replacement", newLease)
+		coordinator.mutex.Lock()
+		oldMember.active = false
+		newMember.active = false
+		coordinator.mutex.Unlock()
+		coordinator.closeMember(oldMember)
+		coordinator.closeMember(newMember)
+	})
+
+	oldCampaign := newCampaign(context.Background(), oldLease)
+	defer oldCampaign.cancel()
+	replacementCampaign := newCampaign(context.Background(), newLease)
+	defer replacementCampaign.cancel()
+	coordinator.mutex.Lock()
+	coordinator.campaigns.current = oldCampaign
+	coordinator.membership.lease = newLease
+	oldMember.active = true
+	oldMember.activationCampaign = oldCampaign
+	newMember.active = true
+	newMember.activationCampaign = replacementCampaign
+	coordinator.mutex.Unlock()
+
+	members := coordinator.markCampaignStopped(oldLease, oldCampaign)
+
+	if !slices.Contains(members, oldMember) {
+		t.Fatal("stale campaign did not select its active member for deactivation")
+	}
+	if slices.Contains(members, newMember) {
+		t.Fatal("stale campaign selected a member activated by the replacement campaign")
+	}
+	if oldMember.activationCampaign != nil {
+		t.Fatal("stopping stale campaign did not reset its member activation state")
+	}
+	if newMember.activationCampaign != replacementCampaign {
+		t.Fatal("stopping stale campaign reset replacement campaign activation state")
+	}
+}
+
 func TestActivationFailureCancelsCampaignAndRecordsBackoff(t *testing.T) {
 	manager, adapter, _ := newTestManager()
 	adapter.activateErr = errors.New("datapath failed")
