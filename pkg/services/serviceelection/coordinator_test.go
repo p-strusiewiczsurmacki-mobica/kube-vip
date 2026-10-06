@@ -854,6 +854,93 @@ func TestCompleteCampaignDoesNotClearReplacementLease(t *testing.T) {
 	}
 }
 
+func TestCompleteCampaignDoesNotRequestRestartTwice(t *testing.T) {
+	scheduler := &queuedRestartScheduler{}
+	manager, adapter, _ := newTestManagerWithScheduler(scheduler)
+	service := &v1.Service{ObjectMeta: metav1.ObjectMeta{Name: "service", Namespace: "default", UID: "service"}}
+	member := readyMember(t, manager, adapter, service)
+	coordinator := member.coordinator
+	t.Cleanup(func() { coordinator.closeMember(member) })
+	oldLease := coordinator.membership.lease
+	oldCampaign := newCampaign(context.Background(), oldLease)
+	defer oldCampaign.cancel()
+	coordinator.mutex.Lock()
+	coordinator.campaigns.current = oldCampaign
+	coordinator.mutex.Unlock()
+	oldLease.Cancel()
+
+	var wg sync.WaitGroup
+	coordinator.finishCampaign(oldLease, oldCampaign, &wg)
+	coordinator.finishCampaign(oldLease, oldCampaign, &wg)
+
+	if got := scheduler.count(); got != 1 {
+		t.Fatalf("scheduled restarts = %d, want 1", got)
+	}
+	if coordinator.campaigns.current != nil {
+		t.Fatal("completed campaign remained current")
+	}
+}
+
+func TestConcurrentCampaignCandidatesCreateOneReplacementCampaign(t *testing.T) {
+	manager, adapter, _ := newTestManager()
+	service := &v1.Service{ObjectMeta: metav1.ObjectMeta{Name: "service", Namespace: "default", UID: "service"}}
+	member := readyMember(t, manager, adapter, service)
+	coordinator := member.coordinator
+	t.Cleanup(func() { coordinator.closeMember(member) })
+	oldLease := coordinator.membership.lease
+	oldCampaign := newCampaign(context.Background(), oldLease)
+	defer oldCampaign.cancel()
+	coordinator.mutex.Lock()
+	coordinator.campaigns.current = oldCampaign
+	coordinator.mutex.Unlock()
+	oldLease.Cancel()
+	coordinator.completeCampaign(oldLease, oldCampaign)
+
+	const candidateCount = 32
+	candidates := make([]campaignCandidate, candidateCount)
+	var wg sync.WaitGroup
+	wg.Add(candidateCount)
+	for index := range candidates {
+		go func(index int) {
+			defer wg.Done()
+			candidates[index] = coordinator.newCampaignCandidate()
+		}(index)
+	}
+	wg.Wait()
+
+	coordinator.mutex.Lock()
+	created := coordinator.campaigns.current
+	coordinator.mutex.Unlock()
+	if created == nil {
+		t.Fatal("concurrent candidates did not create a campaign")
+	}
+	createdCount := 0
+	joinedCount := 0
+	for _, candidate := range candidates {
+		switch candidate.action {
+		case campaignRun, campaignObserve:
+			createdCount++
+			if candidate.campaign != created {
+				t.Fatal("concurrent candidates created different campaigns")
+			}
+		case campaignJoin:
+			joinedCount++
+			if candidate.campaign != created {
+				t.Fatal("candidate joined a different campaign")
+			}
+		default:
+			t.Fatalf("unexpected candidate action %d", candidate.action)
+		}
+	}
+	if createdCount != 1 {
+		t.Fatalf("campaigns created = %d, want 1", createdCount)
+	}
+	if joinedCount != candidateCount-1 {
+		t.Fatalf("campaign joins = %d, want %d", joinedCount, candidateCount-1)
+	}
+	created.cancel()
+}
+
 func TestMarkCampaignStoppedStopsCurrentCampaignAfterLeaseReplacement(t *testing.T) {
 	manager, adapter, leaseManager := newTestManager()
 	service := &v1.Service{ObjectMeta: metav1.ObjectMeta{Name: "service", Namespace: "default", UID: "service"}}
