@@ -737,11 +737,11 @@ func (c *coordinator) completeCampaign(svcLease *lease.Lease,
 	c.mutex.Lock()
 	defer c.mutex.Unlock()
 
-	if c.retired || c.membership.lease != svcLease || c.campaigns.current != campaign {
+	if c.retired || c.campaigns.current != campaign {
 		return false, 0
 	}
 	c.campaigns.current = nil
-	if svcLease.Ctx.Err() != nil {
+	if c.membership.lease == svcLease && svcLease.Ctx.Err() != nil {
 		c.membership.lease = nil
 	}
 	return len(c.membership.members) != 0, c.restartDelayLocked()
