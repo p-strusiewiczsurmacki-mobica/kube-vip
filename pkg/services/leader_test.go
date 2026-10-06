@@ -89,7 +89,7 @@ func TestStartServicesLeaderElectionTracksSharedMembersAcrossReadinessLoss(t *te
 
 	resetServiceReadiness(t, firstCtx)
 	waitForLeaseVIPCount(t, p.leaseMgr, id, 1)
-	if !sharedLease.IsLeading() || p.leaseMgr.Get(id) != sharedLease {
+	if !externalElection.IsLeading() || p.leaseMgr.Get(id) != sharedLease {
 		t.Fatal("one shared member losing readiness ended the healthy sibling campaign")
 	}
 
@@ -98,7 +98,7 @@ func TestStartServicesLeaderElectionTracksSharedMembersAcrossReadinessLoss(t *te
 
 	secondCtx.Cancel()
 	waitForLeaseVIPCount(t, p.leaseMgr, id, 1)
-	if firstCtx.Ctx.Err() != nil || !sharedLease.IsLeading() || p.leaseMgr.Get(id) != sharedLease {
+	if firstCtx.Ctx.Err() != nil || !externalElection.IsLeading() || p.leaseMgr.Get(id) != sharedLease {
 		t.Fatal("deleting one shared member ended the healthy sibling campaign")
 	}
 
@@ -150,7 +150,7 @@ func TestServiceMemberLeavingDoesNotCancelControlPlaneLease(t *testing.T) {
 		t.Fatalf("service election returned error: %v", err)
 	}
 
-	if sharedLease.Ctx.Err() != nil || !sharedLease.IsLeading() || p.leaseMgr.Get(id) != sharedLease {
+	if sharedLease.Ctx.Err() != nil || !controlPlaneElection.IsLeading() || p.leaseMgr.Get(id) != sharedLease {
 		t.Fatal("leaving Service member cancelled the control-plane lease")
 	}
 	p.leaseMgr.Delete(id, controlPlaneToken, sharedLease)
@@ -215,7 +215,11 @@ func TestDelayedElectionActivationDoesNotRestoreDeletedService(t *testing.T) {
 		t.Fatal("Service activation did not reach the delayed datapath call")
 	}
 	sharedLease := p.leaseMgr.Get(id)
-	if sharedLease == nil || !sharedLease.IsLeading() {
+	if sharedLease == nil {
+		t.Fatal("Service-owned election did not acquire its lease")
+	}
+	observerParticipation := sharedLease.JoinElection()
+	if observerParticipation.RunsCampaign() || !observerParticipation.Session.IsLeading() {
 		t.Fatal("Service-owned election did not become leader")
 	}
 	controlPlaneToken := lease.ObjectName(id, "cp")
@@ -229,7 +233,7 @@ func TestDelayedElectionActivationDoesNotRestoreDeletedService(t *testing.T) {
 	if err := p.deleteTrackedService(service); err != nil {
 		t.Fatalf("deleteTrackedService() error = %v", err)
 	}
-	if sharedLease.Ctx.Err() != nil || !sharedLease.IsLeading() {
+	if sharedLease.Ctx.Err() != nil || !observerParticipation.Session.IsLeading() {
 		t.Fatal("deleting Service stopped the shared control-plane election")
 	}
 
@@ -260,7 +264,7 @@ func TestDelayedElectionActivationDoesNotRestoreDeletedService(t *testing.T) {
 	if got := p.OwnedServiceVIPs(); len(got) != 0 {
 		t.Errorf("owned Service VIPs after deletion = %v, want none", got)
 	}
-	if sharedLease.Ctx.Err() != nil || !sharedLease.IsLeading() || p.leaseMgr.Get(id) != sharedLease {
+	if sharedLease.Ctx.Err() != nil || !observerParticipation.Session.IsLeading() || p.leaseMgr.Get(id) != sharedLease {
 		t.Error("delayed activation stopped the shared control-plane campaign")
 	}
 	select {
@@ -808,7 +812,14 @@ func TestSharedElectionRetriesFailedMemberWithoutRestartingCampaign(t *testing.T
 		t.Fatalf("campaign starts = %d, want 1", got)
 	}
 	sharedLease := p.leaseMgr.Get(id)
-	if sharedLease == nil || !sharedLease.IsLeading() {
+	if sharedLease == nil {
+		t.Fatal("member retry did not retain the shared lease")
+	}
+	observerParticipation := sharedLease.JoinElection()
+	if observerParticipation.RunsCampaign() {
+		t.Fatal("member retry replaced the running campaign")
+	}
+	if !observerParticipation.Session.IsLeading() {
 		t.Fatal("member retry replaced or stopped the leading campaign")
 	}
 	if !failingCtx.ReadinessGenerationCurrent(failingGeneration) ||
@@ -856,6 +867,11 @@ func TestElectionShutdownWaitsForControlPlaneToReleaseServiceOwnedCampaign(t *te
 	if claimed, _ := p.leaseMgr.ClaimWithVIPProvider(id, controlPlaneToken, nil); claimed != sharedLease {
 		t.Fatal("control plane did not join the Service-owned lease")
 	}
+	controlPlaneParticipation := sharedLease.JoinElection()
+	if controlPlaneParticipation.RunsCampaign() {
+		t.Fatal("control plane replaced the Service-owned campaign")
+	}
+	controlPlaneElection := controlPlaneParticipation.Session
 
 	svcCtx.Cancel()
 	if err := <-done; err != nil {
@@ -866,7 +882,7 @@ func TestElectionShutdownWaitsForControlPlaneToReleaseServiceOwnedCampaign(t *te
 		t.Fatal("final Service departure stopped a campaign still used by the control plane")
 	case <-time.After(20 * time.Millisecond):
 	}
-	if sharedLease.Ctx.Err() != nil || !sharedLease.IsLeading() || p.leaseMgr.Get(id) != sharedLease {
+	if sharedLease.Ctx.Err() != nil || !controlPlaneElection.IsLeading() || p.leaseMgr.Get(id) != sharedLease {
 		t.Fatal("Service departure retired the control-plane campaign")
 	}
 
@@ -1173,7 +1189,7 @@ func TestServiceOwnedCampaignPublishesLeadershipAfterFinalServiceLeaves(t *testi
 	if sharedLease.Ctx.Err() != nil || p.leaseMgr.Get(id) != sharedLease {
 		t.Fatal("final Service departure retired the shared control-plane lease")
 	}
-	if sharedLease.IsLeading() {
+	if controlPlaneParticipation.Session.IsLeading() {
 		t.Fatal("campaign became leader before the test released it")
 	}
 	select {
@@ -1191,7 +1207,7 @@ func TestServiceOwnedCampaignPublishesLeadershipAfterFinalServiceLeaves(t *testi
 	case <-time.After(time.Second):
 		t.Fatal("control-plane observer remained blocked after the runner became leader")
 	}
-	if !sharedLease.IsLeading() {
+	if !controlPlaneParticipation.Session.IsLeading() {
 		t.Fatal("Service-owned runner did not publish leadership to the shared lease")
 	}
 	if got := activationCalls.Load(); got != 0 {
@@ -1249,6 +1265,11 @@ func TestCancelledServiceOwnedCampaignRejectsLateLeadership(t *testing.T) {
 	if sharedLease == nil {
 		t.Fatal("Service-owned campaign did not acquire its lease")
 	}
+	observerParticipation := sharedLease.JoinElection()
+	if observerParticipation.RunsCampaign() {
+		t.Fatal("observer replaced the Service-owned campaign")
+	}
+	observerElection := observerParticipation.Session
 
 	svcCtx.Cancel()
 	select {
@@ -1265,7 +1286,7 @@ func TestCancelledServiceOwnedCampaignRejectsLateLeadership(t *testing.T) {
 
 	releaseLeadership()
 	waitForElectionRunner(t, runner.stopping)
-	if sharedLease.IsLeading() {
+	if observerElection.IsLeading() {
 		t.Fatal("cancelled campaign accepted a late leadership callback")
 	}
 
